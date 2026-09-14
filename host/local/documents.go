@@ -109,9 +109,14 @@ func (s *documentsServer) List(ctx context.Context, req *hostv1.ListDocumentsReq
 
 	start := 0
 	if req.Page != nil && req.Page.Cursor != "" {
-		if n, err := strconv.Atoi(req.Page.Cursor); err == nil {
-			start = n
+		n, err := strconv.Atoi(req.Page.Cursor)
+		if err != nil || n < 0 {
+			return nil, status.Errorf(codes.InvalidArgument, "invalid page cursor %q", req.Page.Cursor)
 		}
+		start = n
+	}
+	if start > len(ids) {
+		start = len(ids) // an out-of-range (too large) cursor degrades to an empty page
 	}
 	limit := 500
 	if req.Page != nil && req.Page.Limit > 0 && req.Page.Limit < 500 {
