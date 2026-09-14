@@ -47,7 +47,7 @@ func Parse(raw []byte) (*Manifest, []Finding) {
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&m); err != nil {
 		return nil, []Finding{{Code: "manifest_unparseable", Path: "/", Message: err.Error(),
-			Fix: "Make manifest.json valid JSON with only the fields in schema/json/manifest.schema.json."}}
+			Fix: "Make manifest.json valid JSON with only the fields in manifest/schema.json."}}
 	}
 	return &m, nil
 }

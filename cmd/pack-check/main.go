@@ -12,7 +12,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/puppet-stagehand/stagehand-sdk/internal/manifest"
+	"github.com/puppet-stagehand/stagehand-sdk/manifest"
 )
 
 func main() {

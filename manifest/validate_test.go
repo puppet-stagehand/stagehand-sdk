@@ -29,7 +29,7 @@ func codes(fs []Finding) []string {
 }
 
 func TestHelloExampleIsValid(t *testing.T) {
-	m := load(t, "../../examples/hello/manifest.json")
+	m := load(t, "../examples/hello/manifest.json")
 	if fs := Validate(m); len(fs) != 0 {
 		t.Fatalf("hello must validate; got %v", fs)
 	}
@@ -56,7 +56,7 @@ func TestEveryFindingHasAFix(t *testing.T) {
 }
 
 func TestRules(t *testing.T) {
-	base := func() *Manifest { return load(t, "../../examples/hello/manifest.json") }
+	base := func() *Manifest { return load(t, "../examples/hello/manifest.json") }
 	cases := []struct {
 		name   string
 		mutate func(m *Manifest)

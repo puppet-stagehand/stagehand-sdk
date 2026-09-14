@@ -1,5 +1,5 @@
-// Package manifest models and validates a capability pack manifest
-// (schema/json/manifest.schema.json, contract_version 1).
+// Package manifest models and validates an Expansion Pack manifest
+// (manifest/schema.json, contract_version 1).
 //
 // The JSON Schema is the source of truth for tooling; this package encodes
 // the same rules in Go so `pack-check` runs with no external dependency and
