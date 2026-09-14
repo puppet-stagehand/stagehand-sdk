@@ -12,6 +12,7 @@ package opentofulite
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -176,12 +177,22 @@ func (b *Backend) PutState(ctx context.Context, workspace, callerLockID string, 
 }
 
 func (b *Backend) archiveVersion(ctx context.Context, workspace string, prev *hostv1.Document) error {
-	sealed, err := b.h.Secrets.Seal(ctx, &hostv1.SecretValue{Plaintext: mustJSON(prev.Body.Value)})
+	plaintext, err := marshalJSON(prev.Body.Value)
+	if err != nil {
+		return fmt.Errorf("archive version: marshal previous state: %w", err)
+	}
+	sealed, err := b.h.Secrets.Seal(ctx, &hostv1.SecretValue{Plaintext: plaintext})
 	if err != nil {
 		return err
 	}
+	// ciphertext/nonce are raw AES-GCM output (effectively random bytes), not
+	// valid UTF-8 in general — base64-encode before wrapping them in a
+	// structpb.Struct, whose string fields must be valid UTF-8 the moment
+	// this crosses a real JSON/Postgres-backed Documents facet.
 	archiveBody, err := structpb.NewStruct(map[string]any{
-		"ciphertext": string(sealed.Ciphertext), "nonce": string(sealed.Nonce), "key_id": sealed.KeyId,
+		"ciphertext": base64.StdEncoding.EncodeToString(sealed.Ciphertext),
+		"nonce":      base64.StdEncoding.EncodeToString(sealed.Nonce),
+		"key_id":     sealed.KeyId,
 	})
 	if err != nil {
 		return err
@@ -219,9 +230,8 @@ func (b *Backend) pruneVersions(ctx context.Context, workspace string) error {
 	return nil
 }
 
-func mustJSON(s *structpb.Struct) []byte {
-	b, _ := s.MarshalJSON()
-	return b
+func marshalJSON(s *structpb.Struct) ([]byte, error) {
+	return s.MarshalJSON()
 }
 
 // DeleteState removes the workspace's state, requiring the caller to hold
