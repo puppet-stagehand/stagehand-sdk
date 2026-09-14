@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.puppetstagehand.com/pack/settings-ui/v1.json",
+  "title": "Renderable subset of JSON Schema for pack settings",
+  "description": "The host renders a pack's settings_schema into a form. Only this subset is accepted: an object of flat or one-level-nested properties whose types are string (with optional enum/format password|uri|hostname), integer, number, boolean, or array of strings. No $ref, no oneOf/anyOf/if.",
+  "type": "object",
+  "required": ["type", "properties"],
+  "properties": {
+    "type": { "const": "object" },
+    "title": { "type": "string" },
+    "required": { "type": "array", "items": { "type": "string" } },
+    "properties": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/field" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "field": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "enum": ["string", "integer", "number", "boolean", "array", "object"] },
+        "title": { "type": "string" }, "description": { "type": "string" },
+        "default": {}, "enum": { "type": "array" },
+        "format": { "enum": ["password", "uri", "hostname", "date", "duration"] },
+        "minimum": { "type": "number" }, "maximum": { "type": "number" },
+        "minLength": { "type": "integer" }, "maxLength": { "type": "integer" }, "pattern": { "type": "string" },
+        "items": { "type": "object", "properties": { "type": { "const": "string" } } },
+        "properties": { "type": "object", "additionalProperties": { "$ref": "#/$defs/leaf" } }
+      },
+      "additionalProperties": false
+    },
+    "leaf": {
+      "type": "object", "required": ["type"],
+      "properties": { "type": { "enum": ["string", "integer", "number", "boolean"] }, "title": { "type": "string" }, "description": { "type": "string" }, "default": {}, "enum": { "type": "array" }, "format": { "enum": ["password", "uri", "hostname", "date", "duration"] } },
+      "additionalProperties": false
+    }
+  }
+}

@@ -1,0 +1,38 @@
+// stagehand.host.v1 — the wire contract between a pack worker and the console
+// host. contract_version 1. Every message is plain data: no callbacks, no
+// handles, no console-internal types. This is what lets an in-process host
+// (host.Local) and the mTLS gRPC host serve one contract.
+syntax = "proto3";
+package stagehand.host.v1;
+option go_package = "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Stable error detail attached to gRPC status. `code` is machine-stable and
+// documented in docs/errors.md; `fix` is a one-line remedy for humans and
+// code assistants.
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  string fix = 3;
+  string docs_url = 4;
+}
+
+message Page {
+  string cursor = 1;   // opaque; empty = first page
+  int32 limit = 2;     // host caps (Documents: 500)
+}
+message PageInfo {
+  string next_cursor = 1;  // empty = no more
+}
+
+// A JSON document body. Kept as Struct so the wire stays language-neutral.
+message Json { google.protobuf.Struct value = 1; }
+
+message Certname { string value = 1; }
+
+message TimeRange {
+  google.protobuf.Timestamp since = 1;
+  google.protobuf.Timestamp until = 2;
+}

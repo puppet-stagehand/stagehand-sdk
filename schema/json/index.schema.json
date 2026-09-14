@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.puppetstagehand.com/appcenter/index/v1.json",
+  "title": "Stagehand App Center index",
+  "description": "A pack forge is an OCI registry plus this cosign-signed document, served as an OCI artifact (oci://<registry>/stagehand/index:latest) or a static file over HTTPS.",
+  "type": "object", "additionalProperties": false,
+  "required": ["forge_version", "name", "publisher_keys", "packs"],
+  "properties": {
+    "forge_version": { "type": "integer", "const": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "generated_at": { "type": "string", "format": "date-time" },
+    "publisher_keys": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["id", "name", "public_key"], "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "public_key": { "type": "string", "description": "PEM" } } } },
+    "packs": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "name", "publisher", "tier", "licence", "entitlement", "versions"],
+        "properties": {
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$" },
+          "name": { "type": "string" }, "publisher": { "type": "string" },
+          "tier": { "type": "string", "enum": ["core", "ent", "adv"] },
+          "licence": { "type": "string" },
+          "entitlement": { "type": "string", "enum": ["none", "licence_key", "marketplace"] },
+          "summary": { "type": "string" }, "docs_url": { "type": "string", "format": "uri" },
+          "versions": {
+            "type": "array", "minItems": 1,
+            "items": {
+              "type": "object", "additionalProperties": false,
+              "required": ["version", "contract_version", "image", "permissions", "released_at"],
+              "properties": {
+                "version": { "type": "string" },
+                "contract_version": { "type": "integer" },
+                "image": { "type": "string", "pattern": "^[a-z0-9.-]+(:[0-9]+)?(/[a-z0-9._-]+)+@sha256:[a-f0-9]{64}$", "description": "Digest-pinned reference. Tags are never accepted." },
+                "content": { "type": "object", "additionalProperties": false, "properties": { "forge_slug": { "type": "string" }, "version": { "type": "string" } } },
+                "permissions": { "type": "array", "items": { "type": "string" } },
+                "released_at": { "type": "string", "format": "date" },
+                "notes_url": { "type": "string", "format": "uri" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

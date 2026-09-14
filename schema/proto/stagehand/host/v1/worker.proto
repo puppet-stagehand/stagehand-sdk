@@ -1,0 +1,75 @@
+// Services the WORKER implements. The host calls these over the same mTLS
+// connection the worker dialed in on (gRPC server-side streaming used for
+// the reverse direction is an implementation detail of the SDK; the shapes
+// below are the contract).
+syntax = "proto3";
+package stagehand.host.v1;
+option go_package = "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1";
+
+import "google/protobuf/empty.proto";
+import "stagehand/host/v1/common.proto";
+import "stagehand/host/v1/host.proto";
+
+// Console-proxied HTTP routes. Auth and the capability gate have already
+// been applied; the request carries the resolved principal.
+service Routes { rpc Dispatch(HttpRequest) returns (HttpResponse); }
+message HttpRequest {
+  string method = 1; string path = 2;              // path is relative (as in manifest.routes[].path)
+  map<string,string> query = 3; map<string,string> headers = 4; bytes body = 5;
+  Principal principal = 6;                          // session user or verified token
+}
+message HttpResponse { int32 status = 1; map<string,string> headers = 2; bytes body = 3; }
+
+// Serves /stagehand/ui/* to the console's UI loader; the host verifies the
+// tree against manifest.ui_digest and caches.
+service Assets { rpc Get(AssetRequest) returns (stream AssetChunk); }
+message AssetRequest { string path = 1; }
+message AssetChunk { bytes data = 1; string content_type = 2; bool last = 3; }
+
+service Health { rpc Check(google.protobuf.Empty) returns (HealthStatus); }
+message HealthStatus {
+  bool live = 1; bool ready = 2; string detail = 3;
+  repeated Eligibility eligibility = 4;   // shown in the App Center (e.g. "requires PE runtime")
+}
+message Eligibility { string key = 1; bool ok = 2; string reason = 3; }
+
+service Lifecycle {
+  rpc Shutdown(google.protobuf.Empty) returns (google.protobuf.Empty);
+  rpc Purge(google.protobuf.Empty) returns (google.protobuf.Empty);   // pack-side cleanup hook before host purges documents
+}
+
+// Host owns the clock and the singleton guarantee; it calls Run on schedule.
+service Jobs { rpc Run(JobRequest) returns (JobResult); }
+message JobRequest { string name = 1; string invocation_id = 2; }
+message JobResult { bool ok = 1; string detail = 2; }
+
+// ----------------------------------------------------------- Extension points
+// Mirrors backend/internal/patching/provider.go; the host wraps a pack's
+// implementation in an adapter that satisfies the Go interface under the
+// same validating decorator.
+service PatchingProvider {
+  rpc Detect(google.protobuf.Empty) returns (Json);
+  rpc SetupSteps(google.protobuf.Empty) returns (Json);
+  rpc ConfigurationSchema(google.protobuf.Empty) returns (Json);
+  rpc ValidateConfiguration(Json) returns (google.protobuf.Empty);
+  rpc Readiness(google.protobuf.Empty) returns (Json);
+  rpc Health(google.protobuf.Empty) returns (Json);
+  rpc Posture(PostureRequest) returns (Json);
+  rpc SupportedActions(google.protobuf.Empty) returns (Json);
+  rpc Inventory(google.protobuf.Empty) returns (Json);
+  rpc PreviewSwitch(Json) returns (Json);
+  rpc Snapshot(google.protobuf.Empty) returns (Json);
+  rpc Activate(Json) returns (Json);
+  rpc Deactivate(Json) returns (google.protobuf.Empty);
+  rpc Verify(Json) returns (google.protobuf.Empty);
+  rpc Restore(Json) returns (google.protobuf.Empty);
+  rpc Run(Json) returns (Json);
+}
+message PostureRequest { repeated string targets = 1; }
+
+// compliance.source: descriptor only; the pack ingests through host Compliance.
+message ComplianceSourceDescriptor {
+  string id = 1; string name = 2; string benchmark_prefix = 3;
+  repeated string subject_kinds = 4; string how_to_run = 5;
+}
+service ComplianceSource { rpc Describe(google.protobuf.Empty) returns (ComplianceSourceDescriptor); }

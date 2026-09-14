@@ -1,0 +1,27 @@
+{
+  "id": "hello",
+  "name": "Hello",
+  "version": "0.1.0",
+  "contract_version": 1,
+  "publisher": "Example Org",
+  "publisher_key_id": "SHA256:examplekeyfingerprint0000000000000000000000",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Shows a greeting and each node's uptime on a node-detail tab. The SDK's example pack.",
+  "nav": null,
+  "slots": ["nodeDetailTab"],
+  "ui_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+  "settings_schema": {
+    "type": "object",
+    "title": "Hello settings",
+    "properties": {
+      "greeting": { "type": "string", "title": "Greeting", "default": "Hello", "maxLength": 32 }
+    }
+  },
+  "permissions": ["documents:rw", "puppetdb:read"],
+  "jobs": [ { "name": "refresh_uptime", "every": "15m", "singleton": true } ],
+  "content": null,
+  "resources": { "cpu": "100m", "memory": "64Mi" }
+}

@@ -1,0 +1,39 @@
+{
+  "id": "opentofu",
+  "name": "OpenTofu",
+  "version": "1.0.0",
+  "contract_version": 1,
+  "publisher": "Perforce",
+  "publisher_key_id": "SHA256:perforcereleasekeyfingerprint00000000000000",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Keep Terraform state in Stagehand with locking and versions; derive inventory from state; run plan/apply on a runner node.",
+  "nav": { "group": "Automation", "label": "OpenTofu", "route": "/x/opentofu" },
+  "slots": ["page", "settingsPanel", "nodeDetailTab"],
+  "ui_digest": "sha256:9f3a0000000000000000000000000000000000000000000000000000000000c2",
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "retention": { "type": "integer", "title": "State versions to keep", "default": 20, "minimum": 1, "maximum": 200 },
+      "max_state_mib": { "type": "integer", "title": "Max state size (MiB)", "default": 8 },
+      "runner_certname": { "type": "string", "title": "Runner node", "format": "hostname" }
+    }
+  },
+  "permissions": ["documents:rw", "secrets:rw", "tokens:issue", "bolt:run", "inventory:read", "forge:read"],
+  "routes": [
+    { "method": "GET",    "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "getState" },
+    { "method": "POST",   "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "putState" },
+    { "method": "DELETE", "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "deleteState" },
+    { "method": "LOCK",   "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "lockState" },
+    { "method": "UNLOCK", "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "unlockState" },
+    { "method": "GET",    "path": "workspaces", "access": {}, "operation_id": "listWorkspaces" },
+    { "method": "POST",   "path": "tokens", "access": { "role": "global_admin" }, "operation_id": "mintToken" }
+  ],
+  "jobs": [ { "name": "prune", "every": "1h", "singleton": true } ],
+  "content": { "forge_slug": "souldo-stagehand_opentofu", "version": ">=1.0 <2", "runner_class": "stagehand_opentofu::runner" },
+  "resources": { "cpu": "500m", "memory": "256Mi" },
+  "network": { "egress": ["registry.opentofu.org"] },
+  "openapi_path": "/stagehand/openapi.json"
+}

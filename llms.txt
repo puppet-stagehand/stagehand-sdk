@@ -1,0 +1,11 @@
+# stagehand-sdk
+> Contract for building Stagehand capability packs (contract_version 1). Preview 0.0.1.
+
+## Read first
+- CLAUDE.md: rules and the check loop
+- schema/json/manifest.schema.json: the pack manifest
+- schema/proto/stagehand/host/v1/host.proto: facets the worker may call (permission strings in comments)
+- schema/proto/stagehand/host/v1/worker.proto: services the worker implements
+- schema/ts/slots.d.ts: UI slots and props
+- examples/hello/manifest.json: a valid headless-plus-tab pack
+- docs/pack-author-guide.md: ELI10 walkthrough

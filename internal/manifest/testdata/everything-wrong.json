@@ -1,0 +1,26 @@
+{
+  "id": "Bad Id!",
+  "name": "",
+  "version": "v1",
+  "contract_version": 9,
+  "publisher": "",
+  "publisher_key_id": "x",
+  "licence": "",
+  "entitlement": "free",
+  "tier": "platinum",
+  "default_enabled": true,
+  "nav": { "group": "Packs", "label": "", "route": "bad" },
+  "slots": ["page", "page", "sidebar"],
+  "ui_digest": "md5:abc",
+  "settings_schema": { "type": "array" },
+  "permissions": ["root", "documents:rw", "documents:rw"],
+  "extension_points": [ { "point": "ui.theme", "id": "Bad" } ],
+  "routes": [
+    { "method": "get", "path": "/abs", "access": { "role": "god", "scope": "State RW", "public": true }, "operation_id": "1op" },
+    { "method": "get", "path": "/abs", "access": {}, "operation_id": "1op" }
+  ],
+  "jobs": [ { "name": "Tick", "every": "1s" }, { "name": "Tick", "every": "nope" } ],
+  "content": { "forge_slug": "nodash", "version": "", "runner_class": "Bad::Class" },
+  "resources": { "cpu": "two", "memory": "1GB", "volumes": [ { "name": "Cache", "size": "1TB" } ] },
+  "network": { "egress": ["http://x", "not a host"] }
+}

@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.puppetstagehand.com/pack/manifest/v1.json",
+  "title": "Stagehand capability pack manifest",
+  "description": "The pack's ID card. Lives at /stagehand/manifest.json inside the pack image. contract_version 1.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "contract_version", "publisher", "publisher_key_id", "licence", "entitlement", "tier", "default_enabled", "permissions"],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$", "description": "Unique across a console. Lowercase, starts with a letter." },
+    "name": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "version": { "type": "string", "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(-[0-9A-Za-z.-]+)?(\\+[0-9A-Za-z.-]+)?$", "description": "Semver of this pack." },
+    "contract_version": { "type": "integer", "const": 1 },
+    "publisher": { "type": "string", "minLength": 1 },
+    "publisher_key_id": { "type": "string", "minLength": 8, "description": "cosign key fingerprint or keyless identity the image is signed with." },
+    "licence": { "type": "string", "minLength": 1, "description": "SPDX identifier or 'proprietary'." },
+    "entitlement": { "type": "string", "enum": ["none", "licence_key", "marketplace"] },
+    "tier": { "type": "string", "enum": ["core", "ent", "adv"] },
+    "default_enabled": { "type": "boolean" },
+    "summary": { "type": "string", "maxLength": 200 },
+    "docs_url": { "type": "string", "format": "uri" },
+
+    "nav": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["group", "label", "route"],
+      "properties": {
+        "group": { "type": "string", "enum": ["Overview", "Inventory", "Reporting", "Automation", "Configuration", "Patching & Compliance", "Administration"] },
+        "label": { "type": "string", "minLength": 1, "maxLength": 32 },
+        "route": { "type": "string", "pattern": "^/x/[a-z][a-z0-9_]{1,31}$" }
+      }
+    },
+    "slots": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "enum": ["page", "settingsPanel", "nodeDetailTab", "deviceDetailTab", "inventoryKindView", "complianceSourceCard", "dashboardCard"] }
+    },
+    "ui_digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+
+    "settings_schema": { "type": "object", "description": "JSON Schema 2020-12, self-contained (no external $ref). Rendered by the host per settings-ui.schema.json." },
+
+    "permissions": {
+      "type": "array", "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:read|puppetdb:read|classification:read|code:read|activity:read|legacy:read:[a-z_]+)$" }
+    },
+    "extension_points": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["point", "id"],
+        "properties": {
+          "point": { "type": "string", "enum": ["patching.provider", "compliance.source"] },
+          "id": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$" }
+        }
+      }
+    },
+
+    "routes": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["method", "path", "access", "operation_id"],
+        "properties": {
+          "method": { "type": "string", "pattern": "^[A-Z][A-Z-]{0,15}$", "description": "Any HTTP method token (GET, POST, LOCK, UNLOCK, ...)." },
+          "path": { "type": "string", "pattern": "^[^/][A-Za-z0-9_./{}-]*$", "description": "Relative; mounted under /api/v1/x/{id}/." },
+          "access": {
+            "type": "object", "additionalProperties": false,
+            "properties": {
+              "role": { "type": "string", "enum": ["", "global_admin", "deployer", "operator", "viewer"] },
+              "scope": { "type": "string", "pattern": "^[a-z][a-z0-9_:-]*$" },
+              "public": { "type": "boolean" }
+            }
+          },
+          "operation_id": { "type": "string", "pattern": "^[a-zA-Z][A-Za-z0-9]*$" }
+        }
+      }
+    },
+    "jobs": {
+      "type": "array",
+      "items": {
+        "type": "object", "additionalProperties": false, "required": ["name", "every"],
+        "properties": {
+          "name": { "type": "string", "pattern": "^[a-z][a-z0-9_]{1,31}$" },
+          "every": { "type": "string", "pattern": "^([0-9]+h)?([0-9]+m)?([0-9]+s)?$", "description": "Go duration; host clamps to >= 30s." },
+          "singleton": { "type": "boolean" }
+        }
+      }
+    },
+
+    "content": {
+      "type": ["object", "null"], "additionalProperties": false, "required": ["forge_slug", "version"],
+      "properties": {
+        "forge_slug": { "type": "string", "pattern": "^[a-z0-9]+-[a-z0-9_]+$" },
+        "version": { "type": "string", "minLength": 1, "description": "Semver range the engine is compatible with." },
+        "runner_class": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(::[a-z][a-z0-9_]*)*$" }
+      }
+    },
+
+    "resources": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "cpu": { "type": "string", "pattern": "^[0-9]+m?$" },
+        "memory": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" },
+        "volumes": { "type": "array", "items": { "type": "object", "additionalProperties": false, "required": ["name", "size"], "properties": { "name": { "type": "string", "pattern": "^[a-z][a-z0-9-]*$" }, "size": { "type": "string", "pattern": "^[0-9]+(Mi|Gi)$" } } } }
+      }
+    },
+    "network": {
+      "type": "object", "additionalProperties": false,
+      "properties": { "egress": { "type": "array", "items": { "type": "string", "format": "hostname" } } }
+    },
+    "openapi_path": { "type": "string", "default": "/stagehand/openapi.json" }
+  },
+  "allOf": [
+    { "if": { "properties": { "slots": { "contains": { "const": "page" } } }, "required": ["slots"] }, "then": { "required": ["nav"], "properties": { "nav": { "type": "object" } } } },
+    { "if": { "properties": { "slots": { "minItems": 1 } }, "required": ["slots"] }, "then": { "required": ["ui_digest"] } },
+    { "if": { "properties": { "routes": { "minItems": 1 } }, "required": ["routes"] }, "then": { "required": ["openapi_path"] } }
+  ]
+}
