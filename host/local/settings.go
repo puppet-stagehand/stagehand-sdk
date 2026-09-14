@@ -2,7 +2,6 @@ package local
 
 import (
 	"context"
-	"io"
 
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -35,9 +34,6 @@ func (s *settingsServer) Subscribe(_ *emptypb.Empty, stream hostv1.Settings_Subs
 	if err := stream.Send(&hostv1.SettingsChange{Version: s.doc.Version}); err != nil {
 		return err
 	}
-	<-stream.Context().Done()
-	if err := stream.Context().Err(); err != nil && err != io.EOF {
-		return nil // context cancellation is the normal way a Subscribe call ends
-	}
+	<-stream.Context().Done() // context cancellation is the normal way a Subscribe call ends
 	return nil
 }
