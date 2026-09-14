@@ -1,0 +1,39 @@
+// stagehand.host.v1 — the wire contract between an Expansion Pack worker
+// and the console host. contract_version 1. Every message is plain data:
+// no callbacks, no handles, no console-internal types. This is what lets
+// an in-process host (host.Local) and the mTLS gRPC host serve one
+// contract.
+//
+// This file (and host.proto alongside it) defines only the v0.1.0-rc.1
+// tracer slice's four in-scope facets (Documents, Settings, Secrets,
+// Auth). The full 14-facet contract is documented in
+// puppet-console/docs/design/capability-packs.md §3.2 and this repo's own
+// git history at commit b10af30 — later slices grow this file back
+// toward it one real consumer at a time.
+syntax = "proto3";
+package stagehand.host.v1;
+option go_package = "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/struct.proto";
+
+// Stable error detail attached to gRPC status. `code` is machine-stable and
+// documented in docs/errors.md; `fix` is a one-line remedy for humans and
+// code assistants.
+message ErrorDetail {
+  string code = 1;
+  string message = 2;
+  string fix = 3;
+  string docs_url = 4;
+}
+
+message Page {
+  string cursor = 1;   // opaque; empty = first page
+  int32 limit = 2;     // host caps (Documents: 500)
+}
+message PageInfo {
+  string next_cursor = 1;  // empty = no more
+}
+
+// A JSON document body. Kept as Struct so the wire stays language-neutral.
+message Json { google.protobuf.Struct value = 1; }

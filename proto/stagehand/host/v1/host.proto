@@ -1,0 +1,75 @@
+// Host facets in scope for the v0.1.0-rc.1 tracer slice. A worker may call
+// Secrets/Auth only if its manifest `permissions` declares them; the host
+// refuses others with PERMISSION_DENIED + ErrorDetail
+// {code: "facet_not_declared"} and audits the attempt. Documents and
+// Settings are always available (Documents is scoped to the pack's own
+// namespace instead of permission-gated).
+syntax = "proto3";
+package stagehand.host.v1;
+option go_package = "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+import "stagehand/host/v1/common.proto";
+
+// ---------------------------------------------------------------- Documents
+// Always granted (own namespace).
+service Documents {
+  rpc Get(GetDocumentRequest) returns (Document);
+  rpc Put(PutDocumentRequest) returns (PutDocumentResponse);       // CAS on if_version (0 = create-only)
+  rpc List(ListDocumentsRequest) returns (ListDocumentsResponse);
+  rpc Query(QueryDocumentsRequest) returns (ListDocumentsResponse); // single-field filter on body
+  rpc Delete(DeleteDocumentRequest) returns (google.protobuf.Empty);
+}
+message Document {
+  string collection = 1; string doc_id = 2; Json body = 3; int64 version = 4;
+  google.protobuf.Timestamp created_at = 5; google.protobuf.Timestamp updated_at = 6;
+}
+message GetDocumentRequest { string collection = 1; string doc_id = 2; }
+message PutDocumentRequest { string collection = 1; string doc_id = 2; Json body = 3; int64 if_version = 4; }
+message PutDocumentResponse { int64 version = 1; }
+message ListDocumentsRequest { string collection = 1; Page page = 2; }
+message ListDocumentsResponse { repeated Document documents = 1; PageInfo page = 2; }
+message QueryDocumentsRequest {
+  string collection = 1; string field = 2;  // dotted path into body
+  enum Op { OP_UNSPECIFIED = 0; EQ = 1; NE = 2; GT = 3; GTE = 4; LT = 5; LTE = 6; CONTAINS = 7; }
+  Op op = 3; Json value = 4; Page page = 5;
+}
+message DeleteDocumentRequest { string collection = 1; string doc_id = 2; int64 if_version = 3; }
+
+// ----------------------------------------------------------------- Settings
+// Always granted.
+service Settings {
+  rpc Current(google.protobuf.Empty) returns (SettingsDocument);
+  rpc Subscribe(google.protobuf.Empty) returns (stream SettingsChange);
+}
+message SettingsDocument { Json values = 1; int64 version = 2; }
+message SettingsChange { int64 version = 1; google.protobuf.Timestamp at = 2; }
+
+// ------------------------------------------------------------------ Secrets
+// Permission: secrets:rw. Refs are namespaced expansion/<id>/<name> by the
+// host. Reveal is written to the Activity Log (out of scope this slice).
+service Secrets {
+  rpc Store(StoreSecretRequest) returns (SecretRef);
+  rpc Reveal(SecretRef) returns (SecretValue);
+  rpc Seal(SecretValue) returns (Sealed);     // encrypt for storage in Documents
+  rpc Open(Sealed) returns (SecretValue);
+  rpc Delete(SecretRef) returns (google.protobuf.Empty);
+}
+message StoreSecretRequest { string name = 1; bytes plaintext = 2; }
+message SecretRef { string ref = 1; }
+message SecretValue { bytes plaintext = 1; }
+message Sealed { bytes ciphertext = 1; bytes nonce = 2; string key_id = 3; }
+
+// --------------------------------------------------------------------- Auth
+// Permission: tokens:issue. Scopes are namespaced expansion:<id>:<scope>.
+service Auth {
+  rpc IssueToken(IssueTokenRequest) returns (IssuedToken);
+  rpc Verify(VerifyTokenRequest) returns (Principal);
+  rpc Revoke(TokenRef) returns (google.protobuf.Empty);
+}
+message IssueTokenRequest { string scope = 1; string label = 2; int64 ttl_seconds = 3; }
+message IssuedToken { string token_id = 1; string secret = 2; google.protobuf.Timestamp expires_at = 3; }  // secret shown once
+message VerifyTokenRequest { string secret = 1; string scope = 2; }
+message Principal { string token_id = 1; string label = 2; repeated string scopes = 3; }
+message TokenRef { string token_id = 1; }
