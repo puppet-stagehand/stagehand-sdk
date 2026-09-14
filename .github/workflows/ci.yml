@@ -1,0 +1,23 @@
+name: ci
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - uses: bufbuild/buf-action@v1
+        with:
+          setup_only: true
+      - name: buf generate drift check
+        run: |
+          buf generate
+          git diff --exit-code gen/
+      - name: buf breaking (contract_version compatibility gate)
+        run: buf breaking --against '.git#branch=main'
+      - run: go build ./...
+      - run: go test ./... -race

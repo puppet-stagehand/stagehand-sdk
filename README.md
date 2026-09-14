@@ -41,4 +41,9 @@ contract this slice trims from is documented in
 repo's git history (commit `b10af30`) — later slices grow back toward it
 one real consumer at a time, per that design doc's own deferral list.
 
+**Status:** v0.1.0-rc.1 tracer slice implemented (Documents, Settings,
+Secrets, Auth; host.Local; examples/opentofu-lite) per
+docs/superpowers/plans/2026-09-14-stagehand-sdk-v0.1-tracer-slice.md in
+puppet-console. Not yet tagged.
+
 Licence: Apache-2.0.
