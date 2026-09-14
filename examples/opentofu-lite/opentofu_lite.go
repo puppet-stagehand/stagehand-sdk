@@ -208,15 +208,30 @@ func (b *Backend) archiveVersion(ctx context.Context, workspace string, prev *ho
 }
 
 func (b *Backend) pruneVersions(ctx context.Context, workspace string) error {
-	listed, err := b.h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: "state-versions"})
-	if err != nil {
-		return err
-	}
+	// state-versions is shared across every workspace this backend manages
+	// (doc IDs are "<workspace>/<version>"), and documentsServer.List caps a
+	// single page at 500 documents — page through NextCursor until
+	// exhausted so retention doesn't silently stop being enforced once the
+	// total archived-version count crosses that cap.
 	var mine []*hostv1.Document
-	for _, d := range listed.Documents {
-		if len(d.DocId) > len(workspace) && d.DocId[:len(workspace)+1] == workspace+"/" {
-			mine = append(mine, d)
+	cursor := ""
+	for {
+		listed, err := b.h.Documents.List(ctx, &hostv1.ListDocumentsRequest{
+			Collection: "state-versions",
+			Page:       &hostv1.Page{Cursor: cursor},
+		})
+		if err != nil {
+			return err
 		}
+		for _, d := range listed.Documents {
+			if len(d.DocId) > len(workspace) && d.DocId[:len(workspace)+1] == workspace+"/" {
+				mine = append(mine, d)
+			}
+		}
+		if listed.Page == nil || listed.Page.NextCursor == "" {
+			break
+		}
+		cursor = listed.Page.NextCursor
 	}
 	if len(mine) <= stateVersionRetention {
 		return nil
