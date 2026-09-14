@@ -1,6 +1,6 @@
 # stagehand-sdk — brief for code assistants
 
-You are building a **Stagehand capability pack** ("app" for the Stagehand
+You are building a **Stagehand Expansion Pack** ("app" for the Stagehand
 console). Read this file, then the schema files it points at. Do not read the
 console's source; everything a pack may touch is defined here.
 

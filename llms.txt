@@ -1,5 +1,5 @@
 # stagehand-sdk
-> Contract for building Stagehand capability packs (contract_version 1). Preview 0.0.1.
+> Contract for building Stagehand Expansion Packs (contract_version 1). Tracer slice toward v0.1.0-rc.1.
 
 ## Read first
 - CLAUDE.md: rules and the check loop
