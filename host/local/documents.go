@@ -148,14 +148,9 @@ func (s *documentsServer) Query(ctx context.Context, req *hostv1.QueryDocumentsR
 
 	var want any
 	if req.Value != nil && req.Value.Value != nil {
-		want = req.Value.Value.AsMap()["__scalar__"]
-		if want == nil {
-			// scalar values arrive as a single-field wrapper is overkill;
-			// callers pass Value as a Json whose Struct has one field "v".
-			if m := req.Value.Value.AsMap(); m != nil {
-				want = m["v"]
-			}
-		}
+		// callers pass Value as a Json whose Struct has one field, "v"
+		// (single-field wrapper avoids inventing a scalar-JSON encoding).
+		want = req.Value.Value.AsMap()["v"]
 	}
 
 	matched := make([]*hostv1.Document, 0)
