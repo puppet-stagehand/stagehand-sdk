@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -23,7 +24,7 @@ func newSettingsServer() *settingsServer {
 }
 
 func (s *settingsServer) Current(ctx context.Context, _ *emptypb.Empty) (*hostv1.SettingsDocument, error) {
-	return s.doc, nil
+	return proto.Clone(s.doc).(*hostv1.SettingsDocument), nil
 }
 
 // Subscribe sends the current settings once, then blocks until the stream's
