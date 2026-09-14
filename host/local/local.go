@@ -22,22 +22,21 @@ import (
 // either without the permission declared returns the same PERMISSION_DENIED
 // a real Expansion Pack would get from the console's gRPC interceptor.
 //
-// Secrets and Auth are still placeholder hostv1.Unimplemented*Server
-// values as of this plan (01-05) — Plans 01-06 and 01-07 respectively add
-// the real secretsServer/authServer implementations (plus the
-// gatedSecrets/gatedAuth permission wrappers) and are expected to rewire
-// the fields below to use them. Settings is real as of this plan.
+// Auth is still a placeholder hostv1.UnimplementedAuthServer value as of
+// this plan (01-06) — Plan 01-07 adds the real authServer implementation
+// (plus the gatedAuth permission wrapper) and is expected to rewire the
+// field below to use it. Settings (01-05) and Secrets (01-06) are real as
+// of this plan.
 func New(permissions []string, packID string) *host.Host {
 	perms := make(map[string]bool, len(permissions))
 	for _, p := range permissions {
 		perms[p] = true
 	}
-	_ = perms // consumed by Secrets/Auth permission gating added in Plans 01-06/01-07
 	docs := newDocumentsServer(packID)
 	return &host.Host{
 		Documents: docs,
 		Settings:  newSettingsServer(),
-		Secrets:   &hostv1.UnimplementedSecretsServer{},
+		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: newSecretsServer(packID)},
 		Auth:      &hostv1.UnimplementedAuthServer{},
 	}
 }
