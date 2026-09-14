@@ -27,7 +27,15 @@ type secretsServer struct {
 
 func newSecretsServer(packID string) *secretsServer {
 	var key [32]byte
-	_, _ = rand.Read(key[:]) // host.Local's own key; never used outside this process
+	if _, err := rand.Read(key[:]); err != nil {
+		// host.Local's own key; never used outside this process. Silently
+		// falling through here would seal every stored secret with a
+		// predictable all-zero key, so fail loudly at host construction
+		// instead (crypto/rand.Read only errors on an exhausted/restricted
+		// entropy source, an environment where continuing silently would be
+		// far worse than panicking).
+		panic(fmt.Sprintf("host/local: failed to generate secrets encryption key: %v", err))
+	}
 	return &secretsServer{packID: packID, key: key, store: map[string][]byte{}}
 }
 

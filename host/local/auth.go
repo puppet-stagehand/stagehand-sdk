@@ -39,16 +39,26 @@ func newAuthServer(packID string) *authServer {
 	return &authServer{packID: packID, bySecret: map[string]*issuedToken{}, byID: map[string]*issuedToken{}}
 }
 
-func randomHex(n int) string {
+func randomHex(n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *authServer) IssueToken(ctx context.Context, req *hostv1.IssueTokenRequest) (*hostv1.IssuedToken, error) {
+	tokenID, err := randomHex(8)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "issue token: generate token id: %v", err)
+	}
+	secret, err := randomHex(24)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "issue token: generate secret: %v", err)
+	}
 	tok := &issuedToken{
-		tokenID:   randomHex(8),
-		secret:    randomHex(24),
+		tokenID:   tokenID,
+		secret:    secret,
 		scope:     req.Scope,
 		label:     req.Label,
 		expiresAt: time.Now().Add(time.Duration(req.TtlSeconds) * time.Second),
