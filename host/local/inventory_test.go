@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -1262,5 +1263,241 @@ func TestInventory_OnboardNodeConcurrentIsExactlyOnce(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("expected exactly 1 node record for n10, got %d", count)
+	}
+}
+
+// TestInventory_EndToEndDiscoverGroupProposeOnboard walks the milestone's
+// documented discover-group-propose-onboard flow as one composed sequence
+// with assertions between every step, proving what no single RPC's unit
+// coverage can: that a fact survives grouping, that grouping survives
+// onboarding, and that a fact attached before onboarding is still
+// queryable after it.
+func TestInventory_EndToEndDiscoverGroupProposeOnboard(t *testing.T) {
+	ctx := context.Background()
+	candidate := &hostv1.Node{Id: "e2e-01", DisplayName: "e2e-01-discovered", Status: hostv1.Node_DISCOVERED, Environment: "staging"}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(candidate))
+
+	disc, err := h.Inventory.Discover(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, disc.Candidates, "e2e-01")
+	if disc.Candidates[0].Status != hostv1.Node_DISCOVERED {
+		t.Fatalf("expected DISCOVERED at discovery, got %v", disc.Candidates[0].Status)
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "e2e-01", GroupId: "e2e-group"}); err != nil {
+		t.Fatal(err)
+	}
+
+	beforeOnboard, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "e2e-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeOnboard.Status != hostv1.Node_DISCOVERED {
+		t.Fatalf("expected DISCOVERED at grouping time, got %v", beforeOnboard.Status)
+	}
+
+	if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "e2e-01", Facts: jsonFacts(t, map[string]any{
+		"os": "linux",
+		"az": "us-east-1a",
+	})}); err != nil {
+		t.Fatal(err)
+	}
+
+	groupsBefore, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "e2e-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupsBefore.Groups) != 1 || groupsBefore.Groups[0].Id != "e2e-group" {
+		t.Fatalf("expected group membership before onboarding, got %+v", groupsBefore.Groups)
+	}
+
+	writeProposal(t, h, "e2e-01", "approved", map[string]any{
+		"id":           "e2e-01",
+		"display_name": "", // empty proposal name must not blank the discovery name
+		"environment":  "production",
+		"facts": map[string]any{
+			"role": "web",
+		},
+	})
+
+	onboarded, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "e2e-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onboarded.Status != hostv1.Node_ONBOARDED {
+		t.Fatalf("expected ONBOARDED, got %v", onboarded.Status)
+	}
+
+	got, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "e2e-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != hostv1.Node_ONBOARDED {
+		t.Fatalf("GetNode: expected ONBOARDED, got %v", got.Status)
+	}
+
+	queried, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os",
+		Op:    hostv1.QueryNodesRequest_EQ,
+		Value: jsonWrap(t, "linux"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, queried.Nodes, "e2e-01")
+
+	groupsAfter, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "e2e-01"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupsAfter.Groups) != 1 || groupsAfter.Groups[0].Id != "e2e-group" {
+		t.Fatalf("expected group membership preserved after onboarding, got %+v", groupsAfter.Groups)
+	}
+
+	discAfter, err := h.Inventory.Discover(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range discAfter.Candidates {
+		if c.Id == "e2e-01" {
+			t.Fatal("expected onboarded node to no longer appear as a Discover candidate")
+		}
+	}
+
+	// The same walk on a host without inventory:rw is refused at its
+	// first Inventory call — the gate fronts the whole flow, not just
+	// individual methods.
+	hNoPerm := local.New(nil, "opentofu", local.WithDiscoverCandidates(candidate))
+	if _, err := hNoPerm.Inventory.Discover(ctx, &emptypb.Empty{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("expected PermissionDenied without inventory:rw, got %v", err)
+	}
+}
+
+// TestInventory_ConcurrentMixedRPCsAreRaceFree gives -race something worth
+// instrumenting across the whole facet: ten goroutines mixing read and
+// write paths on shared state, including a concurrent OnboardNode against a
+// pre-written approved proposal and two goroutines writing different fact
+// keys to the same node — the per-key merge means neither writer may lose
+// the other's key.
+func TestInventory_ConcurrentMixedRPCsAreRaceFree(t *testing.T) {
+	ctx := context.Background()
+
+	nodes := make([]*hostv1.Node, 0, 10)
+	for i := 0; i < 10; i++ {
+		nodes = append(nodes, &hostv1.Node{
+			Id:          fmt.Sprintf("mix-%02d", i),
+			DisplayName: fmt.Sprintf("mix-%02d", i),
+			Status:      hostv1.Node_DISCOVERED,
+		})
+	}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...))
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pre-write an approved proposal so a concurrent OnboardNode has
+	// something real to do.
+	writeProposal(t, h, "mix-00", "approved", map[string]any{"id": "mix-00"})
+
+	const iterations = 5
+	var wg sync.WaitGroup
+	errCh := make(chan error, 200)
+
+	mixedWorker := func(idx int) {
+		defer wg.Done()
+		for iter := 0; iter < iterations; iter++ {
+			var err error
+			switch idx % 8 {
+			case 0:
+				_, err = h.Inventory.Discover(ctx, &emptypb.Empty{})
+			case 1:
+				_, err = h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "mix-01"})
+			case 2:
+				_, err = h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{
+					NodeId: "mix-02",
+					Facts:  jsonFacts(t, map[string]any{fmt.Sprintf("k-a-%d", iter): "va"}),
+				})
+			case 3:
+				_, err = h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "mix-03", GroupId: "mixgroup"})
+			case 4:
+				_, err = h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+			case 5:
+				_, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux")})
+			case 6:
+				_, err = h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "webservers"})
+			case 7:
+				_, err = h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "mix-00"})
+			}
+			if err != nil {
+				errCh <- err
+			}
+		}
+	}
+
+	wg.Add(10)
+	for i := 0; i < 8; i++ {
+		go mixedWorker(i)
+	}
+	go func() {
+		defer wg.Done()
+		for iter := 0; iter < iterations; iter++ {
+			if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{
+				NodeId: "mix-02",
+				Facts:  jsonFacts(t, map[string]any{fmt.Sprintf("k-b-%d", iter): "vb"}),
+			}); err != nil {
+				errCh <- err
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for iter := 0; iter < iterations; iter++ {
+			if _, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "mixgroup"}); err != nil {
+				errCh <- err
+			}
+		}
+	}()
+
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("unexpected error from concurrent call: %v", err)
+	}
+
+	lst, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]int{}
+	for _, n := range lst.Nodes {
+		seen[n.Id]++
+	}
+	for _, n := range nodes {
+		if seen[n.Id] != 1 {
+			t.Fatalf("expected exactly 1 record for %q, got %d", n.Id, seen[n.Id])
+		}
+	}
+
+	onboarded, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "mix-00"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if onboarded.Status != hostv1.Node_ONBOARDED {
+		t.Fatalf("expected mix-00 ONBOARDED, got %v", onboarded.Status)
+	}
+
+	finalMix02, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "mix-02"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for iter := 0; iter < iterations; iter++ {
+		if _, ok := finalMix02.Facts[fmt.Sprintf("k-a-%d", iter)]; !ok {
+			t.Fatalf("expected fact k-a-%d to survive concurrent writes, got %+v", iter, finalMix02.Facts)
+		}
+		if _, ok := finalMix02.Facts[fmt.Sprintf("k-b-%d", iter)]; !ok {
+			t.Fatalf("expected fact k-b-%d to survive concurrent writes, got %+v", iter, finalMix02.Facts)
+		}
 	}
 }
