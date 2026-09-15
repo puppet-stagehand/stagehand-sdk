@@ -46,13 +46,13 @@ type inventoryServer struct {
 	memberOf map[string]map[string]bool
 	// classes holds each group's assigned classes, keyed by group id then
 	// class name — name-keying is what makes a duplicate class name
-	// collapse to one entry (GRP-02). Empty until the class fixture seam
-	// (Plan 03-04 Task 2) starts populating it via newInventoryServer.
+	// collapse to one entry (GRP-02). Folded in from newInventoryServer's
+	// classes parameter at construction time.
 	classes map[string]map[string]*hostv1.Class
 }
 
-func newInventoryServer(packID string, docs *documentsServer, candidates []*hostv1.Node) *inventoryServer {
-	return &inventoryServer{
+func newInventoryServer(packID string, docs *documentsServer, candidates []*hostv1.Node, classes map[string][]*hostv1.Class) *inventoryServer {
+	s := &inventoryServer{
 		packID:     packID,
 		nodes:      map[string]*hostv1.Node{},
 		docs:       docs,
@@ -62,6 +62,23 @@ func newInventoryServer(packID string, docs *documentsServer, candidates []*host
 		memberOf:   map[string]map[string]bool{},
 		classes:    map[string]map[string]*hostv1.Class{},
 	}
+	for gid, cls := range classes {
+		// A class assignment is itself evidence the group exists, so every
+		// group id present in the injected class map is visible to
+		// ListGroups even before any node joins it.
+		if _, ok := s.groups[gid]; !ok {
+			s.groups[gid] = &hostv1.Group{Id: gid, Name: gid}
+		}
+		inner := s.classes[gid]
+		if inner == nil {
+			inner = map[string]*hostv1.Class{}
+			s.classes[gid] = inner
+		}
+		for _, c := range cls {
+			inner[c.Name] = c // last-write-wins upsert: a duplicate name is the same class
+		}
+	}
+	return s
 }
 
 // Discover materializes any not-yet-seen candidate into the node store as
@@ -418,6 +435,55 @@ func cloneNode(n *hostv1.Node) *hostv1.Node {
 // Inventory RPC goes through it.
 func cloneGroup(g *hostv1.Group) *hostv1.Group {
 	return proto.Clone(g).(*hostv1.Group)
+}
+
+// ListClasses returns the classes assigned to a group, ascending and
+// stably by name. This is read-only in v1: no rule evaluation, no
+// ancestor-group walk and no merging across a group hierarchy occurs here
+// — the contract comment says so and GRP-03 (a rule engine) is a v2
+// requirement. A group id that was never created, and a group that exists
+// but carries no classes, both read via a plain map index — symmetric with
+// ListGroupNodes — and so both yield an empty list and a nil error rather
+// than an error.
+func (s *inventoryServer) ListClasses(ctx context.Context, req *hostv1.GroupRef) (*hostv1.ClassList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	inner := s.classes[req.Id]
+	names := make([]string, 0, len(inner))
+	for name := range inner {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	classes := make([]*hostv1.Class, 0, len(names))
+	for _, name := range names {
+		classes = append(classes, cloneClass(inner[name]))
+	}
+	return &hostv1.ClassList{Classes: classes}, nil
+}
+
+// cloneClass returns a deep copy so a caller mutating a returned class —
+// notably its Parameters, a Json a caller could otherwise rewrite in place
+// — can never reach into the facet's internal state (T-03-14).
+func cloneClass(c *hostv1.Class) *hostv1.Class {
+	return proto.Clone(c).(*hostv1.Class)
+}
+
+// cloneGroupClassesMap deep-copies every class in a group-id-to-classes
+// map, giving each host.Local instance its own private copy of
+// defaultGroupClasses rather than sharing pointers across instances —
+// mirrors cloneNodeSlice.
+func cloneGroupClassesMap(m map[string][]*hostv1.Class) map[string][]*hostv1.Class {
+	out := make(map[string][]*hostv1.Class, len(m))
+	for gid, classes := range m {
+		cloned := make([]*hostv1.Class, len(classes))
+		for i, c := range classes {
+			cloned[i] = cloneClass(c)
+		}
+		out[gid] = cloned
+	}
+	return out
 }
 
 // cloneNodeSlice deep-copies every node in a slice, used to give each

@@ -16,7 +16,8 @@ import (
 )
 
 // Option configures optional behavior of a host.Local instance built by
-// New. The only Option today is WithDiscoverCandidates (D-05).
+// New. WithDiscoverCandidates (D-05) and WithGroupClasses follow the same
+// constructor-injectable-with-default pattern.
 type Option func(*config)
 
 // config holds the settings New builds from its opts before constructing
@@ -24,13 +25,19 @@ type Option func(*config)
 type config struct {
 	discoverCandidates    []*hostv1.Node
 	discoverCandidatesSet bool
+	groupClasses          map[string][]*hostv1.Class
+	groupClassesSet       bool
 }
 
 // defaultConfig returns a config seeded with a private clone of the
-// built-in Discover fixture set, used whenever WithDiscoverCandidates is
-// never applied at all.
+// built-in Discover fixture set and the built-in class-assignment fixture
+// set, used whenever WithDiscoverCandidates / WithGroupClasses is never
+// applied at all.
 func defaultConfig() *config {
-	return &config{discoverCandidates: cloneNodeSlice(defaultDiscoverCandidates)}
+	return &config{
+		discoverCandidates: cloneNodeSlice(defaultDiscoverCandidates),
+		groupClasses:       cloneGroupClassesMap(defaultGroupClasses),
+	}
 }
 
 // defaultDiscoverCandidates is host.Local's built-in Discover fixture
@@ -50,6 +57,35 @@ func WithDiscoverCandidates(candidates ...*hostv1.Node) Option {
 	return func(c *config) {
 		c.discoverCandidates = candidates
 		c.discoverCandidatesSet = true
+	}
+}
+
+// defaultGroupClasses is host.Local's built-in class-assignment fixture
+// data (D-05 pattern) — not a preview of any real rule engine's output.
+// Exactly one group, "webservers", with two classes so ordering is
+// observable in tests.
+var defaultGroupClasses = map[string][]*hostv1.Class{
+	"webservers": {
+		{Name: "profile::base"},
+		{Name: "profile::web"},
+	},
+}
+
+// WithGroupClasses overrides host.Local's class-assignment fixture set
+// with the given group-id-to-classes map. This seam exists because the
+// locked contract has no RPC that writes a class — without a
+// constructor-injected source, ListClasses could only ever return the
+// built-in default, and Phase 5's proof example needs to define classes
+// that mean something for its own scenario (mirrors D-05's reasoning for
+// the Discover candidate set exactly).
+//
+// Applying it with a nil or empty map means "this host has no class
+// assignments" — an explicit empty set, distinct from never applying the
+// option at all, which falls back to defaultGroupClasses.
+func WithGroupClasses(classes map[string][]*hostv1.Class) Option {
+	return func(c *config) {
+		c.groupClasses = classes
+		c.groupClassesSet = true
 	}
 }
 
@@ -78,7 +114,7 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		Settings:  newSettingsServer(),
 		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: newSecretsServer(packID)},
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
-		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates)},
+		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
 	}
 }
 

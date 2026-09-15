@@ -627,9 +627,12 @@ func TestInventory_QueryNodesOpParityWithDocuments(t *testing.T) {
 }
 
 func TestInventory_GroupsRoundTrip(t *testing.T) {
+	// WithGroupClasses(nil) opts out of the default class fixture (which
+	// auto-creates a "webservers" group) so ListGroups reflects only the
+	// membership this test creates.
 	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
 		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
-	))
+	), local.WithGroupClasses(nil))
 	ctx := context.Background()
 	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
 		t.Fatal(err)
@@ -695,9 +698,11 @@ func TestInventory_GroupsOnDiscoveredNode(t *testing.T) {
 }
 
 func TestInventory_AddNodeToGroupIsIdempotent(t *testing.T) {
+	// WithGroupClasses(nil) opts out of the default class fixture so the
+	// "exactly 1 group" assertion below reflects only this test's own add.
 	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
 		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
-	))
+	), local.WithGroupClasses(nil))
 	ctx := context.Background()
 	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
 		t.Fatal(err)
@@ -748,9 +753,13 @@ func TestInventory_AddNodeToGroupIsIdempotent(t *testing.T) {
 }
 
 func TestInventory_GroupsEmptyAndUnknown(t *testing.T) {
+	// WithGroupClasses(nil) is the explicit "no injected classes" case the
+	// GRP-01 truth describes: a fresh host with no injected classes has 0
+	// groups. The bare-default-host, non-empty-webservers case is covered
+	// separately by TestInventory_ListClasses.
 	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
 		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
-	))
+	), local.WithGroupClasses(nil))
 	ctx := context.Background()
 	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
 		t.Fatal(err)
@@ -787,7 +796,9 @@ func TestInventory_GroupsOrderingIsStable(t *testing.T) {
 		{Id: "a1", DisplayName: "a1", Status: hostv1.Node_DISCOVERED},
 		{Id: "b1", DisplayName: "b1", Status: hostv1.Node_DISCOVERED},
 	}
-	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...))
+	// WithGroupClasses(nil) opts out of the default class fixture so the
+	// exact-3-groups assertions below reflect only this test's own adds.
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...), local.WithGroupClasses(nil))
 	ctx := context.Background()
 	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
 		t.Fatal(err)
