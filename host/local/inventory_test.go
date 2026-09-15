@@ -894,6 +894,114 @@ func TestInventory_GroupsOrderingIsStable(t *testing.T) {
 	}
 }
 
+func TestInventory_ListClasses(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu")
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	classes, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "webservers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(classes.Classes) != 2 || classes.Classes[0].Name != "profile::base" || classes.Classes[1].Name != "profile::web" {
+		t.Fatalf("expected default classes profile::base, profile::web ascending, got %+v", classes.Classes)
+	}
+
+	unknown, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "nope"})
+	if err != nil {
+		t.Fatalf("expected no error for an unknown group id, got %v", err)
+	}
+	if len(unknown.Classes) != 0 {
+		t.Fatalf("expected 0 classes for an unknown group id, got %d", len(unknown.Classes))
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "db-01.example.test", GroupId: "dbservers"}); err != nil {
+		t.Fatal(err)
+	}
+	noClasses, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "dbservers"})
+	if err != nil {
+		t.Fatalf("expected no error for a group with no classes, got %v", err)
+	}
+	if len(noClasses.Classes) != 0 {
+		t.Fatalf("expected 0 classes for a member-only group, got %d", len(noClasses.Classes))
+	}
+
+	classes.Classes[0].Name = "mutated"
+	again, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "webservers"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Classes[0].Name == "mutated" {
+		t.Fatal("expected mutation of a returned class to not affect the next ListClasses call")
+	}
+}
+
+func TestInventory_ListClassesAreInjectable(t *testing.T) {
+	ctx := context.Background()
+
+	params, err := structpb.NewStruct(map[string]any{"port": float64(443)})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+
+	injected := map[string][]*hostv1.Class{
+		"lb": {
+			{Name: "profile::lb", Parameters: &hostv1.Json{Value: params}},
+			{Name: "profile::dup"},
+			{Name: "profile::dup"}, // duplicate name on the same group must collapse to one entry
+		},
+		"db": {
+			{Name: "profile::db"},
+		},
+	}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithGroupClasses(injected))
+
+	lb, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "lb"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lb.Classes) != 2 {
+		t.Fatalf("expected duplicate class name to collapse to 1 entry alongside profile::lb, got %d: %+v", len(lb.Classes), lb.Classes)
+	}
+	var found bool
+	for _, c := range lb.Classes {
+		if c.Name == "profile::lb" {
+			found = true
+			if c.Parameters == nil || c.Parameters.Value.AsMap()["port"] != float64(443) {
+				t.Fatalf("expected Parameters to round-trip, got %+v", c.Parameters)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected profile::lb in the result")
+	}
+
+	groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seenGroups := map[string]bool{}
+	for _, g := range groups.Groups {
+		seenGroups[g.Id] = true
+	}
+	if !seenGroups["lb"] || !seenGroups["db"] {
+		t.Fatalf("expected both injected group ids in ListGroups before any node joins them, got %+v", groups.Groups)
+	}
+
+	hNil := local.New([]string{"inventory:rw"}, "opentofu", local.WithGroupClasses(nil))
+	for _, gid := range []string{"webservers", "lb", "db"} {
+		classes, err := hNil.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: gid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(classes.Classes) != 0 {
+			t.Fatalf("expected WithGroupClasses(nil) to yield 0 classes for %q, got %d", gid, len(classes.Classes))
+		}
+	}
+}
+
 func assertNodeIDs(t *testing.T, nodes []*hostv1.Node, want ...string) {
 	t.Helper()
 	got := nodeIDs(nodes)
