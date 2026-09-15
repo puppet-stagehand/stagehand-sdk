@@ -883,7 +883,11 @@ var Auth_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Inventory_GetNode_FullMethodName = "/stagehand.host.v1.Inventory/GetNode"
+	Inventory_GetNode_FullMethodName    = "/stagehand.host.v1.Inventory/GetNode"
+	Inventory_Discover_FullMethodName   = "/stagehand.host.v1.Inventory/Discover"
+	Inventory_ListNodes_FullMethodName  = "/stagehand.host.v1.Inventory/ListNodes"
+	Inventory_QueryNodes_FullMethodName = "/stagehand.host.v1.Inventory/QueryNodes"
+	Inventory_PutFacts_FullMethodName   = "/stagehand.host.v1.Inventory/PutFacts"
 )
 
 // InventoryClient is the client API for Inventory service.
@@ -909,6 +913,15 @@ const (
 // shape.
 type InventoryClient interface {
 	GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*Node, error)
+	// Discover returns not-yet-onboarded candidates from host.Local's
+	// fixture/seed source. No filter fields in v1 (parameterless by design —
+	// D-03: nothing in this milestone's fixture-backed example needs one).
+	Discover(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*DiscoverResponse, error)
+	ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
+	// Mirrors Documents.QueryDocumentsRequest's field/Op/value shape exactly
+	// (single-field filter) rather than inventing a second query grammar.
+	QueryNodes(ctx context.Context, in *QueryNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
+	PutFacts(ctx context.Context, in *PutFactsRequest, opts ...grpc.CallOption) (*Node, error)
 }
 
 type inventoryClient struct {
@@ -923,6 +936,46 @@ func (c *inventoryClient) GetNode(ctx context.Context, in *GetNodeRequest, opts 
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Node)
 	err := c.cc.Invoke(ctx, Inventory_GetNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) Discover(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*DiscoverResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscoverResponse)
+	err := c.cc.Invoke(ctx, Inventory_Discover_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) ListNodes(ctx context.Context, in *ListNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodesResponse)
+	err := c.cc.Invoke(ctx, Inventory_ListNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) QueryNodes(ctx context.Context, in *QueryNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodesResponse)
+	err := c.cc.Invoke(ctx, Inventory_QueryNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) PutFacts(ctx context.Context, in *PutFactsRequest, opts ...grpc.CallOption) (*Node, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Node)
+	err := c.cc.Invoke(ctx, Inventory_PutFacts_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -952,6 +1005,15 @@ func (c *inventoryClient) GetNode(ctx context.Context, in *GetNodeRequest, opts 
 // shape.
 type InventoryServer interface {
 	GetNode(context.Context, *GetNodeRequest) (*Node, error)
+	// Discover returns not-yet-onboarded candidates from host.Local's
+	// fixture/seed source. No filter fields in v1 (parameterless by design —
+	// D-03: nothing in this milestone's fixture-backed example needs one).
+	Discover(context.Context, *emptypb.Empty) (*DiscoverResponse, error)
+	ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error)
+	// Mirrors Documents.QueryDocumentsRequest's field/Op/value shape exactly
+	// (single-field filter) rather than inventing a second query grammar.
+	QueryNodes(context.Context, *QueryNodesRequest) (*ListNodesResponse, error)
+	PutFacts(context.Context, *PutFactsRequest) (*Node, error)
 	mustEmbedUnimplementedInventoryServer()
 }
 
@@ -964,6 +1026,18 @@ type UnimplementedInventoryServer struct{}
 
 func (UnimplementedInventoryServer) GetNode(context.Context, *GetNodeRequest) (*Node, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetNode not implemented")
+}
+func (UnimplementedInventoryServer) Discover(context.Context, *emptypb.Empty) (*DiscoverResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Discover not implemented")
+}
+func (UnimplementedInventoryServer) ListNodes(context.Context, *ListNodesRequest) (*ListNodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodes not implemented")
+}
+func (UnimplementedInventoryServer) QueryNodes(context.Context, *QueryNodesRequest) (*ListNodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method QueryNodes not implemented")
+}
+func (UnimplementedInventoryServer) PutFacts(context.Context, *PutFactsRequest) (*Node, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutFacts not implemented")
 }
 func (UnimplementedInventoryServer) mustEmbedUnimplementedInventoryServer() {}
 func (UnimplementedInventoryServer) testEmbeddedByValue()                   {}
@@ -1004,6 +1078,78 @@ func _Inventory_GetNode_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Inventory_Discover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).Discover(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_Discover_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).Discover(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_ListNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).ListNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_ListNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).ListNodes(ctx, req.(*ListNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_QueryNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(QueryNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).QueryNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_QueryNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).QueryNodes(ctx, req.(*QueryNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_PutFacts_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutFactsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).PutFacts(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_PutFacts_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).PutFacts(ctx, req.(*PutFactsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Inventory_ServiceDesc is the grpc.ServiceDesc for Inventory service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1014,6 +1160,22 @@ var Inventory_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "GetNode",
 			Handler:    _Inventory_GetNode_Handler,
+		},
+		{
+			MethodName: "Discover",
+			Handler:    _Inventory_Discover_Handler,
+		},
+		{
+			MethodName: "ListNodes",
+			Handler:    _Inventory_ListNodes_Handler,
+		},
+		{
+			MethodName: "QueryNodes",
+			Handler:    _Inventory_QueryNodes_Handler,
+		},
+		{
+			MethodName: "PutFacts",
+			Handler:    _Inventory_PutFacts_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

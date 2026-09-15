@@ -93,6 +93,17 @@ message TokenRef { string token_id = 1; }
 // shape.
 service Inventory {
   rpc GetNode(GetNodeRequest) returns (Node);
+
+  // Discover returns not-yet-onboarded candidates from host.Local's
+  // fixture/seed source. No filter fields in v1 (parameterless by design —
+  // D-03: nothing in this milestone's fixture-backed example needs one).
+  rpc Discover(google.protobuf.Empty) returns (DiscoverResponse);
+
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  // Mirrors Documents.QueryDocumentsRequest's field/Op/value shape exactly
+  // (single-field filter) rather than inventing a second query grammar.
+  rpc QueryNodes(QueryNodesRequest) returns (ListNodesResponse);
+  rpc PutFacts(PutFactsRequest) returns (Node);
 }
 
 message Node {
@@ -104,3 +115,12 @@ message Node {
   map<string, Json> facts = 5; // flat key-value; PuppetDB-style nested facts deferred to v2 (INV-05)
 }
 message GetNodeRequest { string id = 1; }
+message DiscoverResponse { repeated Node candidates = 1; }
+message ListNodesRequest { Page page = 1; }
+message ListNodesResponse { repeated Node nodes = 1; PageInfo page = 2; }
+message QueryNodesRequest {
+  string field = 1;  // dotted path into facts, mirrors QueryDocumentsRequest.field
+  enum Op { OP_UNSPECIFIED = 0; EQ = 1; NE = 2; GT = 3; GTE = 4; LT = 5; LTE = 6; CONTAINS = 7; }
+  Op op = 2; Json value = 3; Page page = 4;
+}
+message PutFactsRequest { string node_id = 1; map<string, Json> facts = 2; }
