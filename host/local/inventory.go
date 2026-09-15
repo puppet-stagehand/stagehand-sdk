@@ -32,6 +32,23 @@ type inventoryServer struct {
 	// construction time via local.WithDiscoverCandidates or the built-in
 	// default. Discover never reaches outside this slice.
 	candidates []*hostv1.Node
+	// groups holds every group AddNodeToGroup has auto-created or
+	// WithGroupClasses has pre-declared, keyed by group id. There is no
+	// separate CreateGroup RPC — first use is the only creation moment.
+	groups map[string]*hostv1.Group
+	// members is the forward membership index: group id -> set of member
+	// node ids. A set rather than a slice is what makes a repeated
+	// AddNodeToGroup naturally idempotent.
+	members map[string]map[string]bool
+	// memberOf is the reverse membership index: node id -> set of group
+	// ids it belongs to. Kept alongside members so ListNodeGroups never
+	// has to scan every group's member set.
+	memberOf map[string]map[string]bool
+	// classes holds each group's assigned classes, keyed by group id then
+	// class name — name-keying is what makes a duplicate class name
+	// collapse to one entry (GRP-02). Empty until the class fixture seam
+	// (Plan 03-04 Task 2) starts populating it via newInventoryServer.
+	classes map[string]map[string]*hostv1.Class
 }
 
 func newInventoryServer(packID string, docs *documentsServer, candidates []*hostv1.Node) *inventoryServer {
@@ -40,6 +57,10 @@ func newInventoryServer(packID string, docs *documentsServer, candidates []*host
 		nodes:      map[string]*hostv1.Node{},
 		docs:       docs,
 		candidates: candidates,
+		groups:     map[string]*hostv1.Group{},
+		members:    map[string]map[string]bool{},
+		memberOf:   map[string]map[string]bool{},
+		classes:    map[string]map[string]*hostv1.Class{},
 	}
 }
 
@@ -265,10 +286,138 @@ func (s *inventoryServer) QueryNodes(ctx context.Context, req *hostv1.QueryNodes
 	return &hostv1.ListNodesResponse{Nodes: nodes, Page: pageInfo}, nil
 }
 
+// AddNodeToGroup adds an existing node's id to the named group's membership
+// set, auto-creating the group on first use — there is no separate
+// CreateGroup RPC in v1. It works on a node of any Status, including
+// DISCOVERED (D-06): the milestone's flow groups a node before it is ever
+// onboarded. A repeated call with the same pair is a no-op in both
+// directions — the underlying sets make a duplicate insert naturally
+// idempotent — and an already-existing group's Name is left untouched.
+func (s *inventoryServer) AddNodeToGroup(ctx context.Context, req *hostv1.GroupMembershipRequest) (*emptypb.Empty, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, ok := s.nodes[req.NodeId]; !ok {
+		// A membership naming a node that does not exist would be
+		// unreachable state, and this is a write path, so refuse it.
+		return nil, status.Errorf(codes.NotFound, "no node %q", req.NodeId)
+	}
+	if req.GroupId == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "group id is required")
+	}
+
+	if _, ok := s.groups[req.GroupId]; !ok {
+		s.groups[req.GroupId] = &hostv1.Group{Id: req.GroupId, Name: req.GroupId}
+	}
+
+	if s.members[req.GroupId] == nil {
+		s.members[req.GroupId] = map[string]bool{}
+	}
+	s.members[req.GroupId][req.NodeId] = true
+
+	if s.memberOf[req.NodeId] == nil {
+		s.memberOf[req.NodeId] = map[string]bool{}
+	}
+	s.memberOf[req.NodeId][req.GroupId] = true
+
+	return &emptypb.Empty{}, nil
+}
+
+// ListGroups returns every known group, ascending and stably by id. An
+// empty store yields an empty list and a nil error.
+func (s *inventoryServer) ListGroups(ctx context.Context, _ *emptypb.Empty) (*hostv1.GroupList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.groups))
+	for id := range s.groups {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	groups := make([]*hostv1.Group, 0, len(ids))
+	for _, id := range ids {
+		groups = append(groups, cloneGroup(s.groups[id]))
+	}
+	return &hostv1.GroupList{Groups: groups}, nil
+}
+
+// ListGroupNodes returns the nodes belonging to a group, ascending and
+// stably by node id, paginated with the same pageBounds rules ListNodes
+// uses. A group id that was never created is read with a plain map index —
+// mirroring how documentsServer.List treats an unknown collection
+// (documents.go:103) — so it yields an empty result rather than an error. A
+// member id no longer present in s.nodes is skipped, so a stale edge can
+// never surface as a phantom node.
+func (s *inventoryServer) ListGroupNodes(ctx context.Context, req *hostv1.ListGroupNodesRequest) (*hostv1.ListNodesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	members := s.members[req.GroupId]
+	ids := make([]string, 0, len(members))
+	for id := range members {
+		if _, ok := s.nodes[id]; ok {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+
+	start, limit, err := pageBounds(req.Page, len(ids))
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := make([]*hostv1.Node, 0, limit)
+	end := start
+	for end < len(ids) && len(nodes) < limit {
+		nodes = append(nodes, cloneNode(s.nodes[ids[end]]))
+		end++
+	}
+	pageInfo := &hostv1.PageInfo{}
+	if end < len(ids) {
+		pageInfo.NextCursor = strconv.Itoa(end)
+	}
+	return &hostv1.ListNodesResponse{Nodes: nodes, Page: pageInfo}, nil
+}
+
+// ListNodeGroups returns the groups a node belongs to, ascending and stably
+// by group id. An unknown or ungrouped node id is read with a plain map
+// index, symmetric with ListGroupNodes, so it yields an empty list and a
+// nil error rather than an error.
+//
+// ListNodeGroupsRequest carries no page field and GroupList carries no
+// PageInfo, so this response is deliberately unpaginated.
+func (s *inventoryServer) ListNodeGroups(ctx context.Context, req *hostv1.ListNodeGroupsRequest) (*hostv1.GroupList, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	memberOf := s.memberOf[req.NodeId]
+	ids := make([]string, 0, len(memberOf))
+	for id := range memberOf {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	groups := make([]*hostv1.Group, 0, len(ids))
+	for _, id := range ids {
+		if g, ok := s.groups[id]; ok {
+			groups = append(groups, cloneGroup(g))
+		}
+	}
+	return &hostv1.GroupList{Groups: groups}, nil
+}
+
 // cloneNode returns a deep copy so a caller mutating the returned node can
 // never reach into the facet's internal state.
 func cloneNode(n *hostv1.Node) *hostv1.Node {
 	return proto.Clone(n).(*hostv1.Node)
+}
+
+// cloneGroup returns a deep copy so a caller mutating a returned group can
+// never reach into the facet's internal state. Every group returned by any
+// Inventory RPC goes through it.
+func cloneGroup(g *hostv1.Group) *hostv1.Group {
+	return proto.Clone(g).(*hostv1.Group)
 }
 
 // cloneNodeSlice deep-copies every node in a slice, used to give each
