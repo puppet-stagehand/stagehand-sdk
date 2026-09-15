@@ -15,19 +15,62 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
+// Option configures optional behavior of a host.Local instance built by
+// New. The only Option today is WithDiscoverCandidates (D-05).
+type Option func(*config)
+
+// config holds the settings New builds from its opts before constructing
+// the returned host.Host.
+type config struct {
+	discoverCandidates    []*hostv1.Node
+	discoverCandidatesSet bool
+}
+
+// defaultConfig returns a config seeded with a private clone of the
+// built-in Discover fixture set, used whenever WithDiscoverCandidates is
+// never applied at all.
+func defaultConfig() *config {
+	return &config{discoverCandidates: cloneNodeSlice(defaultDiscoverCandidates)}
+}
+
+// defaultDiscoverCandidates is host.Local's built-in Discover fixture
+// data — not a preview of any real discovery source. Two nodes so
+// ordering is observable in tests.
+var defaultDiscoverCandidates = []*hostv1.Node{
+	{Id: "db-01.example.test", DisplayName: "db-01", Status: hostv1.Node_DISCOVERED, Environment: "staging"},
+	{Id: "web-01.example.test", DisplayName: "web-01", Status: hostv1.Node_DISCOVERED, Environment: "production"},
+}
+
+// WithDiscoverCandidates overrides host.Local's Discover fixture set with
+// the given candidates. Calling it with zero arguments means "this host
+// has no discoverable candidates" — an explicit empty set, distinct from
+// never applying the option at all, which falls back to
+// defaultDiscoverCandidates (D-05).
+func WithDiscoverCandidates(candidates ...*hostv1.Node) Option {
+	return func(c *config) {
+		c.discoverCandidates = candidates
+		c.discoverCandidatesSet = true
+	}
+}
+
 // New builds an in-process host.Host scoped to a manifest's declared
 // permissions. Documents is always available (scoped to packID's own
 // namespace instead of permission-gated); Settings is always available;
-// Secrets requires "secrets:rw" and Auth requires "tokens:issue" — calling
-// either without the permission declared returns the same PERMISSION_DENIED
-// a real Expansion Pack would get from the console's gRPC interceptor.
+// Secrets requires "secrets:rw", Auth requires "tokens:issue", and
+// Inventory requires "inventory:rw" — calling a gated facet without its
+// permission declared returns the same PERMISSION_DENIED a real Expansion
+// Pack would get from the console's gRPC interceptor.
 //
-// All four in-scope facets (Documents, Settings, Secrets, Auth) are real
-// implementations as of this plan (01-07).
-func New(permissions []string, packID string) *host.Host {
+// All five in-scope facets (Documents, Settings, Secrets, Auth, Inventory)
+// are real implementations as of this plan (03-01).
+func New(permissions []string, packID string, opts ...Option) *host.Host {
 	perms := make(map[string]bool, len(permissions))
 	for _, p := range permissions {
 		perms[p] = true
+	}
+	cfg := defaultConfig()
+	for _, opt := range opts {
+		opt(cfg)
 	}
 	docs := newDocumentsServer(packID)
 	return &host.Host{
@@ -35,6 +78,7 @@ func New(permissions []string, packID string) *host.Host {
 		Settings:  newSettingsServer(),
 		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: newSecretsServer(packID)},
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
+		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates)},
 	}
 }
 
