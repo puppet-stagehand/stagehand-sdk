@@ -10,9 +10,15 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
+
+// proposalCollection is the D-08 Documents collection name OnboardNode
+// resolves a proposal_id through — the single definition Phase 4's
+// approval package and Phase 5's example both bind to.
+const proposalCollection = "inventory-proposals"
 
 // inventoryServer is the real in-memory Inventory facet implementation: an
 // in-process node store keyed by node id, materialized on Discover and
@@ -496,6 +502,157 @@ func cloneNodeSlice(nodes []*hostv1.Node) []*hostv1.Node {
 		out[i] = cloneNode(n)
 	}
 	return out
+}
+
+// jsonScalar wraps a materialized fact value in the same single-field "v"
+// convention unwrapJSON reads back (documents.go's Query and this file's
+// QueryNodes both rely on it) — a fact that arrives through an onboarding
+// proposal and a fact that arrives through PutFacts are indistinguishable
+// afterwards. An object-valued fact is instead wrapped as the struct built
+// directly from the map, matching how PutFacts callers already build
+// object-valued Json (see unwrapJSON's own doc comment on the "v"-vs-object
+// distinction).
+func jsonScalar(v any) *hostv1.Json {
+	if m, ok := v.(map[string]any); ok {
+		s, err := structpb.NewStruct(m)
+		if err != nil {
+			return nil
+		}
+		return &hostv1.Json{Value: s}
+	}
+	s, err := structpb.NewStruct(map[string]any{"v": v})
+	if err != nil {
+		return nil
+	}
+	return &hostv1.Json{Value: s}
+}
+
+// nodeFromProposal builds the Node payload OnboardNode materializes from a
+// D-08 proposal document body's "node" object. proposalID is always the
+// authoritative Id — D-08 makes the doc id, the proposal id and the node id
+// one value, so nodeFromProposal requires node.id, when present, to agree
+// with proposalID and refuses to materialize a disagreement rather than
+// guessing which one is right.
+func nodeFromProposal(m map[string]any, proposalID string) (*hostv1.Node, error) {
+	nodeRaw, ok := m["node"]
+	if !ok {
+		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q has no node object", proposalID)
+	}
+	nodeMap, ok := nodeRaw.(map[string]any)
+	if !ok {
+		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q node is not an object", proposalID)
+	}
+	if idRaw, ok := nodeMap["id"]; ok {
+		idStr, isStr := idRaw.(string)
+		if !isStr || idStr != proposalID {
+			return nil, status.Errorf(codes.FailedPrecondition, "proposal %q node.id %v disagrees with the proposal id", proposalID, idRaw)
+		}
+	}
+
+	displayName, _ := nodeMap["display_name"].(string)
+	environment, _ := nodeMap["environment"].(string)
+
+	n := &hostv1.Node{
+		Id:          proposalID,
+		DisplayName: displayName,
+		Environment: environment,
+		Status:      hostv1.Node_ONBOARDED,
+	}
+
+	if factsRaw, ok := nodeMap["facts"]; ok {
+		if factsMap, ok := factsRaw.(map[string]any); ok {
+			n.Facts = make(map[string]*hostv1.Json, len(factsMap))
+			for k, v := range factsMap {
+				n.Facts[k] = jsonScalar(v)
+			}
+		}
+	}
+
+	return n, nil
+}
+
+// OnboardNode is the one Inventory RPC that reaches outside the facet: it
+// resolves req.ProposalId through the shared Documents store (D-08, the
+// SAME documentsServer instance host.Host.Documents holds) and refuses to
+// materialize anything unless the referenced document's status field reads
+// exactly "approved". This is the only additional check OnboardNode
+// carries beyond the facet-level inventory:rw gate (D-01) — it reads a
+// decision someone else recorded. It never consults a token, never
+// evaluates a scope, and never writes back into proposalCollection; the
+// approval decision and the act of onboarding stay in separate code, which
+// is what keeps this gate from being able to defeat itself (T-03-20).
+func (s *inventoryServer) OnboardNode(ctx context.Context, req *hostv1.OnboardNodeRequest) (*hostv1.Node, error) {
+	// Idempotency short-circuit (D-02): a repeat onboard of an
+	// already-ONBOARDED node is a success, not an error, and it must not
+	// re-read the proposal at all — this is what keeps a repeat call cheap
+	// and keeps it working after the proposal document is gone.
+	s.mu.Lock()
+	if n, ok := s.nodes[req.ProposalId]; ok && n.Status == hostv1.Node_ONBOARDED {
+		result := cloneNode(n)
+		s.mu.Unlock()
+		return result, nil
+	}
+	s.mu.Unlock()
+
+	// Resolve the proposal on the shared Documents store — not a new
+	// store, and not through host.Host.Documents, which this file has no
+	// reference to. The lock is deliberately NOT held across this call.
+	doc, err := s.docs.Get(ctx, &hostv1.GetDocumentRequest{Collection: proposalCollection, DocId: req.ProposalId})
+	if err != nil {
+		return nil, err // the Documents store's own NotFound, unchanged
+	}
+	if doc.Body == nil || doc.Body.Value == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q has no body", req.ProposalId)
+	}
+	m := doc.Body.Value.AsMap()
+
+	statusRaw, ok := m["status"]
+	statusStr, isStr := statusRaw.(string)
+	if !ok || !isStr || statusStr != "approved" {
+		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q is not approved", req.ProposalId)
+	}
+
+	proposed, err := nodeFromProposal(m, req.ProposalId)
+	if err != nil {
+		return nil, err
+	}
+
+	// Materialize. Re-take the lock and re-check the ONBOARDED
+	// short-circuit before writing — between releasing the lock above and
+	// re-taking it here, another goroutine may have completed the whole
+	// sequence, and without this second check both would write and
+	// "exactly once" would hold only by luck (T-03-22).
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if existing, ok := s.nodes[req.ProposalId]; ok {
+		if existing.Status == hostv1.Node_ONBOARDED {
+			return cloneNode(existing), nil
+		}
+		// Update in place: preserve facts and group memberships attached
+		// while the node was DISCOVERED (D-06/D-07). Group memberships
+		// need no handling here — they key on node id in a separate
+		// index and are untouched by this path.
+		existing.Status = hostv1.Node_ONBOARDED
+		if proposed.DisplayName != "" {
+			existing.DisplayName = proposed.DisplayName
+		}
+		if proposed.Environment != "" {
+			existing.Environment = proposed.Environment
+		}
+		if len(proposed.Facts) > 0 {
+			if existing.Facts == nil {
+				existing.Facts = map[string]*hostv1.Json{}
+			}
+			for k, v := range proposed.Facts {
+				existing.Facts[k] = v
+			}
+		}
+		return cloneNode(existing), nil
+	}
+
+	s.nodes[req.ProposalId] = proposed
+	return cloneNode(proposed), nil
 }
 
 // gatedInventory wraps inventoryServer with the inventory:rw permission
