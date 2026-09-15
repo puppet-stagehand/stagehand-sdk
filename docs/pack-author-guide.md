@@ -34,6 +34,14 @@ The exact messages are in `schema/proto/stagehand/host/v1/`.
 React components built from the console's own parts, so they look like
 the rest of Stagehand. They receive `ctx.api` to call your worker's routes.
 
+## Asking a human first
+Some actions should not happen just because your pack decided they should
+— adding a new node to the fleet is one of them. You write down what you
+want to do, a person holding the right token says yes or no, and only
+then does it happen. Your pack's own code must never be able to hand
+itself that token — if it could, nobody was actually asked. See
+`docs/approval-pattern.md` for the rule in full, and why it has to hold.
+
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used
   Puppet. Short sentences. A glossary.
