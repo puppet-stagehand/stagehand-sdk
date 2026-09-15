@@ -141,3 +141,66 @@ func (g *gatedInventory) Discover(ctx context.Context, req *emptypb.Empty) (*hos
 	}
 	return g.inner.Discover(ctx, req)
 }
+
+func (g *gatedInventory) ListNodes(ctx context.Context, req *hostv1.ListNodesRequest) (*hostv1.ListNodesResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListNodes(ctx, req)
+}
+
+func (g *gatedInventory) QueryNodes(ctx context.Context, req *hostv1.QueryNodesRequest) (*hostv1.ListNodesResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.QueryNodes(ctx, req)
+}
+
+func (g *gatedInventory) PutFacts(ctx context.Context, req *hostv1.PutFactsRequest) (*hostv1.Node, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.PutFacts(ctx, req)
+}
+
+func (g *gatedInventory) ListGroups(ctx context.Context, req *emptypb.Empty) (*hostv1.GroupList, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListGroups(ctx, req)
+}
+
+func (g *gatedInventory) ListGroupNodes(ctx context.Context, req *hostv1.ListGroupNodesRequest) (*hostv1.ListNodesResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListGroupNodes(ctx, req)
+}
+
+func (g *gatedInventory) ListNodeGroups(ctx context.Context, req *hostv1.ListNodeGroupsRequest) (*hostv1.GroupList, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListNodeGroups(ctx, req)
+}
+
+func (g *gatedInventory) AddNodeToGroup(ctx context.Context, req *hostv1.GroupMembershipRequest) (*emptypb.Empty, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.AddNodeToGroup(ctx, req)
+}
+
+func (g *gatedInventory) ListClasses(ctx context.Context, req *hostv1.GroupRef) (*hostv1.ClassList, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListClasses(ctx, req)
+}
+
+func (g *gatedInventory) OnboardNode(ctx context.Context, req *hostv1.OnboardNodeRequest) (*hostv1.Node, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.OnboardNode(ctx, req)
+}
