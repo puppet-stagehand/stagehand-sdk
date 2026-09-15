@@ -42,6 +42,68 @@ func TestOpenTofuFixtureIsValid(t *testing.T) {
 	}
 }
 
+// TestInventoryOnboardingManifest asserts that Phase 5's shipped example
+// fixture (examples/inventory-onboarding/manifest.json) actually uses the
+// facet-permission-vs-route-scope split correctly: inventory:rw gates every
+// Inventory call for the whole life of the pack, a standing install-time
+// grant, while inventory:approve gates one decision and arrives as a
+// short-lived token the pack cannot mint for itself. Collapsing the second
+// into the permission list would turn a per-decision capability into a
+// standing grant — the same self-approval outcome Task 2's static call-graph
+// test guards structurally, but arriving through configuration instead of
+// through code. TestApprovalScopeIsNotAManifestPermission (above) pins the
+// vocabulary itself — that inventory:approve can never be a permission and
+// must be a route access.scope; this test's job is narrower: proving this
+// example's fixture actually uses that split as shipped.
+func TestInventoryOnboardingManifest(t *testing.T) {
+	const approvalScope = "inventory:approve"
+
+	m := load(t, "../examples/inventory-onboarding/manifest.json")
+	if fs := Validate(m); len(fs) != 0 {
+		t.Fatalf("inventory-onboarding fixture must validate; got %v", codes(fs))
+	}
+
+	if len(m.Permissions) != 2 {
+		t.Fatalf("expected exactly 2 permissions, got %d: %v", len(m.Permissions), m.Permissions)
+	}
+	if !contains(m.Permissions, "inventory:rw") || !contains(m.Permissions, "tokens:issue") {
+		t.Fatalf("expected permissions [inventory:rw tokens:issue], got %v", m.Permissions)
+	}
+	if contains(m.Permissions, approvalScope) {
+		t.Fatalf("permissions must NOT contain %q — a per-decision capability must not become a standing install-time grant", approvalScope)
+	}
+
+	var scopedRoutes []Route
+	for _, r := range m.Routes {
+		if r.Access.Scope == approvalScope {
+			scopedRoutes = append(scopedRoutes, r)
+		}
+	}
+	if len(scopedRoutes) != 2 {
+		t.Fatalf("expected exactly 2 routes with access.scope %q, got %d: %+v", approvalScope, len(scopedRoutes), m.Routes)
+	}
+	if scopedRoutes[0].OperationID == scopedRoutes[1].OperationID {
+		t.Fatalf("expected the two %q-scoped routes to carry distinct operation_ids, both were %q", approvalScope, scopedRoutes[0].OperationID)
+	}
+
+	var proposeRoute *Route
+	for i := range m.Routes {
+		if m.Routes[i].OperationID == "proposeOnboarding" {
+			proposeRoute = &m.Routes[i]
+		}
+	}
+	if proposeRoute == nil {
+		t.Fatalf("expected a route with operation_id proposeOnboarding, got %+v", m.Routes)
+	}
+	if proposeRoute.Access.Scope != "" || proposeRoute.Access.Role != "" {
+		t.Fatalf("expected the proposeOnboarding route to carry neither scope nor role — proposing is ungoverned, deciding is governed — got %+v", proposeRoute.Access)
+	}
+
+	if m.OpenAPIPath == "" {
+		t.Fatalf("expected a non-empty openapi_path since the fixture declares routes")
+	}
+}
+
 func TestEveryFindingHasAFix(t *testing.T) {
 	m := load(t, "testdata/everything-wrong.json")
 	fs := Validate(m)
