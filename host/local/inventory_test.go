@@ -479,3 +479,170 @@ func TestInventory_ListNodesOrderingIsStable(t *testing.T) {
 		t.Fatal("expected at least one DISCOVERED node in the list")
 	}
 }
+
+func TestInventory_QueryNodesByFact(t *testing.T) {
+	nodes := []*hostv1.Node{
+		{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+		{Id: "n2", DisplayName: "n2", Status: hostv1.Node_DISCOVERED},
+		{Id: "n3", DisplayName: "n3", Status: hostv1.Node_DISCOVERED},
+	}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: jsonFacts(t, map[string]any{
+		"os": "linux", "hostname": "web-front-1", "cores": float64(4),
+		"cpu": map[string]any{"cores": float64(4)},
+	})}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n2", Facts: jsonFacts(t, map[string]any{
+		"os": "windows", "hostname": "db-back-2", "cores": float64(8),
+	})}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n3", Facts: jsonFacts(t, map[string]any{
+		"os": "linux", "hostname": "web-front-3", "cores": float64(2),
+	})}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, resp.Nodes, "n1", "n3")
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "hostname", Op: hostv1.QueryNodesRequest_CONTAINS, Value: jsonWrap(t, "front"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, resp.Nodes, "n1", "n3")
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "cores", Op: hostv1.QueryNodesRequest_GT, Value: jsonWrap(t, float64(3)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, resp.Nodes, "n1", "n2")
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "nope", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "x"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Nodes) != 0 {
+		t.Fatalf("expected 0 matches for a field no node carries, got %d", len(resp.Nodes))
+	}
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_GT, Value: jsonWrap(t, float64(1)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Nodes) != 0 {
+		t.Fatalf("expected 0 matches for a type-mismatched comparison, got %d", len(resp.Nodes))
+	}
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "cpu.cores", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, float64(4)),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertNodeIDs(t, resp.Nodes, "n1")
+
+	resp, err = h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < len(resp.Nodes); i++ {
+		if resp.Nodes[i-1].Id >= resp.Nodes[i].Id {
+			t.Fatalf("expected ascending order, got %q before %q", resp.Nodes[i-1].Id, resp.Nodes[i].Id)
+		}
+	}
+
+	firstPage, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux"), Page: &hostv1.Page{Limit: 1},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(firstPage.Nodes) != 1 || firstPage.Page.NextCursor != "1" {
+		t.Fatalf("expected 1 node and NextCursor \"1\" on the first page, got %d nodes, cursor %q", len(firstPage.Nodes), firstPage.Page.NextCursor)
+	}
+	secondPage, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux"), Page: &hostv1.Page{Cursor: "1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secondPage.Nodes) != 1 || secondPage.Page.NextCursor != "" {
+		t.Fatalf("expected 1 node and no cursor on the final page, got %d nodes, cursor %q", len(secondPage.Nodes), secondPage.Page.NextCursor)
+	}
+
+	if _, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{
+		Field: "os", Op: hostv1.QueryNodesRequest_EQ, Value: jsonWrap(t, "linux"), Page: &hostv1.Page{Cursor: "-1"},
+	}); err == nil {
+		t.Fatal("expected error for a negative cursor")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	}
+}
+
+func TestInventory_QueryNodesOpParityWithDocuments(t *testing.T) {
+	pairs := []struct {
+		name string
+		inv  hostv1.QueryNodesRequest_Op
+		doc  hostv1.QueryDocumentsRequest_Op
+	}{
+		{"OP_UNSPECIFIED", hostv1.QueryNodesRequest_OP_UNSPECIFIED, hostv1.QueryDocumentsRequest_OP_UNSPECIFIED},
+		{"EQ", hostv1.QueryNodesRequest_EQ, hostv1.QueryDocumentsRequest_EQ},
+		{"NE", hostv1.QueryNodesRequest_NE, hostv1.QueryDocumentsRequest_NE},
+		{"GT", hostv1.QueryNodesRequest_GT, hostv1.QueryDocumentsRequest_GT},
+		{"GTE", hostv1.QueryNodesRequest_GTE, hostv1.QueryDocumentsRequest_GTE},
+		{"LT", hostv1.QueryNodesRequest_LT, hostv1.QueryDocumentsRequest_LT},
+		{"LTE", hostv1.QueryNodesRequest_LTE, hostv1.QueryDocumentsRequest_LTE},
+		{"CONTAINS", hostv1.QueryNodesRequest_CONTAINS, hostv1.QueryDocumentsRequest_CONTAINS},
+	}
+	if len(pairs) != 8 {
+		t.Fatalf("expected 8 operator pairs, got %d", len(pairs))
+	}
+	for _, p := range pairs {
+		if int32(p.inv) != int32(p.doc) {
+			t.Fatalf("%s: numeric mismatch, QueryNodesRequest_Op=%d QueryDocumentsRequest_Op=%d", p.name, int32(p.inv), int32(p.doc))
+		}
+	}
+}
+
+func assertNodeIDs(t *testing.T, nodes []*hostv1.Node, want ...string) {
+	t.Helper()
+	got := nodeIDs(nodes)
+	if len(nodes) != len(want) {
+		t.Fatalf("expected %d nodes %v, got %d: %v", len(want), want, len(nodes), got)
+	}
+	for i, w := range want {
+		if nodes[i].Id != w {
+			t.Fatalf("expected node[%d].Id == %q, got %q (full: %v)", i, w, nodes[i].Id, got)
+		}
+	}
+}
+
+func nodeIDs(nodes []*hostv1.Node) []string {
+	out := make([]string, len(nodes))
+	for i, n := range nodes {
+		out[i] = n.Id
+	}
+	return out
+}
