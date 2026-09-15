@@ -13,6 +13,8 @@ jobs:
       - uses: bufbuild/buf-action@v1
         with:
           setup_only: true
+      - name: buf lint
+        run: buf lint
       - name: buf generate drift check
         run: |
           buf generate
