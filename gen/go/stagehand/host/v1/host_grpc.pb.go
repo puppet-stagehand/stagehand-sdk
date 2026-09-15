@@ -883,11 +883,16 @@ var Auth_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Inventory_GetNode_FullMethodName    = "/stagehand.host.v1.Inventory/GetNode"
-	Inventory_Discover_FullMethodName   = "/stagehand.host.v1.Inventory/Discover"
-	Inventory_ListNodes_FullMethodName  = "/stagehand.host.v1.Inventory/ListNodes"
-	Inventory_QueryNodes_FullMethodName = "/stagehand.host.v1.Inventory/QueryNodes"
-	Inventory_PutFacts_FullMethodName   = "/stagehand.host.v1.Inventory/PutFacts"
+	Inventory_GetNode_FullMethodName        = "/stagehand.host.v1.Inventory/GetNode"
+	Inventory_Discover_FullMethodName       = "/stagehand.host.v1.Inventory/Discover"
+	Inventory_ListNodes_FullMethodName      = "/stagehand.host.v1.Inventory/ListNodes"
+	Inventory_QueryNodes_FullMethodName     = "/stagehand.host.v1.Inventory/QueryNodes"
+	Inventory_PutFacts_FullMethodName       = "/stagehand.host.v1.Inventory/PutFacts"
+	Inventory_ListGroups_FullMethodName     = "/stagehand.host.v1.Inventory/ListGroups"
+	Inventory_ListGroupNodes_FullMethodName = "/stagehand.host.v1.Inventory/ListGroupNodes"
+	Inventory_ListNodeGroups_FullMethodName = "/stagehand.host.v1.Inventory/ListNodeGroups"
+	Inventory_AddNodeToGroup_FullMethodName = "/stagehand.host.v1.Inventory/AddNodeToGroup"
+	Inventory_ListClasses_FullMethodName    = "/stagehand.host.v1.Inventory/ListClasses"
 )
 
 // InventoryClient is the client API for Inventory service.
@@ -922,6 +927,15 @@ type InventoryClient interface {
 	// (single-field filter) rather than inventing a second query grammar.
 	QueryNodes(ctx context.Context, in *QueryNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
 	PutFacts(ctx context.Context, in *PutFactsRequest, opts ...grpc.CallOption) (*Node, error)
+	// Group membership is static (no rule engine). AddNodeToGroup
+	// auto-creates the named group on first use — there is no separate
+	// CreateGroup RPC in v1.
+	ListGroups(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GroupList, error)
+	ListGroupNodes(ctx context.Context, in *ListGroupNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error)
+	ListNodeGroups(ctx context.Context, in *ListNodeGroupsRequest, opts ...grpc.CallOption) (*GroupList, error)
+	AddNodeToGroup(ctx context.Context, in *GroupMembershipRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// Read-only in v1 (no rule engine, no ancestor-group merging).
+	ListClasses(ctx context.Context, in *GroupRef, opts ...grpc.CallOption) (*ClassList, error)
 }
 
 type inventoryClient struct {
@@ -982,6 +996,56 @@ func (c *inventoryClient) PutFacts(ctx context.Context, in *PutFactsRequest, opt
 	return out, nil
 }
 
+func (c *inventoryClient) ListGroups(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GroupList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GroupList)
+	err := c.cc.Invoke(ctx, Inventory_ListGroups_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) ListGroupNodes(ctx context.Context, in *ListGroupNodesRequest, opts ...grpc.CallOption) (*ListNodesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodesResponse)
+	err := c.cc.Invoke(ctx, Inventory_ListGroupNodes_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) ListNodeGroups(ctx context.Context, in *ListNodeGroupsRequest, opts ...grpc.CallOption) (*GroupList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GroupList)
+	err := c.cc.Invoke(ctx, Inventory_ListNodeGroups_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) AddNodeToGroup(ctx context.Context, in *GroupMembershipRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Inventory_AddNodeToGroup_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *inventoryClient) ListClasses(ctx context.Context, in *GroupRef, opts ...grpc.CallOption) (*ClassList, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClassList)
+	err := c.cc.Invoke(ctx, Inventory_ListClasses_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InventoryServer is the server API for Inventory service.
 // All implementations must embed UnimplementedInventoryServer
 // for forward compatibility.
@@ -1014,6 +1078,15 @@ type InventoryServer interface {
 	// (single-field filter) rather than inventing a second query grammar.
 	QueryNodes(context.Context, *QueryNodesRequest) (*ListNodesResponse, error)
 	PutFacts(context.Context, *PutFactsRequest) (*Node, error)
+	// Group membership is static (no rule engine). AddNodeToGroup
+	// auto-creates the named group on first use — there is no separate
+	// CreateGroup RPC in v1.
+	ListGroups(context.Context, *emptypb.Empty) (*GroupList, error)
+	ListGroupNodes(context.Context, *ListGroupNodesRequest) (*ListNodesResponse, error)
+	ListNodeGroups(context.Context, *ListNodeGroupsRequest) (*GroupList, error)
+	AddNodeToGroup(context.Context, *GroupMembershipRequest) (*emptypb.Empty, error)
+	// Read-only in v1 (no rule engine, no ancestor-group merging).
+	ListClasses(context.Context, *GroupRef) (*ClassList, error)
 	mustEmbedUnimplementedInventoryServer()
 }
 
@@ -1038,6 +1111,21 @@ func (UnimplementedInventoryServer) QueryNodes(context.Context, *QueryNodesReque
 }
 func (UnimplementedInventoryServer) PutFacts(context.Context, *PutFactsRequest) (*Node, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutFacts not implemented")
+}
+func (UnimplementedInventoryServer) ListGroups(context.Context, *emptypb.Empty) (*GroupList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGroups not implemented")
+}
+func (UnimplementedInventoryServer) ListGroupNodes(context.Context, *ListGroupNodesRequest) (*ListNodesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGroupNodes not implemented")
+}
+func (UnimplementedInventoryServer) ListNodeGroups(context.Context, *ListNodeGroupsRequest) (*GroupList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeGroups not implemented")
+}
+func (UnimplementedInventoryServer) AddNodeToGroup(context.Context, *GroupMembershipRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method AddNodeToGroup not implemented")
+}
+func (UnimplementedInventoryServer) ListClasses(context.Context, *GroupRef) (*ClassList, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListClasses not implemented")
 }
 func (UnimplementedInventoryServer) mustEmbedUnimplementedInventoryServer() {}
 func (UnimplementedInventoryServer) testEmbeddedByValue()                   {}
@@ -1150,6 +1238,96 @@ func _Inventory_PutFacts_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Inventory_ListGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).ListGroups(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_ListGroups_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).ListGroups(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_ListGroupNodes_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListGroupNodesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).ListGroupNodes(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_ListGroupNodes_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).ListGroupNodes(ctx, req.(*ListGroupNodesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_ListNodeGroups_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodeGroupsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).ListNodeGroups(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_ListNodeGroups_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).ListNodeGroups(ctx, req.(*ListNodeGroupsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_AddNodeToGroup_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GroupMembershipRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).AddNodeToGroup(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_AddNodeToGroup_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).AddNodeToGroup(ctx, req.(*GroupMembershipRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Inventory_ListClasses_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GroupRef)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).ListClasses(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_ListClasses_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).ListClasses(ctx, req.(*GroupRef))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Inventory_ServiceDesc is the grpc.ServiceDesc for Inventory service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1176,6 +1354,26 @@ var Inventory_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutFacts",
 			Handler:    _Inventory_PutFacts_Handler,
+		},
+		{
+			MethodName: "ListGroups",
+			Handler:    _Inventory_ListGroups_Handler,
+		},
+		{
+			MethodName: "ListGroupNodes",
+			Handler:    _Inventory_ListGroupNodes_Handler,
+		},
+		{
+			MethodName: "ListNodeGroups",
+			Handler:    _Inventory_ListNodeGroups_Handler,
+		},
+		{
+			MethodName: "AddNodeToGroup",
+			Handler:    _Inventory_AddNodeToGroup_Handler,
+		},
+		{
+			MethodName: "ListClasses",
+			Handler:    _Inventory_ListClasses_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

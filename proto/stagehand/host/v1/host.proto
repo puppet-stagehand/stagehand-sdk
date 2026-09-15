@@ -104,6 +104,17 @@ service Inventory {
   // (single-field filter) rather than inventing a second query grammar.
   rpc QueryNodes(QueryNodesRequest) returns (ListNodesResponse);
   rpc PutFacts(PutFactsRequest) returns (Node);
+
+  // Group membership is static (no rule engine). AddNodeToGroup
+  // auto-creates the named group on first use — there is no separate
+  // CreateGroup RPC in v1.
+  rpc ListGroups(google.protobuf.Empty) returns (GroupList);
+  rpc ListGroupNodes(ListGroupNodesRequest) returns (ListNodesResponse);
+  rpc ListNodeGroups(ListNodeGroupsRequest) returns (GroupList);
+  rpc AddNodeToGroup(GroupMembershipRequest) returns (google.protobuf.Empty);
+
+  // Read-only in v1 (no rule engine, no ancestor-group merging).
+  rpc ListClasses(GroupRef) returns (ClassList);
 }
 
 message Node {
@@ -124,3 +135,13 @@ message QueryNodesRequest {
   Op op = 2; Json value = 3; Page page = 4;
 }
 message PutFactsRequest { string node_id = 1; map<string, Json> facts = 2; }
+
+message Group { string id = 1; string name = 2; }
+message GroupRef { string id = 1; }
+message GroupList { repeated Group groups = 1; }
+message ListGroupNodesRequest { string group_id = 1; Page page = 2; }
+message ListNodeGroupsRequest { string node_id = 1; }
+message GroupMembershipRequest { string node_id = 1; string group_id = 2; }
+
+message Class { string name = 1; Json parameters = 2; }
+message ClassList { repeated Class classes = 1; }
