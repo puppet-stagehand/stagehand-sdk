@@ -173,6 +173,98 @@ func (s *inventoryServer) ListNodes(ctx context.Context, req *hostv1.ListNodesRe
 	return &hostv1.ListNodesResponse{Nodes: nodes, Page: pageInfo}, nil
 }
 
+// unwrapJSON mirrors the single-field "v" wrapper convention
+// documentsServer.Query already relies on (documents.go:151-154), applied
+// here symmetrically: a scalar fact value ("os": "linux") matches
+// field: "os" directly, while an object-valued fact ("cpu": {"cores": 8})
+// still supports a dotted field like "cpu.cores" via factsAsMap/fieldAt.
+//
+// Byte-carrying obligation: facts in this phase are flat key-value strings
+// and numbers only (INV-02). If a later phase needs a fact to carry raw
+// bytes — a fingerprint or a checksum — it must base64-encode before
+// wrapping in Json and decode symmetrically on read, because Json wraps a
+// JSON Struct that cannot hold invalid UTF-8; host.Local never serializes,
+// so it would tolerate the corruption silently while a real backend would
+// reject it (CR-02 class).
+func unwrapJSON(j *hostv1.Json) any {
+	if j == nil || j.Value == nil {
+		return nil
+	}
+	m := j.Value.AsMap()
+	if v, ok := m["v"]; ok && len(m) == 1 {
+		return v
+	}
+	return m
+}
+
+// factsAsMap builds the map fieldAt (documents.go) walks, from a node's
+// stored Facts.
+func factsAsMap(n *hostv1.Node) map[string]any {
+	out := make(map[string]any, len(n.Facts))
+	for k, v := range n.Facts {
+		out[k] = unwrapJSON(v)
+	}
+	return out
+}
+
+// docOp bridges QueryNodesRequest_Op to QueryDocumentsRequest_Op by direct
+// numeric conversion. Both enums declare OP_UNSPECIFIED = 0 through
+// CONTAINS = 7 in the same order;
+// TestInventory_QueryNodesOpParityWithDocuments pins that numeric parity so
+// a future proto edit that diverges the two enums fails loudly instead of
+// silently mis-comparing.
+func docOp(op hostv1.QueryNodesRequest_Op) hostv1.QueryDocumentsRequest_Op {
+	return hostv1.QueryDocumentsRequest_Op(op)
+}
+
+// QueryNodes filters the node store by a single fact using the same
+// field/op/value grammar documentsServer.Query defines, calling its
+// matchOp/fieldAt directly rather than reimplementing them — a second
+// matcher would be a second place for comparison semantics to drift.
+//
+// Unlike documentsServer.Query, which returns its whole matched set with an
+// empty PageInfo, QueryNodes paginates the matched set with pageBounds —
+// QueryNodesRequest declares a page field, and leaving it unread would be a
+// silent, undetectable hole for a caller. This divergence from Documents is
+// deliberate, not an inconsistency.
+func (s *inventoryServer) QueryNodes(ctx context.Context, req *hostv1.QueryNodesRequest) (*hostv1.ListNodesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	want := unwrapJSON(req.Value)
+
+	ids := make([]string, 0, len(s.nodes))
+	for id := range s.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	matched := make([]*hostv1.Node, 0)
+	for _, id := range ids {
+		n := s.nodes[id]
+		got := fieldAt(factsAsMap(n), req.Field)
+		if matchOp(docOp(req.Op), got, want) {
+			matched = append(matched, n)
+		}
+	}
+
+	start, limit, err := pageBounds(req.Page, len(matched))
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]*hostv1.Node, 0, limit)
+	end := start
+	for end < len(matched) && len(nodes) < limit {
+		nodes = append(nodes, cloneNode(matched[end]))
+		end++
+	}
+	pageInfo := &hostv1.PageInfo{}
+	if end < len(matched) {
+		pageInfo.NextCursor = strconv.Itoa(end)
+	}
+	return &hostv1.ListNodesResponse{Nodes: nodes, Page: pageInfo}, nil
+}
+
 // cloneNode returns a deep copy so a caller mutating the returned node can
 // never reach into the facet's internal state.
 func cloneNode(n *hostv1.Node) *hostv1.Node {
