@@ -9,11 +9,49 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 )
+
+// jsonWrap wraps v in the single-field "v" convention documentsServer.Query
+// and inventoryServer.QueryNodes both rely on for scalar comparison values
+// and, via PutFacts, for stored fact values.
+func jsonWrap(t *testing.T, v any) *hostv1.Json {
+	t.Helper()
+	s, err := structpb.NewStruct(map[string]any{"v": v})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	return &hostv1.Json{Value: s}
+}
+
+// jsonFacts builds a PutFactsRequest.Facts map from plain Go values, each
+// wrapped via jsonWrap.
+func jsonFacts(t *testing.T, facts map[string]any) map[string]*hostv1.Json {
+	t.Helper()
+	out := make(map[string]*hostv1.Json, len(facts))
+	for k, v := range facts {
+		out[k] = jsonWrap(t, v)
+	}
+	return out
+}
+
+// factValue unwraps a node's stored fact back to a plain Go value for
+// assertions.
+func factValue(t *testing.T, n *hostv1.Node, key string) any {
+	t.Helper()
+	j, ok := n.Facts[key]
+	if !ok {
+		t.Fatalf("node %q missing fact %q", n.Id, key)
+	}
+	if j == nil || j.Value == nil {
+		return nil
+	}
+	return j.Value.AsMap()["v"]
+}
 
 func TestInventory_DiscoverThenGetNode(t *testing.T) {
 	h := local.New([]string{"inventory:rw"}, "opentofu")
@@ -235,5 +273,209 @@ func TestInventory_ReadPathClonesNodes(t *testing.T) {
 	}
 	if _, ok := again.Facts["injected"]; ok {
 		t.Fatal("expected injected fact key to be absent from the facet's stored record")
+	}
+}
+
+func TestInventory_PutFactsMerges(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	n, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: jsonFacts(t, map[string]any{"os": "linux"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(n.Facts) != 1 {
+		t.Fatalf("expected 1 fact after first call, got %d", len(n.Facts))
+	}
+
+	n, err = h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: jsonFacts(t, map[string]any{"env": "prod"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(n.Facts) != 2 {
+		t.Fatalf("expected 2 facts after merge, got %d: %+v", len(n.Facts), n.Facts)
+	}
+
+	n, err = h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: jsonFacts(t, map[string]any{"os": "windows"})})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(n.Facts) != 2 {
+		t.Fatalf("expected still 2 facts after overwrite of one key, got %d", len(n.Facts))
+	}
+	if v := factValue(t, n, "os"); v != "windows" {
+		t.Fatalf("expected os=windows after overwrite, got %v", v)
+	}
+	if v := factValue(t, n, "env"); v != "prod" {
+		t.Fatalf("expected env=prod preserved, got %v", v)
+	}
+
+	unchanged, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: nil})
+	if err != nil {
+		t.Fatalf("expected nil facts map to be a no-op with no error, got %v", err)
+	}
+	if len(unchanged.Facts) != 2 {
+		t.Fatalf("expected nil facts map to leave the node unchanged, got %d facts", len(unchanged.Facts))
+	}
+
+	got, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Facts) != 2 {
+		t.Fatalf("expected GetNode to see the same 2 facts written via PutFacts, got %d", len(got.Facts))
+	}
+}
+
+func TestInventory_PutFactsUnknownNode(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu")
+	ctx := context.Background()
+
+	_, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "nope", Facts: jsonFacts(t, map[string]any{"os": "linux"})})
+	if err == nil {
+		t.Fatal("expected error for unknown node id")
+	}
+	if st, _ := status.FromError(err); st.Code() != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", st.Code())
+	}
+}
+
+func TestInventory_ListNodesPagination(t *testing.T) {
+	nodes := []*hostv1.Node{
+		{Id: "c1", DisplayName: "c1", Status: hostv1.Node_DISCOVERED},
+		{Id: "a1", DisplayName: "a1", Status: hostv1.Node_DISCOVERED},
+		{Id: "b1", DisplayName: "b1", Status: hostv1.Node_DISCOVERED},
+	}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{Page: &hostv1.Page{Limit: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Nodes) != 1 || first.Page.NextCursor != "1" {
+		t.Fatalf("expected 1 node and NextCursor \"1\", got %d nodes, cursor %q", len(first.Nodes), first.Page.NextCursor)
+	}
+
+	seen := map[string]bool{first.Nodes[0].Id: true}
+	cursor := first.Page.NextCursor
+	for i := 0; i < 10 && cursor != ""; i++ {
+		resp, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{Page: &hostv1.Page{Cursor: cursor, Limit: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Nodes) != 1 {
+			t.Fatalf("expected 1 node per page, got %d", len(resp.Nodes))
+		}
+		if seen[resp.Nodes[0].Id] {
+			t.Fatalf("node %q seen twice while walking pages", resp.Nodes[0].Id)
+		}
+		seen[resp.Nodes[0].Id] = true
+		cursor = resp.Page.NextCursor
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected to see all 3 nodes exactly once, saw %d: %+v", len(seen), seen)
+	}
+}
+
+func TestInventory_ListNodesRejectsBadCursor(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	badCursors := []struct {
+		name   string
+		cursor string
+	}{
+		{"negative", "-1"},
+		{"non-numeric", "not-a-number"},
+	}
+	for _, tc := range badCursors {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{Page: &hostv1.Page{Cursor: tc.cursor}})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+				t.Fatalf("expected InvalidArgument, got %v", st.Code())
+			}
+		})
+	}
+
+	huge, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{Page: &hostv1.Page{Cursor: "", Limit: 10000}})
+	if err != nil {
+		t.Fatalf("expected no error for empty cursor with an oversized limit, got %v", err)
+	}
+	if len(huge.Nodes) != 1 {
+		t.Fatalf("expected 1 node, got %d", len(huge.Nodes))
+	}
+
+	oversized, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{Page: &hostv1.Page{Cursor: "9999"}})
+	if err != nil {
+		t.Fatalf("expected no error for a far-oversized numeric cursor, got %v", err)
+	}
+	if len(oversized.Nodes) != 0 || oversized.Page.NextCursor != "" {
+		t.Fatalf("expected 0 nodes and empty cursor, got %d nodes, cursor %q", len(oversized.Nodes), oversized.Page.NextCursor)
+	}
+
+	hEmpty := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates())
+	empty, err := hEmpty.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatalf("expected no error for an empty store, got %v", err)
+	}
+	if len(empty.Nodes) != 0 || empty.Page.NextCursor != "" {
+		t.Fatalf("expected 0 nodes and empty cursor for an empty store, got %d nodes, cursor %q", len(empty.Nodes), empty.Page.NextCursor)
+	}
+}
+
+func TestInventory_ListNodesOrderingIsStable(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu")
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Nodes) != len(second.Nodes) {
+		t.Fatalf("expected equal length, got %d vs %d", len(first.Nodes), len(second.Nodes))
+	}
+	for i := range first.Nodes {
+		if first.Nodes[i].Id != second.Nodes[i].Id {
+			t.Fatalf("id mismatch at %d: %q vs %q", i, first.Nodes[i].Id, second.Nodes[i].Id)
+		}
+	}
+	for i := 1; i < len(first.Nodes); i++ {
+		if first.Nodes[i-1].Id >= first.Nodes[i].Id {
+			t.Fatalf("expected ascending order, got %q before %q", first.Nodes[i-1].Id, first.Nodes[i].Id)
+		}
+	}
+
+	foundDiscovered := false
+	for _, n := range first.Nodes {
+		if n.Status == hostv1.Node_DISCOVERED {
+			foundDiscovered = true
+		}
+	}
+	if !foundDiscovered {
+		t.Fatal("expected at least one DISCOVERED node in the list")
 	}
 }
