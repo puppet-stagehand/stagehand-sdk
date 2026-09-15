@@ -120,6 +120,62 @@ func TestRules(t *testing.T) {
 	}
 }
 
+func TestInventoryRWPermissionIsAccepted(t *testing.T) {
+	m := load(t, "../examples/hello/manifest.json")
+	m.Permissions = append(m.Permissions, "inventory:rw")
+	if fs := Validate(m); len(fs) != 0 {
+		t.Fatalf("inventory:rw must validate clean; got %v", fs)
+	}
+
+	m2 := load(t, "../examples/hello/manifest.json")
+	m2.Permissions = append(m2.Permissions, "database:rw")
+	fs := Validate(m2)
+	var found *Finding
+	for i := range fs {
+		if fs[i].Code == "permission_unknown" {
+			found = &fs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a permission_unknown finding, got %v", codes(fs))
+	}
+	if !strings.Contains(found.Fix, "inventory:rw") {
+		t.Fatalf("permission_unknown fix line must offer inventory:rw; got %q", found.Fix)
+	}
+}
+
+func TestPermissionVocabulariesAgree(t *testing.T) {
+	for _, p := range Permissions {
+		if !rePerm.MatchString(p) {
+			t.Errorf("Permissions entry %q does not match rePerm — a suggestion the fix line offers would itself be rejected", p)
+		}
+	}
+
+	if !rePerm.MatchString("inventory:rw") {
+		t.Error("rePerm must match inventory:rw")
+	}
+	if rePerm.MatchString("inventory:write") {
+		t.Error("rePerm must NOT match inventory:write — the new branch must be an exact literal, not a widened prefix match")
+	}
+
+	raw, err := os.ReadFile("schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	props, _ := schema["properties"].(map[string]any)
+	permissions, _ := props["permissions"].(map[string]any)
+	items, _ := permissions["items"].(map[string]any)
+	pattern, _ := items["pattern"].(string)
+	if pattern != rePerm.String() {
+		t.Fatalf("schema.json permissions pattern must equal rePerm.String() exactly\nschema.json: %s\nrePerm:      %s", pattern, rePerm.String())
+	}
+}
+
 func TestUnknownFieldIsAFinding(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"id": "x", "sneaky": true})
 	if _, fs := Parse(raw); len(fs) == 0 || fs[0].Code != "manifest_unparseable" {
