@@ -26,7 +26,7 @@ var (
 	reSemver  = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 	reRoute   = regexp.MustCompile(`^/x/[a-z][a-z0-9_]{1,31}$`)
 	reDigest  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	rePerm    = regexp.MustCompile(`^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:read|puppetdb:read|classification:read|code:read|activity:read|legacy:read:[a-z_]+)$`)
+	rePerm    = regexp.MustCompile(`^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:read|puppetdb:read|classification:read|code:read|activity:read|legacy:read:[a-z_]+)$`)
 	reMethod  = regexp.MustCompile(`^[A-Z][A-Z-]{0,15}$`)
 	rePath    = regexp.MustCompile(`^[^/][A-Za-z0-9_./{}-]*$`)
 	reOpID    = regexp.MustCompile(`^[a-zA-Z][A-Za-z0-9]*$`)

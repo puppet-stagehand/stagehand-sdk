@@ -21,7 +21,7 @@ var ExtensionPoints = []string{"patching.provider", "compliance.source"}
 // Permissions are host facets/scopes. Two are parameterised:
 // inventory:kind:<name> and legacy:read:<table>.
 var Permissions = []string{
-	"documents:rw", "secrets:rw", "bolt:run", "inventory:read", "compliance:ingest",
+	"documents:rw", "secrets:rw", "bolt:run", "inventory:read", "inventory:rw", "compliance:ingest",
 	"tokens:issue", "forge:read", "puppetdb:read", "classification:read", "code:read", "activity:read",
 }
 
