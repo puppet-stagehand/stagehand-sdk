@@ -902,11 +902,17 @@ const (
 //
 // --------------------------------------------------------------- Inventory
 // Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
-// below, including OnboardNode. OnboardNode additionally requires the
-// caller to already hold an Auth-issued token verified for scope
-// inventory:approve (checked by the approval/ package in Phase 4, not by
-// this facet) before it is called at all — the facet itself enforces only
-// inventory:rw, uniformly, on every RPC.
+// below, including OnboardNode, uniformly — there is no separate
+// facet-level trust boundary for OnboardNode (D-01). Its actual gate is
+// NOT an Auth token scope: host.Local's implementation (Phase 3/4) looks
+// the caller-supplied proposal_id up via Documents.Get and refuses unless
+// the proposal's stored status field is "approved" — approval is a fact
+// recorded by whatever upstream workflow sets that status, not something
+// this RPC call itself is authorized against. Callers and reviewers must
+// not assume a separate approve-scope check exists here (see PITFALLS.md
+// Pitfall 4 — self-approval is the headline risk this milestone has to
+// structurally prevent in the propose/approve call graph, not paper over
+// in a comment).
 //
 // This service is NOT derived from the dormant 14-facet reference tree's
 // Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
@@ -1069,11 +1075,17 @@ func (c *inventoryClient) OnboardNode(ctx context.Context, in *OnboardNodeReques
 //
 // --------------------------------------------------------------- Inventory
 // Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
-// below, including OnboardNode. OnboardNode additionally requires the
-// caller to already hold an Auth-issued token verified for scope
-// inventory:approve (checked by the approval/ package in Phase 4, not by
-// this facet) before it is called at all — the facet itself enforces only
-// inventory:rw, uniformly, on every RPC.
+// below, including OnboardNode, uniformly — there is no separate
+// facet-level trust boundary for OnboardNode (D-01). Its actual gate is
+// NOT an Auth token scope: host.Local's implementation (Phase 3/4) looks
+// the caller-supplied proposal_id up via Documents.Get and refuses unless
+// the proposal's stored status field is "approved" — approval is a fact
+// recorded by whatever upstream workflow sets that status, not something
+// this RPC call itself is authorized against. Callers and reviewers must
+// not assume a separate approve-scope check exists here (see PITFALLS.md
+// Pitfall 4 — self-approval is the headline risk this milestone has to
+// structurally prevent in the propose/approve call graph, not paper over
+// in a comment).
 //
 // This service is NOT derived from the dormant 14-facet reference tree's
 // Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
