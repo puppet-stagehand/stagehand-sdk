@@ -1033,3 +1033,234 @@ func nodeIDs(nodes []*hostv1.Node) []string {
 	}
 	return out
 }
+
+// writeProposal writes a D-08-shaped document directly through
+// h.Documents.Put — collection "inventory-proposals", body fields "status"
+// and "node" — standing in for Phase 4's governed proposal-writer, which
+// does not exist yet. The Documents store accepts a write to this
+// collection from anywhere; a future reader must not mistake this test
+// scaffolding for the intended production writer. Passing an empty
+// proposalStatus omits the "status" key entirely (simulating a proposal
+// document with no status field); passing a nil node omits the "node" key.
+func writeProposal(t *testing.T, h *host.Host, proposalID, proposalStatus string, node map[string]any) {
+	t.Helper()
+	body := map[string]any{}
+	if proposalStatus != "" {
+		body["status"] = proposalStatus
+	}
+	if node != nil {
+		body["node"] = node
+	}
+	s, err := structpb.NewStruct(body)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: "inventory-proposals",
+		DocId:      proposalID,
+		Body:       &hostv1.Json{Value: s},
+		IfVersion:  0,
+	}); err != nil {
+		t.Fatalf("writeProposal Put(%q): %v", proposalID, err)
+	}
+}
+
+func TestInventory_OnboardNodeRequiresApprovedProposal(t *testing.T) {
+	ctx := context.Background()
+
+	cases := []struct {
+		name   string
+		id     string
+		status string
+		node   map[string]any
+		none   bool // no document written at all
+	}{
+		{name: "no document", id: "p-none", none: true},
+		{name: "pending", id: "p-pending", status: "pending", node: map[string]any{"id": "p-pending"}},
+		{name: "rejected", id: "p-rejected", status: "rejected", node: map[string]any{"id": "p-rejected"}},
+		{name: "missing status", id: "p-nostatus", status: "", node: map[string]any{"id": "p-nostatus"}},
+		{name: "approved but no node object", id: "p-nonode", status: "approved", node: nil},
+		{name: "node.id disagrees with proposal id", id: "p-mismatch", status: "approved", node: map[string]any{"id": "someone-else"}},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := local.New([]string{"inventory:rw"}, "opentofu")
+			if !tc.none {
+				writeProposal(t, h, tc.id, tc.status, tc.node)
+			}
+			_, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: tc.id})
+			if err == nil {
+				t.Fatalf("expected an error for case %q, got nil", tc.name)
+			}
+			wantCode := codes.FailedPrecondition
+			if tc.none {
+				wantCode = codes.NotFound
+			}
+			if status.Code(err) != wantCode {
+				t.Fatalf("case %q: expected %v, got %v (%v)", tc.name, wantCode, status.Code(err), err)
+			}
+		})
+	}
+}
+
+func TestInventory_OnboardNodeMaterializes(t *testing.T) {
+	ctx := context.Background()
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1-discovered", Status: hostv1.Node_DISCOVERED, Environment: "staging"},
+	))
+
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: "onboard-group"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "n1", Facts: jsonFacts(t, map[string]any{"os": "linux"})}); err != nil {
+		t.Fatal(err)
+	}
+
+	writeProposal(t, h, "n1", "approved", map[string]any{
+		"id":           "n1",
+		"display_name": "", // empty proposal name must not blank a non-empty discovery name
+		"environment":  "production",
+		"facts": map[string]any{
+			"role": "web",
+		},
+	})
+
+	n, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n.Id != "n1" {
+		t.Fatalf("expected Id n1, got %q", n.Id)
+	}
+	if n.Status != hostv1.Node_ONBOARDED {
+		t.Fatalf("expected ONBOARDED, got %v", n.Status)
+	}
+	if n.DisplayName != "n1-discovered" {
+		t.Fatalf("expected discovery display name preserved, got %q", n.DisplayName)
+	}
+	if n.Environment != "production" {
+		t.Fatalf("expected environment from proposal, got %q", n.Environment)
+	}
+	if factValue(t, n, "os") != "linux" {
+		t.Fatal("expected pre-onboarding fact 'os' preserved")
+	}
+	if factValue(t, n, "role") != "web" {
+		t.Fatal("expected proposal fact 'role' merged in")
+	}
+
+	got, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != hostv1.Node_ONBOARDED {
+		t.Fatalf("GetNode: expected ONBOARDED, got %v", got.Status)
+	}
+
+	lst, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var foundOnboarded bool
+	for _, nn := range lst.Nodes {
+		if nn.Id == "n1" && nn.Status == hostv1.Node_ONBOARDED {
+			foundOnboarded = true
+		}
+	}
+	if !foundOnboarded {
+		t.Fatal("expected ListNodes to show ONBOARDED n1")
+	}
+
+	groups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups.Groups) != 1 || groups.Groups[0].Id != "onboard-group" {
+		t.Fatalf("expected group membership preserved after onboarding, got %+v", groups.Groups)
+	}
+
+	disc, err := h.Inventory.Discover(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range disc.Candidates {
+		if c.Id == "n1" {
+			t.Fatal("expected onboarded node to no longer appear as a Discover candidate")
+		}
+	}
+}
+
+func TestInventory_OnboardNodeIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates())
+	writeProposal(t, h, "n9", "approved", map[string]any{"id": "n9", "display_name": "n9", "environment": "prod"})
+
+	first, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "n9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Delete the proposal document to prove the second call does not
+	// re-read it — the ONBOARDED short-circuit must fire before any
+	// Documents access.
+	if _, err := h.Documents.Delete(ctx, &hostv1.DeleteDocumentRequest{Collection: "inventory-proposals", DocId: "n9"}); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "n9"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.Status != hostv1.Node_ONBOARDED || second.Id != first.Id {
+		t.Fatalf("expected idempotent onboard, got %+v", second)
+	}
+}
+
+func TestInventory_OnboardNodeConcurrentIsExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates())
+	writeProposal(t, h, "n10", "approved", map[string]any{"id": "n10"})
+
+	const n = 2
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	statuses := make([]hostv1.Node_Status, n)
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func(i int) {
+			defer wg.Done()
+			node, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "n10"})
+			errs[i] = err
+			if node != nil {
+				statuses[i] = node.Status
+			}
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: unexpected error %v", i, err)
+		}
+		if statuses[i] != hostv1.Node_ONBOARDED {
+			t.Fatalf("goroutine %d: expected ONBOARDED, got %v", i, statuses[i])
+		}
+	}
+
+	lst, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, node := range lst.Nodes {
+		if node.Id == "n10" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("expected exactly 1 node record for n10, got %d", count)
+	}
+}
