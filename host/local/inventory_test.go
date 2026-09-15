@@ -626,6 +626,274 @@ func TestInventory_QueryNodesOpParityWithDocuments(t *testing.T) {
 	}
 }
 
+func TestInventory_GroupsRoundTrip(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: "web"}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups.Groups) != 1 || groups.Groups[0].Id != "web" || groups.Groups[0].Name != "web" {
+		t.Fatalf("expected group %q with name %q, got %+v", "web", "web", groups.Groups)
+	}
+
+	groupNodes, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupNodes.Nodes) != 1 || groupNodes.Nodes[0].Id != "n1" {
+		t.Fatalf("expected node n1 in group web, got %+v", groupNodes.Nodes)
+	}
+
+	nodeGroups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodeGroups.Groups) != 1 || nodeGroups.Groups[0].Id != "web" {
+		t.Fatalf("expected node n1 to belong to group web, got %+v", nodeGroups.Groups)
+	}
+}
+
+func TestInventory_GroupsOnDiscoveredNode(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: "web"}); err != nil {
+		t.Fatal(err)
+	}
+
+	groupNodes, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupNodes.Nodes) != 1 || groupNodes.Nodes[0].Status != hostv1.Node_DISCOVERED {
+		t.Fatalf("expected 1 DISCOVERED node, got %+v", groupNodes.Nodes)
+	}
+
+	nodeGroups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodeGroups.Groups) != 1 || nodeGroups.Groups[0].Id != "web" {
+		t.Fatalf("expected group web, got %+v", nodeGroups.Groups)
+	}
+}
+
+func TestInventory_AddNodeToGroupIsIdempotent(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: "web"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: "web"}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groups.Groups) != 1 || groups.Groups[0].Name != "web" {
+		t.Fatalf("expected exactly 1 group named %q, got %+v", "web", groups.Groups)
+	}
+
+	groupNodes, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "web"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(groupNodes.Nodes) != 1 {
+		t.Fatalf("expected exactly 1 member, got %d", len(groupNodes.Nodes))
+	}
+
+	nodeGroups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "n1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(nodeGroups.Groups) != 1 {
+		t.Fatalf("expected exactly 1 membership, got %d", len(nodeGroups.Groups))
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "nope", GroupId: "web"}); err == nil {
+		t.Fatal("expected error for unknown node id")
+	} else if st, _ := status.FromError(err); st.Code() != codes.NotFound {
+		t.Fatalf("expected NotFound, got %v", st.Code())
+	}
+
+	if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "n1", GroupId: ""}); err == nil {
+		t.Fatal("expected error for empty group id")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	}
+}
+
+func TestInventory_GroupsEmptyAndUnknown(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(
+		&hostv1.Node{Id: "n1", DisplayName: "n1", Status: hostv1.Node_DISCOVERED},
+	))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("expected no error for a fresh host, got %v", err)
+	}
+	if len(groups.Groups) != 0 {
+		t.Fatalf("expected 0 groups on a fresh host, got %d", len(groups.Groups))
+	}
+
+	groupNodes, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "nope"})
+	if err != nil {
+		t.Fatalf("expected no error for an unknown group id, got %v", err)
+	}
+	if len(groupNodes.Nodes) != 0 {
+		t.Fatalf("expected 0 nodes for an unknown group id, got %d", len(groupNodes.Nodes))
+	}
+
+	nodeGroups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "n1"})
+	if err != nil {
+		t.Fatalf("expected no error for an ungrouped node, got %v", err)
+	}
+	if len(nodeGroups.Groups) != 0 {
+		t.Fatalf("expected 0 groups for an ungrouped node, got %d", len(nodeGroups.Groups))
+	}
+}
+
+func TestInventory_GroupsOrderingIsStable(t *testing.T) {
+	nodes := []*hostv1.Node{
+		{Id: "c1", DisplayName: "c1", Status: hostv1.Node_DISCOVERED},
+		{Id: "a1", DisplayName: "a1", Status: hostv1.Node_DISCOVERED},
+		{Id: "b1", DisplayName: "b1", Status: hostv1.Node_DISCOVERED},
+	}
+	h := local.New([]string{"inventory:rw"}, "opentofu", local.WithDiscoverCandidates(nodes...))
+	ctx := context.Background()
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// three groups, each membership cross-cutting so both directions have
+	// more than one entry to sort.
+	groupIDs := []string{"gc", "ga", "gb"}
+	for _, gid := range groupIDs {
+		for _, n := range nodes {
+			if _, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: n.Id, GroupId: gid}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	for i := 0; i < 2; i++ {
+		groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantGroups := []string{"ga", "gb", "gc"}
+		if len(groups.Groups) != len(wantGroups) {
+			t.Fatalf("call %d: expected %d groups, got %d", i, len(wantGroups), len(groups.Groups))
+		}
+		for j, w := range wantGroups {
+			if groups.Groups[j].Id != w {
+				t.Fatalf("call %d: expected group[%d]=%q, got %q", i, j, w, groups.Groups[j].Id)
+			}
+		}
+
+		groupNodes, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "ga"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantNodes := []string{"a1", "b1", "c1"}
+		if len(groupNodes.Nodes) != len(wantNodes) {
+			t.Fatalf("call %d: expected %d nodes, got %d", i, len(wantNodes), len(groupNodes.Nodes))
+		}
+		for j, w := range wantNodes {
+			if groupNodes.Nodes[j].Id != w {
+				t.Fatalf("call %d: expected node[%d]=%q, got %q", i, j, w, groupNodes.Nodes[j].Id)
+			}
+		}
+
+		nodeGroups, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "a1"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(nodeGroups.Groups) != len(wantGroups) {
+			t.Fatalf("call %d: expected %d node-groups, got %d", i, len(wantGroups), len(nodeGroups.Groups))
+		}
+		for j, w := range wantGroups {
+			if nodeGroups.Groups[j].Id != w {
+				t.Fatalf("call %d: expected nodeGroups[%d]=%q, got %q", i, j, w, nodeGroups.Groups[j].Id)
+			}
+		}
+	}
+
+	first, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "ga", Page: &hostv1.Page{Limit: 1}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Nodes) != 1 || first.Page.NextCursor != "1" {
+		t.Fatalf("expected 1 node and NextCursor \"1\", got %d nodes, cursor %q", len(first.Nodes), first.Page.NextCursor)
+	}
+	seen := map[string]bool{first.Nodes[0].Id: true}
+	cursor := first.Page.NextCursor
+	for i := 0; i < 10 && cursor != ""; i++ {
+		resp, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "ga", Page: &hostv1.Page{Cursor: cursor, Limit: 1}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Nodes) != 1 {
+			t.Fatalf("expected 1 node per page, got %d", len(resp.Nodes))
+		}
+		if seen[resp.Nodes[0].Id] {
+			t.Fatalf("node %q seen twice while walking pages", resp.Nodes[0].Id)
+		}
+		seen[resp.Nodes[0].Id] = true
+		cursor = resp.Page.NextCursor
+	}
+	if len(seen) != 3 {
+		t.Fatalf("expected to see all 3 nodes exactly once, saw %d: %+v", len(seen), seen)
+	}
+
+	if _, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "ga", Page: &hostv1.Page{Cursor: "-1"}}); err == nil {
+		t.Fatal("expected error for a negative cursor")
+	} else if st, _ := status.FromError(err); st.Code() != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", st.Code())
+	}
+
+	groups, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	groups.Groups[0].Name = "mutated"
+	again, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Groups[0].Name == "mutated" {
+		t.Fatal("expected mutation of a returned group to not affect the next ListGroups call")
+	}
+}
+
 func assertNodeIDs(t *testing.T, nodes []*hostv1.Node, want ...string) {
 	t.Helper()
 	got := nodeIDs(nodes)
