@@ -1,0 +1,23 @@
+{
+  "id": "inventory_onboarding",
+  "name": "Inventory Onboarding",
+  "version": "0.1.0",
+  "contract_version": 1,
+  "publisher": "Perforce",
+  "publisher_key_id": "SHA256:invonboardexamplekeyfingerprint0000000000000",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Discovers a node, proposes onboarding it, and materializes it into Inventory only after a human approves the proposal.",
+  "nav": null,
+  "permissions": ["inventory:rw", "tokens:issue"],
+  "routes": [
+    { "method": "POST", "path": "onboarding/proposals", "access": {}, "operation_id": "proposeOnboarding" },
+    { "method": "POST", "path": "onboarding/proposals/{proposal_id}/approve", "access": { "scope": "inventory:approve" }, "operation_id": "approveOnboarding" },
+    { "method": "POST", "path": "onboarding/proposals/{proposal_id}/reject", "access": { "scope": "inventory:approve" }, "operation_id": "rejectOnboarding" }
+  ],
+  "content": null,
+  "resources": { "cpu": "100m", "memory": "64Mi" },
+  "openapi_path": "/stagehand/openapi.json"
+}
