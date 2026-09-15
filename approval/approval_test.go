@@ -289,3 +289,242 @@ func fmtEqual(a, b any) bool {
 	}
 	return true
 }
+
+func TestApproval_DecideRequiresTheApprovalScope(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	node := &hostv1.Node{Id: "n-scope", DisplayName: "n-scope-display", Environment: "staging"}
+	if _, err := approval.Propose(ctx, h, node); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+
+	// A token that is perfectly valid for something else must still be
+	// refused here: the facet compares scopes for equality and carries
+	// exactly one per token.
+	wrongScope, err := h.Auth.IssueToken(ctx, &hostv1.IssueTokenRequest{Scope: "some:other-scope", Label: "wrong-scope-holder", TtlSeconds: 300})
+	if err != nil {
+		t.Fatalf("IssueToken(wrong scope): %v", err)
+	}
+
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-scope", TokenSecret: wrongScope.Secret}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Approve with wrong-scope token: expected codes.PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+	if _, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-scope", TokenSecret: wrongScope.Secret, Reason: "no"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Reject with wrong-scope token: expected codes.PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+
+	// A secret no token was ever issued for is Unauthenticated, not
+	// PermissionDenied.
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-scope", TokenSecret: "never-issued"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Approve with unissued secret: expected codes.Unauthenticated, got %v (%v)", status.Code(err), err)
+	}
+	if _, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-scope", TokenSecret: "never-issued", Reason: "no"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Reject with unissued secret: expected codes.Unauthenticated, got %v (%v)", status.Code(err), err)
+	}
+
+	// The proposal must still be pending after every refusal above.
+	prop, err := approval.Get(ctx, h, "n-scope")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if prop.Status != approval.StatusPending {
+		t.Fatalf("expected proposal to still be pending after refused decisions, got %q", prop.Status)
+	}
+}
+
+func TestApproval_DecideVerifiesBeforeReadingTheProposal(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	// A bad secret against a proposal id that was never proposed must
+	// surface the token error, not codes.NotFound — an unauthorized
+	// caller learns nothing about which proposal ids exist.
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "never-proposed", TokenSecret: "never-issued"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Approve: expected codes.Unauthenticated (not NotFound), got %v (%v)", status.Code(err), err)
+	}
+	if _, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "never-proposed", TokenSecret: "never-issued", Reason: "no"}); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("Reject: expected codes.Unauthenticated (not NotFound), got %v (%v)", status.Code(err), err)
+	}
+
+	// A host built without the tokens:issue permission is refused by the
+	// Auth facet's own gate before any document is read.
+	hNoTokens := testHost(t, "inventory:rw")
+	if _, err := approval.Approve(ctx, hNoTokens, approval.ApproveRequest{ProposalID: "never-proposed", TokenSecret: "anything"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Approve on host without tokens:issue: expected codes.PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+	if _, err := approval.Reject(ctx, hNoTokens, approval.RejectRequest{ProposalID: "never-proposed", TokenSecret: "anything", Reason: "no"}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Reject on host without tokens:issue: expected codes.PermissionDenied, got %v (%v)", status.Code(err), err)
+	}
+}
+
+func TestApproval_RejectRequiresAReason(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	node := &hostv1.Node{Id: "n-reason", DisplayName: "n-reason-display"}
+	if _, err := approval.Propose(ctx, h, node); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	secret := approverToken(t, h, "operator")
+
+	for _, reason := range []string{"", "   ", "\t\n"} {
+		_, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-reason", TokenSecret: secret, Reason: reason})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("Reject with reason %q: expected codes.InvalidArgument, got %v (%v)", reason, status.Code(err), err)
+		}
+	}
+
+	prop, err := approval.Get(ctx, h, "n-reason")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if prop.Status != approval.StatusPending {
+		t.Fatalf("expected proposal to still be pending after every empty-reason reject, got %q", prop.Status)
+	}
+	if prop.Version != 1 {
+		t.Fatalf("expected version 1 (no write happened), got %d", prop.Version)
+	}
+}
+
+func TestApproval_RejectIsTerminal(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	node := &hostv1.Node{Id: "n-terminal", DisplayName: "n-terminal-display"}
+	if _, err := approval.Propose(ctx, h, node); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	secret := approverToken(t, h, "operator")
+
+	rejected, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-terminal", TokenSecret: secret, Reason: "not ready"})
+	if err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	if rejected.Status != approval.StatusRejected || rejected.Reason != "not ready" {
+		t.Fatalf("unexpected rejected proposal: %+v", rejected)
+	}
+
+	// Rejecting an already-rejected proposal is refused, and the stored
+	// reason/decision time are still the first rejection's.
+	_, err = approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-terminal", TokenSecret: secret, Reason: "second try"})
+	if !approval.IsAlreadyDecided(err) {
+		t.Fatalf("Reject on rejected proposal: expected IsAlreadyDecided, got %v", err)
+	}
+
+	// Approving a rejected proposal is refused too — no rejected ->
+	// approved edge exists.
+	_, err = approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-terminal", TokenSecret: secret})
+	if !approval.IsAlreadyDecided(err) {
+		t.Fatalf("Approve on rejected proposal: expected IsAlreadyDecided, got %v", err)
+	}
+
+	after, err := approval.Get(ctx, h, "n-terminal")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != approval.StatusRejected || after.Reason != "not ready" {
+		t.Fatalf("expected the first rejection's content to survive both refused calls, got %+v", after)
+	}
+}
+
+func TestApproval_ApproveOnADecidedProposalIsRefused(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	node := &hostv1.Node{Id: "n-decided", DisplayName: "n-decided-display"}
+	if _, err := approval.Propose(ctx, h, node); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	secret := approverToken(t, h, "operator")
+
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-decided", TokenSecret: secret}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+
+	_, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-decided", TokenSecret: secret})
+	if !approval.IsAlreadyDecided(err) {
+		t.Fatalf("second Approve on an approved proposal: expected IsAlreadyDecided, got %v", err)
+	}
+
+	_, err = approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-decided", TokenSecret: secret, Reason: "too late"})
+	if !approval.IsAlreadyDecided(err) {
+		t.Fatalf("Reject on an approved proposal: expected IsAlreadyDecided, got %v", err)
+	}
+
+	after, err := approval.Get(ctx, h, "n-decided")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if after.Status != approval.StatusApproved {
+		t.Fatalf("expected proposal to still be approved after both refusals, got %q", after.Status)
+	}
+}
+
+func TestApproval_GetReadsTheAuditTrail(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	pending := &hostv1.Node{Id: "n-pending", DisplayName: "n-pending-display"}
+	if _, err := approval.Propose(ctx, h, pending); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	prop, err := approval.Get(ctx, h, "n-pending")
+	if err != nil {
+		t.Fatalf("Get(pending): %v", err)
+	}
+	if prop.Status != approval.StatusPending {
+		t.Fatalf("expected status pending, got %q", prop.Status)
+	}
+	if prop.Reason != "" || prop.DecidedBy != "" || !prop.DecidedAt.IsZero() {
+		t.Fatalf("expected empty decision fields on a pending proposal, got %+v", prop)
+	}
+
+	approvedNode := &hostv1.Node{Id: "n-approved", DisplayName: "n-approved-display"}
+	if _, err := approval.Propose(ctx, h, approvedNode); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	secret := approverToken(t, h, "auditor")
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "n-approved", TokenSecret: secret}); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	approvedProp, err := approval.Get(ctx, h, "n-approved")
+	if err != nil {
+		t.Fatalf("Get(approved): %v", err)
+	}
+	if approvedProp.Status != approval.StatusApproved || approvedProp.DecidedBy != "auditor" || approvedProp.DecidedAt.IsZero() {
+		t.Fatalf("expected a fully populated audit trail on an approved proposal, got %+v", approvedProp)
+	}
+
+	rejectedNode := &hostv1.Node{Id: "n-rejected", DisplayName: "n-rejected-display"}
+	if _, err := approval.Propose(ctx, h, rejectedNode); err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	if _, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "n-rejected", TokenSecret: secret, Reason: "not needed"}); err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	rejectedProp, err := approval.Get(ctx, h, "n-rejected")
+	if err != nil {
+		t.Fatalf("Get(rejected): %v", err)
+	}
+	if rejectedProp.Status != approval.StatusRejected || rejectedProp.Reason != "not needed" || rejectedProp.DecidedBy != "auditor" || rejectedProp.DecidedAt.IsZero() {
+		t.Fatalf("expected a fully populated audit trail on a rejected proposal, got %+v", rejectedProp)
+	}
+}
+
+func TestApproval_ProposalNotFound(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	if _, err := approval.Get(ctx, h, "does-not-exist"); status.Code(err) != codes.NotFound {
+		t.Fatalf("Get: expected codes.NotFound, got %v (%v)", status.Code(err), err)
+	}
+
+	secret := approverToken(t, h, "operator")
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: "does-not-exist", TokenSecret: secret}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Approve: expected codes.NotFound, got %v (%v)", status.Code(err), err)
+	}
+	if _, err := approval.Reject(ctx, h, approval.RejectRequest{ProposalID: "does-not-exist", TokenSecret: secret, Reason: "no"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("Reject: expected codes.NotFound, got %v (%v)", status.Code(err), err)
+	}
+}

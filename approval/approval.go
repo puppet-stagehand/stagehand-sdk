@@ -25,12 +25,14 @@
 package approval
 
 import (
+	"context"
 	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
 // Collection is the D-00 Documents collection this package writes to and
@@ -123,10 +125,34 @@ func ErrAlreadyDecided(proposalID, currentStatus string) error {
 	return withDetails.Err()
 }
 
+// ErrReasonRequired builds the error Reject returns when its reason
+// argument is empty or whitespace-only.
+func ErrReasonRequired(proposalID string) error {
+	st := status.New(codes.InvalidArgument, "reject requires a non-empty reason for proposal "+proposalID)
+	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
+		Code:    detailReasonRequired,
+		Message: "rejecting proposal " + proposalID + " requires a human-readable reason",
+		Fix:     "supply a non-empty Reason describing why the node onboarding was denied",
+	})
+	if err != nil {
+		return st.Err() // details are best-effort; the status itself must never fail to construct
+	}
+	return withDetails.Err()
+}
+
+// IsAlreadyDecided reports whether err is (or wraps) an ErrAlreadyDecided
+// error. codes.FailedPrecondition alone is not distinguishable enough to
+// branch on — a malformed proposal body can also produce that code — so a
+// caller that wants to distinguish "already decided" from any other
+// failure must use this rather than comparing status.Code directly.
+func IsAlreadyDecided(err error) bool {
+	return errorDetailCode(err) == detailAlreadyDecided
+}
+
 // errorDetailCode walks a status error's Details and returns the Code of
 // the first *hostv1.ErrorDetail it finds, or the empty string when err is
 // nil, not a status error, or carries no such detail. It backs
-// IsAlreadyDecided (added in Task 2).
+// IsAlreadyDecided.
 func errorDetailCode(err error) string {
 	if err == nil {
 		return ""
@@ -160,4 +186,46 @@ func unwrapFact(j *hostv1.Json) any {
 		return v
 	}
 	return m
+}
+
+// proposalFromBody builds a Proposal snapshot from a decoded document
+// body map, reading each key as a string (defaulting to empty) and
+// parsing the stored decision time with time.RFC3339Nano, leaving the
+// zero time when the key is absent or unparseable.
+func proposalFromBody(proposalID string, m map[string]any, version int64) *Proposal {
+	p := &Proposal{ID: proposalID, Version: version}
+	if s, ok := m[keyStatus].(string); ok {
+		p.Status = s
+	}
+	if s, ok := m[keyReason].(string); ok {
+		p.Reason = s
+	}
+	if s, ok := m[keyDecidedBy].(string); ok {
+		p.DecidedBy = s
+	}
+	if s, ok := m[keyDecidedAt].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+			p.DecidedAt = t
+		}
+	}
+	return p
+}
+
+// Get reads a proposal's current state through h.Documents.Get and
+// returns that error unchanged when no such document exists (surfacing
+// the Documents store's own codes.NotFound). Get requires no token:
+// reading a proposal is not a governed action, only deciding one is, and
+// the Documents facet is already scoped to the pack. Do not add an
+// authorization check here — it would look prudent and buy nothing, since
+// nothing about this read crosses the governance boundary Approve/Reject
+// guard.
+func Get(ctx context.Context, h *host.Host, proposalID string) (*Proposal, error) {
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: Collection, DocId: proposalID})
+	if err != nil {
+		return nil, err
+	}
+	if doc.Body == nil || doc.Body.Value == nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q has no body", proposalID)
+	}
+	return proposalFromBody(proposalID, doc.Body.Value.AsMap(), doc.Version), nil
 }

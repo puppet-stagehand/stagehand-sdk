@@ -2,6 +2,7 @@ package approval
 
 import (
 	"context"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -131,4 +132,28 @@ func decide(ctx context.Context, h *host.Host, proposalID, tokenSecret, newStatu
 // verification or the CAS write.
 func Approve(ctx context.Context, h *host.Host, req ApproveRequest) (*Proposal, error) {
 	return decide(ctx, h, req.ProposalID, req.TokenSecret, StatusApproved, "")
+}
+
+// RejectRequest is the input to Reject: the proposal to decide, the
+// caller's approval-scoped token secret, and the required human-readable
+// reason (D-06).
+type RejectRequest struct {
+	ProposalID  string
+	TokenSecret string
+	Reason      string
+}
+
+// Reject trims req.Reason and refuses with ErrReasonRequired when what
+// remains is empty, before it presents the token — an argument that can
+// never succeed should not consume a verification, and the check reveals
+// nothing about stored state. It then delegates to decide with the
+// rejected status and the trimmed reason. Every rejection carries an
+// audit trail for why a node was denied; that is the whole reason the
+// field is required rather than optional.
+func Reject(ctx context.Context, h *host.Host, req RejectRequest) (*Proposal, error) {
+	reason := strings.TrimSpace(req.Reason)
+	if reason == "" {
+		return nil, ErrReasonRequired(req.ProposalID)
+	}
+	return decide(ctx, h, req.ProposalID, req.TokenSecret, StatusRejected, reason)
 }
