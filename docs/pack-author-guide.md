@@ -41,6 +41,9 @@ want to do, a person holding the right token says yes or no, and only
 then does it happen. Your pack's own code must never be able to hand
 itself that token — if it could, nobody was actually asked. See
 `docs/approval-pattern.md` for the rule in full, and why it has to hold.
+There is a worked example in the box: `examples/inventory-onboarding`, with
+`examples/inventory-onboarding/README.md` as the short tour. Copying its
+two-halves shape is the easiest way to get this right.
 
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used

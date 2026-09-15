@@ -62,6 +62,28 @@ and skipped waiting on an operator. Shortening it that way is the
 failure this constraint exists to prevent, not an optimization worth
 taking.
 
+## A worked example
+
+`examples/inventory-onboarding` is this repo's worked example of the hard
+constraint above. It splits the proposing and deciding paths into two
+types: `ProposerBackend` holds discover, group, attach-facts, propose, and
+onboard; `ApproverBackend` holds only approve and reject, and its `Approve`
+method takes the token secret as an argument rather than obtaining one
+itself.
+
+The property that makes this a proof rather than a claim: the approval
+token is minted only in the example's test file, so no function in the
+example's production source can obtain one. `TestInventoryOnboarding_ProposerCannotSelfApprove`
+parses that source and fails if any future change ever puts proposing and
+deciding in one call graph. That is what "treat any refactor that puts
+proposing and deciding in one call graph as a security change" looks like
+when it is mechanized rather than left to a code review's trust.
+
+The two-type split is one shape that satisfies the constraint, not the
+only one — a distinct operator persona, a separate handler, or a separate
+process all work equally well. See `examples/inventory-onboarding/README.md`
+for the ELI10 tour.
+
 ## The state machine
 
 A proposal has exactly three statuses: `pending`, `approved`, `rejected`.
