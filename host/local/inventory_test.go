@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 
@@ -10,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 )
 
@@ -144,5 +146,94 @@ func TestInventory_DiscoverIsRaceFree(t *testing.T) {
 	}
 	if len(resp.Candidates) != 2 {
 		t.Fatalf("expected stable final count of 2, got %d", len(resp.Candidates))
+	}
+}
+
+// inventoryCalls returns one minimally-valid closure per Inventory RPC,
+// used by TestInventory_DeniedWithoutPermission to exercise all 11 methods
+// uniformly regardless of which ones are implemented yet.
+func inventoryCalls(ctx context.Context, h *host.Host) map[string]func() error {
+	return map[string]func() error{
+		"GetNode":        func() error { _, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "x"}); return err },
+		"Discover":       func() error { _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); return err },
+		"ListNodes":      func() error { _, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{}); return err },
+		"QueryNodes":     func() error { _, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{}); return err },
+		"PutFacts":       func() error { _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "x"}); return err },
+		"ListGroups":     func() error { _, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{}); return err },
+		"ListGroupNodes": func() error { _, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "x"}); return err },
+		"ListNodeGroups": func() error { _, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "x"}); return err },
+		"AddNodeToGroup": func() error {
+			_, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "x", GroupId: "y"})
+			return err
+		},
+		"ListClasses": func() error { _, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "x"}); return err },
+		"OnboardNode": func() error { _, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "x"}); return err },
+	}
+}
+
+func assertInventoryAllDenied(t *testing.T, ctx context.Context, h *host.Host, label string) {
+	t.Helper()
+	for name, call := range inventoryCalls(ctx, h) {
+		err := call()
+		if err == nil {
+			t.Fatalf("%s/%s: expected error, got nil", label, name)
+		}
+		st, _ := status.FromError(err)
+		if st.Code() != codes.PermissionDenied {
+			t.Fatalf("%s/%s: expected PermissionDenied, got %v (%v)", label, name, st.Code(), err)
+		}
+		found := false
+		for _, d := range st.Details() {
+			ed, ok := d.(*hostv1.ErrorDetail)
+			if !ok {
+				continue
+			}
+			found = true
+			if ed.Code != "facet_not_declared" {
+				t.Fatalf("%s/%s: expected ErrorDetail.Code facet_not_declared, got %q", label, name, ed.Code)
+			}
+			if !strings.Contains(ed.Message, "inventory:rw") {
+				t.Fatalf("%s/%s: expected ErrorDetail.Message to mention inventory:rw, got %q", label, name, ed.Message)
+			}
+		}
+		if !found {
+			t.Fatalf("%s/%s: expected an *hostv1.ErrorDetail in status details", label, name)
+		}
+	}
+}
+
+func TestInventory_DeniedWithoutPermission(t *testing.T) {
+	ctx := context.Background()
+
+	assertInventoryAllDenied(t, ctx, local.New(nil, "opentofu"), "no-perms")
+	assertInventoryAllDenied(t, ctx, local.New([]string{"secrets:rw"}, "opentofu"), "secrets-only")
+}
+
+func TestInventory_ReadPathClonesNodes(t *testing.T) {
+	h := local.New([]string{"inventory:rw"}, "opentofu")
+	ctx := context.Background()
+
+	if _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); err != nil {
+		t.Fatal(err)
+	}
+	n, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "db-01.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	n.DisplayName = "mutated"
+	if n.Facts == nil {
+		n.Facts = map[string]*hostv1.Json{}
+	}
+	n.Facts["injected"] = &hostv1.Json{}
+
+	again, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "db-01.example.test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.DisplayName != "db-01" {
+		t.Fatalf("expected display name unaffected by caller mutation, got %q", again.DisplayName)
+	}
+	if _, ok := again.Facts["injected"]; ok {
+		t.Fatal("expected injected fact key to be absent from the facet's stored record")
 	}
 }
