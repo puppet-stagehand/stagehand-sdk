@@ -150,6 +150,89 @@ func TestInventoryRWPermissionIsAccepted(t *testing.T) {
 	}
 }
 
+// TestApprovalScopeIsNotAManifestPermission pins the orthogonality ONB-05
+// shipped in Phase 3: a facet permission is granted once at install and
+// held for the pack's whole lifetime, while the "inventory:approve" scope
+// has to be presented per decision by whoever holds the token. Phase 5
+// ships a manifest fixture carrying both strings, and the fastest way to
+// make that fixture validate is to widen rePerm by one alternative — which
+// would collapse the two grants into one and let a pack that can propose
+// an onboarding hold approval authority permanently. This test fails
+// loudly if that widening ever happens, and proves the string's actual
+// home is a route's access.scope, which already accepts it unchanged.
+func TestApprovalScopeIsNotAManifestPermission(t *testing.T) {
+	const approvalScope = "inventory:approve"
+
+	// Rejection: the scope must not be usable as a manifest permission.
+	m := load(t, "../examples/hello/manifest.json")
+	m.Permissions = append(m.Permissions, approvalScope)
+	fs := Validate(m)
+	var found *Finding
+	for i := range fs {
+		if fs[i].Code == "permission_unknown" {
+			found = &fs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a permission_unknown finding for %q in permissions, got %v", approvalScope, codes(fs))
+	}
+
+	// Three independent vocabulary checks — the three lists share no
+	// common source of truth, so each must be asserted on its own.
+	if rePerm.MatchString(approvalScope) {
+		t.Errorf("rePerm must NOT match %q — it is an Auth scope, not a facet permission", approvalScope)
+	}
+	for _, p := range Permissions {
+		if p == approvalScope {
+			t.Errorf("Permissions slice must NOT contain %q — it is an Auth scope, not a facet permission", approvalScope)
+		}
+	}
+	raw, err := os.ReadFile("schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), approvalScope) {
+		t.Errorf("schema.json must NOT contain %q anywhere in its permission pattern", approvalScope)
+	}
+
+	// Acceptance: the scope belongs on a route's access.scope, alongside
+	// tokens:issue — this is the manifest shape Phase 5's example needs,
+	// and it needs no schema change.
+	m2 := load(t, "../examples/hello/manifest.json")
+	m2.Permissions = append(m2.Permissions, "tokens:issue")
+	m2.Routes = []Route{{Method: "POST", Path: "proposals/{id}/decide", Access: Access{Scope: approvalScope}, OperationID: "decideProposal"}}
+	m2.OpenAPIPath = "/stagehand/openapi.json"
+	fs2 := Validate(m2)
+	for _, f := range fs2 {
+		if f.Code == "permission_unknown" {
+			t.Errorf("route access.scope %q must not trigger permission_unknown; got %v", approvalScope, codes(fs2))
+		}
+		if f.Code == "route_scope_requires_tokens_issue" {
+			t.Errorf("route access.scope %q with tokens:issue present must not trigger route_scope_requires_tokens_issue; got %v", approvalScope, codes(fs2))
+		}
+	}
+
+	// Proof the cross-check above is live: without tokens:issue, the same
+	// route must trip route_scope_requires_tokens_issue. Without this, the
+	// clean case above could be passing only because the validator never
+	// looked at the route at all.
+	m3 := load(t, "../examples/hello/manifest.json")
+	m3.Routes = []Route{{Method: "POST", Path: "proposals/{id}/decide", Access: Access{Scope: approvalScope}, OperationID: "decideProposal"}}
+	m3.OpenAPIPath = "/stagehand/openapi.json"
+	fs3 := Validate(m3)
+	var sawCrossCheck bool
+	for _, f := range fs3 {
+		if f.Code == "route_scope_requires_tokens_issue" {
+			sawCrossCheck = true
+			break
+		}
+	}
+	if !sawCrossCheck {
+		t.Fatalf("expected route_scope_requires_tokens_issue without tokens:issue in permissions, got %v", codes(fs3))
+	}
+}
+
 func TestPermissionVocabulariesAgree(t *testing.T) {
 	for _, p := range Permissions {
 		if !rePerm.MatchString(p) {
