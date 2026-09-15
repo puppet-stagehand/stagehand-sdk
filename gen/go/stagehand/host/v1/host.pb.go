@@ -94,6 +94,55 @@ func (QueryDocumentsRequest_Op) EnumDescriptor() ([]byte, []int) {
 	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{6, 0}
 }
 
+type Node_Status int32
+
+const (
+	Node_STATUS_UNSPECIFIED Node_Status = 0
+	Node_DISCOVERED         Node_Status = 1
+	Node_ONBOARDED          Node_Status = 2
+)
+
+// Enum value maps for Node_Status.
+var (
+	Node_Status_name = map[int32]string{
+		0: "STATUS_UNSPECIFIED",
+		1: "DISCOVERED",
+		2: "ONBOARDED",
+	}
+	Node_Status_value = map[string]int32{
+		"STATUS_UNSPECIFIED": 0,
+		"DISCOVERED":         1,
+		"ONBOARDED":          2,
+	}
+)
+
+func (x Node_Status) Enum() *Node_Status {
+	p := new(Node_Status)
+	*p = x
+	return p
+}
+
+func (x Node_Status) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (Node_Status) Descriptor() protoreflect.EnumDescriptor {
+	return file_stagehand_host_v1_host_proto_enumTypes[1].Descriptor()
+}
+
+func (Node_Status) Type() protoreflect.EnumType {
+	return &file_stagehand_host_v1_host_proto_enumTypes[1]
+}
+
+func (x Node_Status) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use Node_Status.Descriptor instead.
+func (Node_Status) EnumDescriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{19, 0}
+}
+
 type Document struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Collection    string                 `protobuf:"bytes,1,opt,name=collection,proto3" json:"collection,omitempty"`
@@ -1162,6 +1211,126 @@ func (x *TokenRef) GetTokenId() string {
 	return ""
 }
 
+type Node struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // proposer-chosen at Discover/Propose time (D-04); Inventory never mints its own
+	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Status        Node_Status            `protobuf:"varint,3,opt,name=status,proto3,enum=stagehand.host.v1.Node_Status" json:"status,omitempty"`
+	Environment   string                 `protobuf:"bytes,4,opt,name=environment,proto3" json:"environment,omitempty"`
+	Facts         map[string]*Json       `protobuf:"bytes,5,rep,name=facts,proto3" json:"facts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // flat key-value; PuppetDB-style nested facts deferred to v2 (INV-05)
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Node) Reset() {
+	*x = Node{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Node) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Node) ProtoMessage() {}
+
+func (x *Node) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Node.ProtoReflect.Descriptor instead.
+func (*Node) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *Node) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *Node) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *Node) GetStatus() Node_Status {
+	if x != nil {
+		return x.Status
+	}
+	return Node_STATUS_UNSPECIFIED
+}
+
+func (x *Node) GetEnvironment() string {
+	if x != nil {
+		return x.Environment
+	}
+	return ""
+}
+
+func (x *Node) GetFacts() map[string]*Json {
+	if x != nil {
+		return x.Facts
+	}
+	return nil
+}
+
+type GetNodeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetNodeRequest) Reset() {
+	*x = GetNodeRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetNodeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetNodeRequest) ProtoMessage() {}
+
+func (x *GetNodeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetNodeRequest.ProtoReflect.Descriptor instead.
+func (*GetNodeRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *GetNodeRequest) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
 var File_stagehand_host_v1_host_proto protoreflect.FileDescriptor
 
 const file_stagehand_host_v1_host_proto_rawDesc = "" +
@@ -1262,7 +1431,24 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\x05label\x18\x02 \x01(\tR\x05label\x12\x16\n" +
 	"\x06scopes\x18\x03 \x03(\tR\x06scopes\"%\n" +
 	"\bTokenRef\x12\x19\n" +
-	"\btoken_id\x18\x01 \x01(\tR\atokenId2\xb0\x03\n" +
+	"\btoken_id\x18\x01 \x01(\tR\atokenId\"\xe1\x02\n" +
+	"\x04Node\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x126\n" +
+	"\x06status\x18\x03 \x01(\x0e2\x1e.stagehand.host.v1.Node.StatusR\x06status\x12 \n" +
+	"\venvironment\x18\x04 \x01(\tR\venvironment\x128\n" +
+	"\x05facts\x18\x05 \x03(\v2\".stagehand.host.v1.Node.FactsEntryR\x05facts\x1aQ\n" +
+	"\n" +
+	"FactsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12-\n" +
+	"\x05value\x18\x02 \x01(\v2\x17.stagehand.host.v1.JsonR\x05value:\x028\x01\"?\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x0e\n" +
+	"\n" +
+	"DISCOVERED\x10\x01\x12\r\n" +
+	"\tONBOARDED\x10\x02\" \n" +
+	"\x0eGetNodeRequest\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id2\xb0\x03\n" +
 	"\tDocuments\x12I\n" +
 	"\x03Get\x12%.stagehand.host.v1.GetDocumentRequest\x1a\x1b.stagehand.host.v1.Document\x12T\n" +
 	"\x03Put\x12%.stagehand.host.v1.PutDocumentRequest\x1a&.stagehand.host.v1.PutDocumentResponse\x12Y\n" +
@@ -1282,7 +1468,9 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"IssueToken\x12$.stagehand.host.v1.IssueTokenRequest\x1a\x1e.stagehand.host.v1.IssuedToken\x12M\n" +
 	"\x06Verify\x12%.stagehand.host.v1.VerifyTokenRequest\x1a\x1c.stagehand.host.v1.Principal\x12=\n" +
-	"\x06Revoke\x12\x1b.stagehand.host.v1.TokenRef\x1a\x16.google.protobuf.EmptyBKZIgithub.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1b\x06proto3"
+	"\x06Revoke\x12\x1b.stagehand.host.v1.TokenRef\x1a\x16.google.protobuf.Empty2R\n" +
+	"\tInventory\x12E\n" +
+	"\aGetNode\x12!.stagehand.host.v1.GetNodeRequest\x1a\x17.stagehand.host.v1.NodeBKZIgithub.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1b\x06proto3"
 
 var (
 	file_stagehand_host_v1_host_proto_rawDescOnce sync.Once
@@ -1296,84 +1484,93 @@ func file_stagehand_host_v1_host_proto_rawDescGZIP() []byte {
 	return file_stagehand_host_v1_host_proto_rawDescData
 }
 
-var file_stagehand_host_v1_host_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
+var file_stagehand_host_v1_host_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
+var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
 var file_stagehand_host_v1_host_proto_goTypes = []any{
 	(QueryDocumentsRequest_Op)(0), // 0: stagehand.host.v1.QueryDocumentsRequest.Op
-	(*Document)(nil),              // 1: stagehand.host.v1.Document
-	(*GetDocumentRequest)(nil),    // 2: stagehand.host.v1.GetDocumentRequest
-	(*PutDocumentRequest)(nil),    // 3: stagehand.host.v1.PutDocumentRequest
-	(*PutDocumentResponse)(nil),   // 4: stagehand.host.v1.PutDocumentResponse
-	(*ListDocumentsRequest)(nil),  // 5: stagehand.host.v1.ListDocumentsRequest
-	(*ListDocumentsResponse)(nil), // 6: stagehand.host.v1.ListDocumentsResponse
-	(*QueryDocumentsRequest)(nil), // 7: stagehand.host.v1.QueryDocumentsRequest
-	(*DeleteDocumentRequest)(nil), // 8: stagehand.host.v1.DeleteDocumentRequest
-	(*SettingsDocument)(nil),      // 9: stagehand.host.v1.SettingsDocument
-	(*SettingsChange)(nil),        // 10: stagehand.host.v1.SettingsChange
-	(*StoreSecretRequest)(nil),    // 11: stagehand.host.v1.StoreSecretRequest
-	(*SecretRef)(nil),             // 12: stagehand.host.v1.SecretRef
-	(*SecretValue)(nil),           // 13: stagehand.host.v1.SecretValue
-	(*Sealed)(nil),                // 14: stagehand.host.v1.Sealed
-	(*IssueTokenRequest)(nil),     // 15: stagehand.host.v1.IssueTokenRequest
-	(*IssuedToken)(nil),           // 16: stagehand.host.v1.IssuedToken
-	(*VerifyTokenRequest)(nil),    // 17: stagehand.host.v1.VerifyTokenRequest
-	(*Principal)(nil),             // 18: stagehand.host.v1.Principal
-	(*TokenRef)(nil),              // 19: stagehand.host.v1.TokenRef
-	(*Json)(nil),                  // 20: stagehand.host.v1.Json
-	(*timestamppb.Timestamp)(nil), // 21: google.protobuf.Timestamp
-	(*Page)(nil),                  // 22: stagehand.host.v1.Page
-	(*PageInfo)(nil),              // 23: stagehand.host.v1.PageInfo
-	(*emptypb.Empty)(nil),         // 24: google.protobuf.Empty
+	(Node_Status)(0),              // 1: stagehand.host.v1.Node.Status
+	(*Document)(nil),              // 2: stagehand.host.v1.Document
+	(*GetDocumentRequest)(nil),    // 3: stagehand.host.v1.GetDocumentRequest
+	(*PutDocumentRequest)(nil),    // 4: stagehand.host.v1.PutDocumentRequest
+	(*PutDocumentResponse)(nil),   // 5: stagehand.host.v1.PutDocumentResponse
+	(*ListDocumentsRequest)(nil),  // 6: stagehand.host.v1.ListDocumentsRequest
+	(*ListDocumentsResponse)(nil), // 7: stagehand.host.v1.ListDocumentsResponse
+	(*QueryDocumentsRequest)(nil), // 8: stagehand.host.v1.QueryDocumentsRequest
+	(*DeleteDocumentRequest)(nil), // 9: stagehand.host.v1.DeleteDocumentRequest
+	(*SettingsDocument)(nil),      // 10: stagehand.host.v1.SettingsDocument
+	(*SettingsChange)(nil),        // 11: stagehand.host.v1.SettingsChange
+	(*StoreSecretRequest)(nil),    // 12: stagehand.host.v1.StoreSecretRequest
+	(*SecretRef)(nil),             // 13: stagehand.host.v1.SecretRef
+	(*SecretValue)(nil),           // 14: stagehand.host.v1.SecretValue
+	(*Sealed)(nil),                // 15: stagehand.host.v1.Sealed
+	(*IssueTokenRequest)(nil),     // 16: stagehand.host.v1.IssueTokenRequest
+	(*IssuedToken)(nil),           // 17: stagehand.host.v1.IssuedToken
+	(*VerifyTokenRequest)(nil),    // 18: stagehand.host.v1.VerifyTokenRequest
+	(*Principal)(nil),             // 19: stagehand.host.v1.Principal
+	(*TokenRef)(nil),              // 20: stagehand.host.v1.TokenRef
+	(*Node)(nil),                  // 21: stagehand.host.v1.Node
+	(*GetNodeRequest)(nil),        // 22: stagehand.host.v1.GetNodeRequest
+	nil,                           // 23: stagehand.host.v1.Node.FactsEntry
+	(*Json)(nil),                  // 24: stagehand.host.v1.Json
+	(*timestamppb.Timestamp)(nil), // 25: google.protobuf.Timestamp
+	(*Page)(nil),                  // 26: stagehand.host.v1.Page
+	(*PageInfo)(nil),              // 27: stagehand.host.v1.PageInfo
+	(*emptypb.Empty)(nil),         // 28: google.protobuf.Empty
 }
 var file_stagehand_host_v1_host_proto_depIdxs = []int32{
-	20, // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
-	21, // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
-	21, // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
-	20, // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
-	22, // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
-	1,  // 5: stagehand.host.v1.ListDocumentsResponse.documents:type_name -> stagehand.host.v1.Document
-	23, // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
+	24, // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
+	25, // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
+	25, // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
+	24, // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
+	26, // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	2,  // 5: stagehand.host.v1.ListDocumentsResponse.documents:type_name -> stagehand.host.v1.Document
+	27, // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
 	0,  // 7: stagehand.host.v1.QueryDocumentsRequest.op:type_name -> stagehand.host.v1.QueryDocumentsRequest.Op
-	20, // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
-	22, // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
-	20, // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
-	21, // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
-	21, // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
-	2,  // 13: stagehand.host.v1.Documents.Get:input_type -> stagehand.host.v1.GetDocumentRequest
-	3,  // 14: stagehand.host.v1.Documents.Put:input_type -> stagehand.host.v1.PutDocumentRequest
-	5,  // 15: stagehand.host.v1.Documents.List:input_type -> stagehand.host.v1.ListDocumentsRequest
-	7,  // 16: stagehand.host.v1.Documents.Query:input_type -> stagehand.host.v1.QueryDocumentsRequest
-	8,  // 17: stagehand.host.v1.Documents.Delete:input_type -> stagehand.host.v1.DeleteDocumentRequest
-	24, // 18: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
-	24, // 19: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
-	11, // 20: stagehand.host.v1.Secrets.Store:input_type -> stagehand.host.v1.StoreSecretRequest
-	12, // 21: stagehand.host.v1.Secrets.Reveal:input_type -> stagehand.host.v1.SecretRef
-	13, // 22: stagehand.host.v1.Secrets.Seal:input_type -> stagehand.host.v1.SecretValue
-	14, // 23: stagehand.host.v1.Secrets.Open:input_type -> stagehand.host.v1.Sealed
-	12, // 24: stagehand.host.v1.Secrets.Delete:input_type -> stagehand.host.v1.SecretRef
-	15, // 25: stagehand.host.v1.Auth.IssueToken:input_type -> stagehand.host.v1.IssueTokenRequest
-	17, // 26: stagehand.host.v1.Auth.Verify:input_type -> stagehand.host.v1.VerifyTokenRequest
-	19, // 27: stagehand.host.v1.Auth.Revoke:input_type -> stagehand.host.v1.TokenRef
-	1,  // 28: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
-	4,  // 29: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
-	6,  // 30: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
-	6,  // 31: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
-	24, // 32: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
-	9,  // 33: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
-	10, // 34: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
-	12, // 35: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
-	13, // 36: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
-	14, // 37: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
-	13, // 38: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
-	24, // 39: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
-	16, // 40: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
-	18, // 41: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
-	24, // 42: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
-	28, // [28:43] is the sub-list for method output_type
-	13, // [13:28] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	24, // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
+	26, // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	24, // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
+	25, // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
+	25, // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 13: stagehand.host.v1.Node.status:type_name -> stagehand.host.v1.Node.Status
+	23, // 14: stagehand.host.v1.Node.facts:type_name -> stagehand.host.v1.Node.FactsEntry
+	24, // 15: stagehand.host.v1.Node.FactsEntry.value:type_name -> stagehand.host.v1.Json
+	3,  // 16: stagehand.host.v1.Documents.Get:input_type -> stagehand.host.v1.GetDocumentRequest
+	4,  // 17: stagehand.host.v1.Documents.Put:input_type -> stagehand.host.v1.PutDocumentRequest
+	6,  // 18: stagehand.host.v1.Documents.List:input_type -> stagehand.host.v1.ListDocumentsRequest
+	8,  // 19: stagehand.host.v1.Documents.Query:input_type -> stagehand.host.v1.QueryDocumentsRequest
+	9,  // 20: stagehand.host.v1.Documents.Delete:input_type -> stagehand.host.v1.DeleteDocumentRequest
+	28, // 21: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
+	28, // 22: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
+	12, // 23: stagehand.host.v1.Secrets.Store:input_type -> stagehand.host.v1.StoreSecretRequest
+	13, // 24: stagehand.host.v1.Secrets.Reveal:input_type -> stagehand.host.v1.SecretRef
+	14, // 25: stagehand.host.v1.Secrets.Seal:input_type -> stagehand.host.v1.SecretValue
+	15, // 26: stagehand.host.v1.Secrets.Open:input_type -> stagehand.host.v1.Sealed
+	13, // 27: stagehand.host.v1.Secrets.Delete:input_type -> stagehand.host.v1.SecretRef
+	16, // 28: stagehand.host.v1.Auth.IssueToken:input_type -> stagehand.host.v1.IssueTokenRequest
+	18, // 29: stagehand.host.v1.Auth.Verify:input_type -> stagehand.host.v1.VerifyTokenRequest
+	20, // 30: stagehand.host.v1.Auth.Revoke:input_type -> stagehand.host.v1.TokenRef
+	22, // 31: stagehand.host.v1.Inventory.GetNode:input_type -> stagehand.host.v1.GetNodeRequest
+	2,  // 32: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
+	5,  // 33: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
+	7,  // 34: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
+	7,  // 35: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
+	28, // 36: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
+	10, // 37: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
+	11, // 38: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
+	13, // 39: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
+	14, // 40: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
+	15, // 41: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
+	14, // 42: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
+	28, // 43: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
+	17, // 44: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
+	19, // 45: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
+	28, // 46: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
+	21, // 47: stagehand.host.v1.Inventory.GetNode:output_type -> stagehand.host.v1.Node
+	32, // [32:48] is the sub-list for method output_type
+	16, // [16:32] is the sub-list for method input_type
+	16, // [16:16] is the sub-list for extension type_name
+	16, // [16:16] is the sub-list for extension extendee
+	0,  // [0:16] is the sub-list for field type_name
 }
 
 func init() { file_stagehand_host_v1_host_proto_init() }
@@ -1387,10 +1584,10 @@ func file_stagehand_host_v1_host_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stagehand_host_v1_host_proto_rawDesc), len(file_stagehand_host_v1_host_proto_rawDesc)),
-			NumEnums:      1,
-			NumMessages:   19,
+			NumEnums:      2,
+			NumMessages:   22,
 			NumExtensions: 0,
-			NumServices:   4,
+			NumServices:   5,
 		},
 		GoTypes:           file_stagehand_host_v1_host_proto_goTypes,
 		DependencyIndexes: file_stagehand_host_v1_host_proto_depIdxs,

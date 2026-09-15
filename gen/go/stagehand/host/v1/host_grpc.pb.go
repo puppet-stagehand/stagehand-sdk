@@ -881,3 +881,141 @@ var Auth_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "stagehand/host/v1/host.proto",
 }
+
+const (
+	Inventory_GetNode_FullMethodName = "/stagehand.host.v1.Inventory/GetNode"
+)
+
+// InventoryClient is the client API for Inventory service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// --------------------------------------------------------------- Inventory
+// Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
+// below, including OnboardNode. OnboardNode additionally requires the
+// caller to already hold an Auth-issued token verified for scope
+// inventory:approve (checked by the approval/ package in Phase 4, not by
+// this facet) before it is called at all — the facet itself enforces only
+// inventory:rw, uniformly, on every RPC.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
+// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
+// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// membership, no classification, and no onboarding-proposal concept. This
+// shape is designed fresh from this milestone's actual node/facts/groups/
+// classification/onboarding requirements; the reference tree was consulted
+// only for the Node/Group/Class/GroupRef naming, never for RPC/message
+// shape.
+type InventoryClient interface {
+	GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*Node, error)
+}
+
+type inventoryClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewInventoryClient(cc grpc.ClientConnInterface) InventoryClient {
+	return &inventoryClient{cc}
+}
+
+func (c *inventoryClient) GetNode(ctx context.Context, in *GetNodeRequest, opts ...grpc.CallOption) (*Node, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Node)
+	err := c.cc.Invoke(ctx, Inventory_GetNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// InventoryServer is the server API for Inventory service.
+// All implementations must embed UnimplementedInventoryServer
+// for forward compatibility.
+//
+// --------------------------------------------------------------- Inventory
+// Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
+// below, including OnboardNode. OnboardNode additionally requires the
+// caller to already hold an Auth-issued token verified for scope
+// inventory:approve (checked by the approval/ package in Phase 4, not by
+// this facet) before it is called at all — the facet itself enforces only
+// inventory:rw, uniformly, on every RPC.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
+// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
+// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// membership, no classification, and no onboarding-proposal concept. This
+// shape is designed fresh from this milestone's actual node/facts/groups/
+// classification/onboarding requirements; the reference tree was consulted
+// only for the Node/Group/Class/GroupRef naming, never for RPC/message
+// shape.
+type InventoryServer interface {
+	GetNode(context.Context, *GetNodeRequest) (*Node, error)
+	mustEmbedUnimplementedInventoryServer()
+}
+
+// UnimplementedInventoryServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedInventoryServer struct{}
+
+func (UnimplementedInventoryServer) GetNode(context.Context, *GetNodeRequest) (*Node, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetNode not implemented")
+}
+func (UnimplementedInventoryServer) mustEmbedUnimplementedInventoryServer() {}
+func (UnimplementedInventoryServer) testEmbeddedByValue()                   {}
+
+// UnsafeInventoryServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to InventoryServer will
+// result in compilation errors.
+type UnsafeInventoryServer interface {
+	mustEmbedUnimplementedInventoryServer()
+}
+
+func RegisterInventoryServer(s grpc.ServiceRegistrar, srv InventoryServer) {
+	// If the following call panics, it indicates UnimplementedInventoryServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Inventory_ServiceDesc, srv)
+}
+
+func _Inventory_GetNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetNodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).GetNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_GetNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).GetNode(ctx, req.(*GetNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Inventory_ServiceDesc is the grpc.ServiceDesc for Inventory service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Inventory_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "stagehand.host.v1.Inventory",
+	HandlerType: (*InventoryServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetNode",
+			Handler:    _Inventory_GetNode_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "stagehand/host/v1/host.proto",
+}

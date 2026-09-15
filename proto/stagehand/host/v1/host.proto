@@ -73,3 +73,34 @@ message IssuedToken { string token_id = 1; string secret = 2; google.protobuf.Ti
 message VerifyTokenRequest { string secret = 1; string scope = 2; }
 message Principal { string token_id = 1; string label = 2; repeated string scopes = 3; }
 message TokenRef { string token_id = 1; }
+
+// --------------------------------------------------------------- Inventory
+// Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
+// below, including OnboardNode. OnboardNode additionally requires the
+// caller to already hold an Auth-issued token verified for scope
+// inventory:approve (checked by the approval/ package in Phase 4, not by
+// this facet) before it is called at all — the facet itself enforces only
+// inventory:rw, uniformly, on every RPC.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
+// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
+// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// membership, no classification, and no onboarding-proposal concept. This
+// shape is designed fresh from this milestone's actual node/facts/groups/
+// classification/onboarding requirements; the reference tree was consulted
+// only for the Node/Group/Class/GroupRef naming, never for RPC/message
+// shape.
+service Inventory {
+  rpc GetNode(GetNodeRequest) returns (Node);
+}
+
+message Node {
+  string id = 1;               // proposer-chosen at Discover/Propose time (D-04); Inventory never mints its own
+  string display_name = 2;
+  enum Status { STATUS_UNSPECIFIED = 0; DISCOVERED = 1; ONBOARDED = 2; }
+  Status status = 3;
+  string environment = 4;
+  map<string, Json> facts = 5; // flat key-value; PuppetDB-style nested facts deferred to v2 (INV-05)
+}
+message GetNodeRequest { string id = 1; }
