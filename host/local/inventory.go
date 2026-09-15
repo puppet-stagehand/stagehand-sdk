@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"sort"
+	"strconv"
 	"sync"
 
 	"google.golang.org/grpc/codes"
@@ -89,6 +90,87 @@ func (s *inventoryServer) GetNode(ctx context.Context, req *hostv1.GetNodeReques
 		return nil, status.Errorf(codes.NotFound, "no node %q", req.Id)
 	}
 	return cloneNode(n), nil
+}
+
+// pageBounds is a deliberate copy of documentsServer.List's cursor-bounds
+// logic (host/local/documents.go lines 100-137, specifically the guard at
+// lines 110-124) — the one bug in this repo that was already found and
+// fixed once, inline, and never extracted or tested. It is reproduced here
+// verbatim rather than re-derived so the two copies cannot drift silently;
+// a future fix to one must be checked against the other.
+func pageBounds(page *hostv1.Page, total int) (start int, limit int, err error) {
+	start = 0
+	if page != nil && page.Cursor != "" {
+		n, convErr := strconv.Atoi(page.Cursor)
+		if convErr != nil || n < 0 {
+			return 0, 0, status.Errorf(codes.InvalidArgument, "invalid page cursor %q", page.Cursor)
+		}
+		start = n
+	}
+	if start > total {
+		start = total // an out-of-range (too large) cursor degrades to an empty page
+	}
+	limit = 500
+	if page != nil && page.Limit > 0 && page.Limit < 500 {
+		limit = int(page.Limit)
+	}
+	return start, limit, nil
+}
+
+// PutFacts upserts req.Facts into the node's stored fact map one key at a
+// time (D-07) — the stored map is never rebound wholesale to the request's
+// map, because a caller in the discover-then-group-then-onboard flow
+// attaches facts incrementally and must not have to resend everything on
+// each call. A nil or empty req.Facts is a no-op that still returns the
+// node, not an error.
+func (s *inventoryServer) PutFacts(ctx context.Context, req *hostv1.PutFactsRequest) (*hostv1.Node, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	n, ok := s.nodes[req.NodeId]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no node %q", req.NodeId)
+	}
+	if len(req.Facts) > 0 {
+		if n.Facts == nil {
+			n.Facts = map[string]*hostv1.Json{}
+		}
+		for k, v := range req.Facts {
+			n.Facts[k] = v
+		}
+	}
+	return cloneNode(n), nil
+}
+
+// ListNodes returns every node in the store regardless of Status (D-06) — a
+// DISCOVERED candidate is a first-class record that can be grouped and
+// fact-tagged before it is ever onboarded — ordered ascending and stably by
+// id, paginated via pageBounds.
+func (s *inventoryServer) ListNodes(ctx context.Context, req *hostv1.ListNodesRequest) (*hostv1.ListNodesResponse, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	ids := make([]string, 0, len(s.nodes))
+	for id := range s.nodes {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	start, limit, err := pageBounds(req.Page, len(ids))
+	if err != nil {
+		return nil, err
+	}
+
+	nodes := make([]*hostv1.Node, 0, limit)
+	end := start
+	for end < len(ids) && len(nodes) < limit {
+		nodes = append(nodes, cloneNode(s.nodes[ids[end]]))
+		end++
+	}
+	pageInfo := &hostv1.PageInfo{}
+	if end < len(ids) {
+		pageInfo.NextCursor = strconv.Itoa(end)
+	}
+	return &hostv1.ListNodesResponse{Nodes: nodes, Page: pageInfo}, nil
 }
 
 // cloneNode returns a deep copy so a caller mutating the returned node can
