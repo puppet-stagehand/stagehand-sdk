@@ -115,6 +115,13 @@ service Inventory {
 
   // Read-only in v1 (no rule engine, no ancestor-group merging).
   rpc ListClasses(GroupRef) returns (ClassList);
+
+  // OnboardNode takes a proposal_id, never a Node payload (D-01):
+  // host.Local's implementation (Phase 3/4) looks the proposal up via
+  // Documents.Get and refuses unless its status is "approved". Idempotent
+  // (D-02): calling it twice for the same already-approved proposal_id
+  // returns the existing node, not ALREADY_EXISTS.
+  rpc OnboardNode(OnboardNodeRequest) returns (Node);
 }
 
 message Node {
@@ -145,3 +152,5 @@ message GroupMembershipRequest { string node_id = 1; string group_id = 2; }
 
 message Class { string name = 1; Json parameters = 2; }
 message ClassList { repeated Class classes = 1; }
+
+message OnboardNodeRequest { string proposal_id = 1; }

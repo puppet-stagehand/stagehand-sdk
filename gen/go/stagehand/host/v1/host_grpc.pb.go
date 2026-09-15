@@ -893,6 +893,7 @@ const (
 	Inventory_ListNodeGroups_FullMethodName = "/stagehand.host.v1.Inventory/ListNodeGroups"
 	Inventory_AddNodeToGroup_FullMethodName = "/stagehand.host.v1.Inventory/AddNodeToGroup"
 	Inventory_ListClasses_FullMethodName    = "/stagehand.host.v1.Inventory/ListClasses"
+	Inventory_OnboardNode_FullMethodName    = "/stagehand.host.v1.Inventory/OnboardNode"
 )
 
 // InventoryClient is the client API for Inventory service.
@@ -936,6 +937,12 @@ type InventoryClient interface {
 	AddNodeToGroup(ctx context.Context, in *GroupMembershipRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	// Read-only in v1 (no rule engine, no ancestor-group merging).
 	ListClasses(ctx context.Context, in *GroupRef, opts ...grpc.CallOption) (*ClassList, error)
+	// OnboardNode takes a proposal_id, never a Node payload (D-01):
+	// host.Local's implementation (Phase 3/4) looks the proposal up via
+	// Documents.Get and refuses unless its status is "approved". Idempotent
+	// (D-02): calling it twice for the same already-approved proposal_id
+	// returns the existing node, not ALREADY_EXISTS.
+	OnboardNode(ctx context.Context, in *OnboardNodeRequest, opts ...grpc.CallOption) (*Node, error)
 }
 
 type inventoryClient struct {
@@ -1046,6 +1053,16 @@ func (c *inventoryClient) ListClasses(ctx context.Context, in *GroupRef, opts ..
 	return out, nil
 }
 
+func (c *inventoryClient) OnboardNode(ctx context.Context, in *OnboardNodeRequest, opts ...grpc.CallOption) (*Node, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Node)
+	err := c.cc.Invoke(ctx, Inventory_OnboardNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // InventoryServer is the server API for Inventory service.
 // All implementations must embed UnimplementedInventoryServer
 // for forward compatibility.
@@ -1087,6 +1104,12 @@ type InventoryServer interface {
 	AddNodeToGroup(context.Context, *GroupMembershipRequest) (*emptypb.Empty, error)
 	// Read-only in v1 (no rule engine, no ancestor-group merging).
 	ListClasses(context.Context, *GroupRef) (*ClassList, error)
+	// OnboardNode takes a proposal_id, never a Node payload (D-01):
+	// host.Local's implementation (Phase 3/4) looks the proposal up via
+	// Documents.Get and refuses unless its status is "approved". Idempotent
+	// (D-02): calling it twice for the same already-approved proposal_id
+	// returns the existing node, not ALREADY_EXISTS.
+	OnboardNode(context.Context, *OnboardNodeRequest) (*Node, error)
 	mustEmbedUnimplementedInventoryServer()
 }
 
@@ -1126,6 +1149,9 @@ func (UnimplementedInventoryServer) AddNodeToGroup(context.Context, *GroupMember
 }
 func (UnimplementedInventoryServer) ListClasses(context.Context, *GroupRef) (*ClassList, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListClasses not implemented")
+}
+func (UnimplementedInventoryServer) OnboardNode(context.Context, *OnboardNodeRequest) (*Node, error) {
+	return nil, status.Error(codes.Unimplemented, "method OnboardNode not implemented")
 }
 func (UnimplementedInventoryServer) mustEmbedUnimplementedInventoryServer() {}
 func (UnimplementedInventoryServer) testEmbeddedByValue()                   {}
@@ -1328,6 +1354,24 @@ func _Inventory_ListClasses_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Inventory_OnboardNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(OnboardNodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InventoryServer).OnboardNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Inventory_OnboardNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InventoryServer).OnboardNode(ctx, req.(*OnboardNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Inventory_ServiceDesc is the grpc.ServiceDesc for Inventory service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -1374,6 +1418,10 @@ var Inventory_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListClasses",
 			Handler:    _Inventory_ListClasses_Handler,
+		},
+		{
+			MethodName: "OnboardNode",
+			Handler:    _Inventory_OnboardNode_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
