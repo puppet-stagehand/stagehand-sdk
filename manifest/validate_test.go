@@ -81,6 +81,11 @@ func TestRules(t *testing.T) {
 			m.Routes = []Route{{Method: "GET", Path: "/state", Access: Access{Scope: "state:rw"}, OperationID: "getState"}}
 			m.OpenAPIPath = "/stagehand/openapi.json"
 		}, "route_path_invalid"},
+		{"path traversal route path", func(m *Manifest) {
+			m.Permissions = append(m.Permissions, "tokens:issue")
+			m.Routes = []Route{{Method: "GET", Path: "../other-pack/secret", Access: Access{Scope: "state:rw"}, OperationID: "getState"}}
+			m.OpenAPIPath = "/stagehand/openapi.json"
+		}, "route_path_invalid"},
 		{"scope without tokens:issue", func(m *Manifest) {
 			m.Routes = []Route{{Method: "LOCK", Path: "state/{ws}", Access: Access{Scope: "state:rw"}, OperationID: "lockState"}}
 			m.OpenAPIPath = "/stagehand/openapi.json"

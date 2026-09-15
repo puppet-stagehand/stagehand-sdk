@@ -165,8 +165,8 @@ func Validate(m *Manifest) []Finding {
 		if !reMethod.MatchString(r.Method) {
 			add("route_method_invalid", path+"/method", "method must be an uppercase HTTP token", "Use GET, POST, PUT, DELETE, or a custom token such as LOCK.")
 		}
-		if !rePath.MatchString(r.Path) {
-			add("route_path_invalid", path+"/path", "path must be relative (no leading slash) and URL-safe", "Write \"state/{workspace}\" — the host mounts it under /api/v1/x/<id>/.")
+		if !rePath.MatchString(r.Path) || strings.Contains(r.Path, "..") {
+			add("route_path_invalid", path+"/path", "path must be relative (no leading slash), URL-safe, and contain no \"..\" segments", "Write \"state/{workspace}\" — the host mounts it under /api/v1/x/<id>/.")
 		}
 		key := r.Method + " " + r.Path
 		if seenRoute[key] {

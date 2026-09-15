@@ -59,7 +59,7 @@
         "type": "object", "additionalProperties": false, "required": ["method", "path", "access", "operation_id"],
         "properties": {
           "method": { "type": "string", "pattern": "^[A-Z][A-Z-]{0,15}$", "description": "Any HTTP method token (GET, POST, LOCK, UNLOCK, ...)." },
-          "path": { "type": "string", "pattern": "^[^/][A-Za-z0-9_./{}-]*$", "description": "Relative; mounted under /api/v1/x/{id}/." },
+          "path": { "type": "string", "pattern": "^(?!.*\\.\\.)[^/][A-Za-z0-9_./{}-]*$", "description": "Relative; mounted under /api/v1/x/{id}/. No \"..\" segments." },
           "access": {
             "type": "object", "additionalProperties": false,
             "properties": {
