@@ -13,6 +13,127 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 )
 
+func strPtr(s string) *string { return &s }
+func boolPtr(b bool) *bool    { return &b }
+
+// seedDoc writes a document directly through the Documents facet — labelled
+// test scaffolding for collections (code-puppetfiles, code-hiera-hierarchy,
+// code-hiera-data) whose own Code RPCs land in later plans in this phase.
+func seedDoc(t *testing.T, h *host.Host, ctx context.Context, collection, docID string, body map[string]any) {
+	t.Helper()
+	_, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+		Collection: collection, DocId: docID,
+		Body: &hostv1.Json{Value: mustStruct(t, body)},
+	})
+	if err != nil {
+		t.Fatalf("seeding %s/%s: %v", collection, docID, err)
+	}
+}
+
+// getDoc reads a document directly through the Documents facet, reporting
+// whether it exists. Any non-NotFound error fails the test.
+func getDoc(t *testing.T, h *host.Host, ctx context.Context, collection, docID string) (*hostv1.Document, bool) {
+	t.Helper()
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: collection, DocId: docID})
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil, false
+		}
+		t.Fatalf("getting %s/%s: %v", collection, docID, err)
+	}
+	return doc, true
+}
+
+// seedFullEnvironment creates env via the real CreateEnvironment RPC, then
+// seeds a Puppetfile, a Hiera hierarchy, two Hiera data files and a
+// settings sub-object embedded directly in the identity document's body —
+// the full document shape RenameEnvironment, DeleteEnvironment and
+// DuplicateEnvironment must move or copy as a unit. Settings are seeded
+// directly through the Documents facet (not via PutEnvironmentSettings) so
+// this fixture, and the Task 1 tests that use it, stay independent of that
+// RPC's own implementation.
+func seedFullEnvironment(t *testing.T, h *host.Host, ctx context.Context, env string) {
+	t.Helper()
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: env}); err != nil {
+		t.Fatalf("CreateEnvironment(%q): %v", env, err)
+	}
+	seedDoc(t, h, ctx, "code-puppetfiles", env, map[string]any{"text": "mod 'puppetlabs/apache', '5.0.0'\n"})
+	seedDoc(t, h, ctx, "code-hiera-hierarchy", env, map[string]any{"yaml": "version: 5\nhierarchy: []\n"})
+	seedDoc(t, h, ctx, "code-hiera-data", env+"/common.yaml", map[string]any{"path": "common.yaml", "yaml": "foo: bar\n"})
+	seedDoc(t, h, ctx, "code-hiera-data", env+"/nodes/web01.yaml", map[string]any{"path": "nodes/web01.yaml", "yaml": "bar: baz\n"})
+
+	// CreateEnvironment already created the identity document, so
+	// embedding settings into it is an update (IfVersion = its current
+	// version), not a create-only write.
+	identity, ok := getDoc(t, h, ctx, "code-environments", env)
+	if !ok {
+		t.Fatalf("identity document for %q missing right after CreateEnvironment", env)
+	}
+	_, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+		Collection: "code-environments", DocId: env,
+		Body:      &hostv1.Json{Value: mustStruct(t, map[string]any{"name": env, "settings": map[string]any{"modulepath": testSettingsModulepath}})},
+		IfVersion: identity.Version,
+	})
+	if err != nil {
+		t.Fatalf("seeding settings on %q's identity document: %v", env, err)
+	}
+}
+
+// testSettingsModulepath is the fixture modulepath value seedFullEnvironment
+// embeds in every environment it seeds, asserted back by
+// assertEnvDocsPresent.
+const testSettingsModulepath = "modules:$basemodulepath"
+
+// assertEnvDocsPresent asserts every document env owns (per
+// seedFullEnvironment: identity-with-settings, Puppetfile, hierarchy and
+// two Hiera data files) is present, reading the identity document's
+// embedded "settings" sub-object directly through the Documents facet —
+// not via GetEnvironmentSettings — so this assertion stays usable from
+// Task 1's own tests, which predate that RPC's existence.
+func assertEnvDocsPresent(t *testing.T, h *host.Host, ctx context.Context, env string) {
+	t.Helper()
+	if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: env}); err != nil {
+		t.Fatalf("GetEnvironment(%q): %v", env, err)
+	}
+	for _, c := range []struct{ collection, docID string }{
+		{"code-puppetfiles", env},
+		{"code-hiera-hierarchy", env},
+		{"code-hiera-data", env + "/common.yaml"},
+		{"code-hiera-data", env + "/nodes/web01.yaml"},
+	} {
+		if _, ok := getDoc(t, h, ctx, c.collection, c.docID); !ok {
+			t.Fatalf("%s/%s missing, want present", c.collection, c.docID)
+		}
+	}
+	identity, ok := getDoc(t, h, ctx, "code-environments", env)
+	if !ok {
+		t.Fatalf("code-environments/%s missing, want present", env)
+	}
+	settingsRaw, ok := identity.Body.Value.AsMap()["settings"].(map[string]any)
+	if !ok || settingsRaw["modulepath"] != testSettingsModulepath {
+		t.Fatalf("%s identity document settings = %v, want modulepath %q", env, settingsRaw, testSettingsModulepath)
+	}
+}
+
+// assertEnvDocsAbsent asserts none of the six documents seedFullEnvironment
+// wrote for env are present anywhere.
+func assertEnvDocsAbsent(t *testing.T, h *host.Host, ctx context.Context, env string) {
+	t.Helper()
+	if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: env}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetEnvironment(%q) = %v, want codes.NotFound", env, err)
+	}
+	for _, c := range []struct{ collection, docID string }{
+		{"code-puppetfiles", env},
+		{"code-hiera-hierarchy", env},
+		{"code-hiera-data", env + "/common.yaml"},
+		{"code-hiera-data", env + "/nodes/web01.yaml"},
+	} {
+		if _, ok := getDoc(t, h, ctx, c.collection, c.docID); ok {
+			t.Fatalf("%s/%s still present, want absent", c.collection, c.docID)
+		}
+	}
+}
+
 func TestCode_CreateThenGetEnvironment(t *testing.T) {
 	h := local.New([]string{"code:rw"}, "controlrepo")
 	ctx := context.Background()
@@ -433,4 +554,131 @@ func TestCode_DeniedWithoutPermission(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestCode_RenameEnvironment(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	seedFullEnvironment(t, h, ctx, "staging")
+
+	renamed, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "staging", NewName: "qa"})
+	if err != nil {
+		t.Fatalf("RenameEnvironment: %v", err)
+	}
+	if renamed.Name != "qa" {
+		t.Fatalf("renamed.Name = %q, want %q", renamed.Name, "qa")
+	}
+
+	assertEnvDocsPresent(t, h, ctx, "qa")
+	assertEnvDocsAbsent(t, h, ctx, "staging")
+}
+
+// TestCode_RenameRejectsCollisionAndUnknown covers RenameEnvironment's
+// refusal edges: an invalid current or new name, an unknown source, and a
+// target name already in use — each of which must move nothing.
+func TestCode_RenameRejectsCollisionAndUnknown(t *testing.T) {
+	t.Run("invalid_current_name", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		_, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "Not Valid", NewName: "qa"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("RenameEnvironment(invalid current name) = %v, want codes.InvalidArgument", err)
+		}
+	})
+
+	t.Run("invalid_new_name", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "staging"}); err != nil {
+			t.Fatalf("CreateEnvironment: %v", err)
+		}
+		_, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "staging", NewName: "Not Valid"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("RenameEnvironment(invalid new name) = %v, want codes.InvalidArgument", err)
+		}
+		if _, ok := getDoc(t, h, ctx, "code-environments", "staging"); !ok {
+			t.Fatal("staging identity document moved despite invalid new name")
+		}
+	})
+
+	t.Run("unknown_source", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		_, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "does_not_exist", NewName: "qa"})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("RenameEnvironment(unknown source) = %v, want codes.NotFound", err)
+		}
+	})
+
+	t.Run("collision", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		seedFullEnvironment(t, h, ctx, "staging")
+		if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "qa"}); err != nil {
+			t.Fatalf("CreateEnvironment(qa): %v", err)
+		}
+
+		_, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "staging", NewName: "qa"})
+		if status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("RenameEnvironment(collision) = %v, want codes.AlreadyExists", err)
+		}
+		// The source is still fully readable afterwards.
+		assertEnvDocsPresent(t, h, ctx, "staging")
+	})
+}
+
+// TestCode_DeleteEnvironment proves ENV-01's delete removes all six
+// documents an environment owns, and that deleting an unknown name returns
+// codes.NotFound.
+func TestCode_DeleteEnvironment(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	seedFullEnvironment(t, h, ctx, "staging")
+
+	if _, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "staging"}); err != nil {
+		t.Fatalf("DeleteEnvironment: %v", err)
+	}
+	assertEnvDocsAbsent(t, h, ctx, "staging")
+
+	_, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "staging"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteEnvironment(unknown) = %v, want codes.NotFound", err)
+	}
+}
+
+// TestCode_AdjacentEnvironmentNamesAreNotTouched is the load-bearing proof
+// that environment ownership of a code-hiera-data document is decided by
+// the composite doc id's "<name>/" prefix, never by a plain string-prefix
+// match on the name: with both "prod" and "production" present and each
+// carrying a common.yaml data file, deleting or renaming "prod" must leave
+// every one of "production"'s documents present and byte-identical.
+func TestCode_AdjacentEnvironmentNamesAreNotTouched(t *testing.T) {
+	t.Run("delete", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		seedFullEnvironment(t, h, ctx, "prod")
+		seedFullEnvironment(t, h, ctx, "production")
+
+		if _, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "prod"}); err != nil {
+			t.Fatalf("DeleteEnvironment(prod): %v", err)
+		}
+		assertEnvDocsAbsent(t, h, ctx, "prod")
+		assertEnvDocsPresent(t, h, ctx, "production")
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		seedFullEnvironment(t, h, ctx, "prod")
+		seedFullEnvironment(t, h, ctx, "production")
+
+		if _, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "prod", NewName: "qa"}); err != nil {
+			t.Fatalf("RenameEnvironment(prod->qa): %v", err)
+		}
+		assertEnvDocsAbsent(t, h, ctx, "prod")
+		assertEnvDocsPresent(t, h, ctx, "qa")
+		assertEnvDocsPresent(t, h, ctx, "production")
+	})
 }

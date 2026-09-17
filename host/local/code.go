@@ -211,6 +211,181 @@ func (s *codeServer) ListEnvironments(ctx context.Context, req *hostv1.ListEnvir
 	return &hostv1.ListEnvironmentsResponse{Environments: envs, Page: pageInfo}, nil
 }
 
+// docRef names one document by its collection and doc id. It is the unit
+// envOwnedDocsLocked returns and the unit the rename/delete/duplicate
+// two-pass shape plans over.
+type docRef struct {
+	collection string
+	docID      string
+}
+
+// envOwnedDocsLocked resolves every document environment env owns, per
+// <ownership_contract>: the single document whose doc id equals env in each
+// of code-environments, code-puppetfiles and code-hiera-hierarchy when
+// present, plus every code-hiera-data document whose composite doc id's
+// environment segment — decided by hieraDataEnvAndPath's first-"/" split,
+// never by a plain strings.HasPrefix — equals env. This is the single place
+// environment-to-document ownership is decided; RenameEnvironment,
+// DeleteEnvironment and DuplicateEnvironment all read it here instead of
+// re-deriving it. The caller must already hold s.docs.mu.
+func (s *codeServer) envOwnedDocsLocked(env string) []docRef {
+	var refs []docRef
+	for _, coll := range []string{envCollection, puppetfileCollection, hieraHierarchyCollection} {
+		if _, ok := s.docs.getLocked(coll, env); ok {
+			refs = append(refs, docRef{collection: coll, docID: env})
+		}
+	}
+	for _, id := range s.docs.idsLocked(hieraDataCollection) {
+		if docEnv, _, ok := hieraDataEnvAndPath(id); ok && docEnv == env {
+			refs = append(refs, docRef{collection: hieraDataCollection, docID: id})
+		}
+	}
+	return refs
+}
+
+// targetInUseLocked reports whether any document already exists under name
+// in any of the four Code collections — the collision check
+// RenameEnvironment and DuplicateEnvironment both run in pass 1, before
+// planning a single write, per D-05. The caller must already hold
+// s.docs.mu.
+func (s *codeServer) targetInUseLocked(name string) bool {
+	for _, coll := range []string{envCollection, puppetfileCollection, hieraHierarchyCollection} {
+		if _, ok := s.docs.getLocked(coll, name); ok {
+			return true
+		}
+	}
+	for _, id := range s.docs.idsLocked(hieraDataCollection) {
+		if docEnv, _, ok := hieraDataEnvAndPath(id); ok && docEnv == name {
+			return true
+		}
+	}
+	return false
+}
+
+// plannedDocWrite is one document RenameEnvironment or DuplicateEnvironment
+// plans to write under a target environment name, built in pass 1 and
+// applied unconditionally in pass 2 (<ownership_contract>'s two-pass
+// decide-then-apply shape) — no error is reachable in pass 2 because pass 1
+// already proved the target absent in every collection.
+type plannedDocWrite struct {
+	collection string
+	docID      string
+	body       *hostv1.Json
+}
+
+// planRekeyedWritesLocked reads every document refs names and rebuilds each
+// one's body and doc id as it would look under targetEnv: the identity
+// document's "name" field is rewritten and its doc id becomes targetEnv,
+// the Puppetfile and hierarchy documents keep their bodies unchanged and
+// move to doc id targetEnv, and each code-hiera-data document is re-keyed
+// through hieraDataKey(targetEnv, path) — the matched constructor for the
+// composite key hieraDataEnvAndPath deconstructs. Every body is
+// proto.Clone'd so the rekeyed write and the source document never share a
+// *hostv1.Json value (T-06-25: a later edit to one must never change the
+// other). The caller must already hold s.docs.mu.
+func (s *codeServer) planRekeyedWritesLocked(refs []docRef, targetEnv string) ([]plannedDocWrite, error) {
+	writes := make([]plannedDocWrite, 0, len(refs))
+	for _, ref := range refs {
+		doc, ok := s.docs.getLocked(ref.collection, ref.docID)
+		if !ok {
+			return nil, status.Errorf(codes.Internal, "document %s/%s vanished mid-operation", ref.collection, ref.docID)
+		}
+		body := proto.Clone(doc.Body).(*hostv1.Json)
+		newDocID := targetEnv
+
+		switch ref.collection {
+		case envCollection:
+			m := body.Value.AsMap()
+			m["name"] = targetEnv
+			st, err := structpb.NewStruct(m)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "rebuilding identity document for %q: %v", targetEnv, err)
+			}
+			body = &hostv1.Json{Value: st}
+		case hieraDataCollection:
+			_, path, ok := hieraDataEnvAndPath(ref.docID)
+			if !ok {
+				return nil, status.Errorf(codes.Internal, "hiera data doc id %q has no environment separator", ref.docID)
+			}
+			newDocID = hieraDataKey(targetEnv, path)
+		}
+		writes = append(writes, plannedDocWrite{collection: ref.collection, docID: newDocID, body: body})
+	}
+	return writes, nil
+}
+
+// RenameEnvironment validates both names against D-04 before taking any
+// lock, then moves every document req.Name owns to req.NewName under a
+// single s.docs.mu acquisition: pass 1 confirms the source exists and the
+// target is absent everywhere (D-05), pass 2 writes every rekeyed document
+// with the create-only helper and deletes every source document. Neither
+// pass calls a documentsServer gRPC method — only the lock-free *Locked
+// helpers — so the whole move is indivisible.
+func (s *codeServer) RenameEnvironment(ctx context.Context, req *hostv1.RenameEnvironmentRequest) (*hostv1.Environment, error) {
+	if err := validateEnvName(req.Name); err != nil {
+		return nil, err
+	}
+	if err := validateEnvName(req.NewName); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Name); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Name)
+	}
+	if s.targetInUseLocked(req.NewName) {
+		return nil, status.Errorf(codes.AlreadyExists, "environment %q already exists", req.NewName)
+	}
+
+	refs := s.envOwnedDocsLocked(req.Name)
+	writes, err := s.planRekeyedWritesLocked(refs, req.NewName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range writes {
+		if _, err := s.docs.putLocked(w.collection, w.docID, w.body, true); err != nil {
+			return nil, status.Errorf(codes.Internal, "rename: writing %s/%s: %v", w.collection, w.docID, err)
+		}
+	}
+	for _, ref := range refs {
+		s.docs.deleteLocked(ref.collection, ref.docID)
+	}
+
+	doc, ok := s.docs.getLocked(envCollection, req.NewName)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "renamed environment %q vanished immediately", req.NewName)
+	}
+	env, err := environmentFromDoc(doc)
+	if err != nil {
+		return nil, err
+	}
+	return cloneEnvironment(env), nil
+}
+
+// DeleteEnvironment removes every document req.Name owns — its identity
+// document plus its Puppetfile, hierarchy and Hiera data documents when
+// present — under a single s.docs.mu acquisition. An unknown name returns
+// codes.NotFound and deletes nothing.
+func (s *codeServer) DeleteEnvironment(ctx context.Context, req *hostv1.DeleteEnvironmentRequest) (*emptypb.Empty, error) {
+	if err := validateEnvName(req.Name); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Name); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Name)
+	}
+	for _, ref := range s.envOwnedDocsLocked(req.Name) {
+		s.docs.deleteLocked(ref.collection, ref.docID)
+	}
+	return &emptypb.Empty{}, nil
+}
+
 // gatedCode wraps codeServer with the code:rw permission check every one of
 // the 22 Code RPCs requires, including the read-only ones — there is no
 // narrower per-RPC permission and no read-only exemption. Unlike Documents
