@@ -682,3 +682,235 @@ func TestCode_AdjacentEnvironmentNamesAreNotTouched(t *testing.T) {
 		assertEnvDocsPresent(t, h, ctx, "production")
 	})
 }
+
+// TestCode_SettingsUnwrittenFieldsAreAbsent asserts each of the seven
+// setting fields individually by name for a never-configured environment,
+// rather than comparing against a zero-value struct, so a future eighth
+// field added without presence handling fails here instead of passing
+// silently.
+func TestCode_SettingsUnwrittenFieldsAreAbsent(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	settings, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings: %v", err)
+	}
+	if settings.Environment != "production" {
+		t.Fatalf("Environment = %q, want %q", settings.Environment, "production")
+	}
+	if settings.Modulepath != nil {
+		t.Fatalf("Modulepath = %v, want nil", settings.Modulepath)
+	}
+	if settings.Manifest != nil {
+		t.Fatalf("Manifest = %v, want nil", settings.Manifest)
+	}
+	if settings.ConfigVersion != nil {
+		t.Fatalf("ConfigVersion = %v, want nil", settings.ConfigVersion)
+	}
+	if settings.EnvironmentTimeout != nil {
+		t.Fatalf("EnvironmentTimeout = %v, want nil", settings.EnvironmentTimeout)
+	}
+	if settings.DisablePerEnvironmentManifest != nil {
+		t.Fatalf("DisablePerEnvironmentManifest = %v, want nil", settings.DisablePerEnvironmentManifest)
+	}
+	if settings.StaticCatalogs != nil {
+		t.Fatalf("StaticCatalogs = %v, want nil", settings.StaticCatalogs)
+	}
+	if settings.RichData != nil {
+		t.Fatalf("RichData = %v, want nil", settings.RichData)
+	}
+
+	_, err = h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "does_not_exist"})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("GetEnvironmentSettings(unknown) = %v, want codes.NotFound", err)
+	}
+}
+
+// TestCode_SettingsRoundTrip proves PutEnvironmentSettings replaces the
+// whole record rather than merging: a field written as the empty string
+// reads back present-and-empty (distinct from absent), and a field set by
+// an earlier put and absent from a later one reads back absent.
+func TestCode_SettingsRoundTrip(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	first, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+		Settings: &hostv1.EnvironmentSettings{
+			Environment: "production",
+			Modulepath:  strPtr("modules:$basemodulepath"),
+			RichData:    boolPtr(true),
+		},
+	})
+	if err != nil {
+		t.Fatalf("PutEnvironmentSettings(first): %v", err)
+	}
+	if first.Modulepath == nil || *first.Modulepath != "modules:$basemodulepath" {
+		t.Fatalf("first.Modulepath = %v, want %q", first.Modulepath, "modules:$basemodulepath")
+	}
+	if first.RichData == nil || *first.RichData != true {
+		t.Fatalf("first.RichData = %v, want true", first.RichData)
+	}
+	if first.Manifest != nil {
+		t.Fatalf("first.Manifest = %v, want nil", first.Manifest)
+	}
+
+	got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings: %v", err)
+	}
+	if got.Modulepath == nil || *got.Modulepath != "modules:$basemodulepath" {
+		t.Fatalf("got.Modulepath = %v, want %q", got.Modulepath, "modules:$basemodulepath")
+	}
+	if got.RichData == nil || *got.RichData != true {
+		t.Fatalf("got.RichData = %v, want true", got.RichData)
+	}
+
+	// manifest stored as the empty string reads back present-and-empty,
+	// distinguishable from absent.
+	second, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+		Settings: &hostv1.EnvironmentSettings{
+			Environment: "production",
+			Manifest:    strPtr(""),
+		},
+	})
+	if err != nil {
+		t.Fatalf("PutEnvironmentSettings(second): %v", err)
+	}
+	if second.Manifest == nil || *second.Manifest != "" {
+		t.Fatalf("second.Manifest = %v, want present-and-empty", second.Manifest)
+	}
+	// A field set by the first call and absent from the second reads back
+	// absent — the whole record was replaced, not merged.
+	if second.Modulepath != nil {
+		t.Fatalf("second.Modulepath = %v, want nil (whole record replaced, not merged)", second.Modulepath)
+	}
+	if second.RichData != nil {
+		t.Fatalf("second.RichData = %v, want nil (whole record replaced, not merged)", second.RichData)
+	}
+
+	reread, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings after second put: %v", err)
+	}
+	if reread.Manifest == nil || *reread.Manifest != "" {
+		t.Fatalf("reread.Manifest = %v, want present-and-empty", reread.Manifest)
+	}
+	if reread.Modulepath != nil {
+		t.Fatalf("reread.Modulepath = %v, want nil", reread.Modulepath)
+	}
+
+	_, err = h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+		Settings: &hostv1.EnvironmentSettings{Environment: "does_not_exist", Modulepath: strPtr("x")},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("PutEnvironmentSettings(unknown environment) = %v, want codes.NotFound", err)
+	}
+}
+
+// TestCode_SettingsRefusesNewlineValue proves PutEnvironmentSettings
+// refuses, with codes.InvalidArgument and no write, any string value
+// carrying a carriage return or line feed — such a value would, once
+// written to a real environment.conf, split into an additional unauthored
+// setting line (T-06-02).
+func TestCode_SettingsRefusesNewlineValue(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+	}{
+		{"line_feed_in_modulepath", "modules\nmalicious = true"},
+		{"carriage_return_in_modulepath", "modules\rmalicious = true"},
+		{"line_feed_in_environment_timeout", "5m\nmalicious = true"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := local.New([]string{"code:rw"}, "controlrepo")
+			ctx := context.Background()
+			if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+				t.Fatalf("CreateEnvironment: %v", err)
+			}
+
+			settings := &hostv1.EnvironmentSettings{Environment: "production"}
+			if strings.Contains(tc.name, "environment_timeout") {
+				settings.EnvironmentTimeout = strPtr(tc.value)
+			} else {
+				settings.Modulepath = strPtr(tc.value)
+			}
+
+			_, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{Settings: settings})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("PutEnvironmentSettings(%s) = %v, want codes.InvalidArgument", tc.name, err)
+			}
+
+			got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+			if err != nil {
+				t.Fatalf("GetEnvironmentSettings after refused put: %v", err)
+			}
+			if got.Modulepath != nil || got.EnvironmentTimeout != nil {
+				t.Fatalf("settings stored after refused put: Modulepath=%v EnvironmentTimeout=%v", got.Modulepath, got.EnvironmentTimeout)
+			}
+		})
+	}
+}
+
+// TestCode_SettingsTimeoutIsOpaqueText proves environment_timeout's three
+// documented forms — "0", "unlimited" and a duration like "5m" — all store
+// and read back byte-identical, with no numeric parsing applied.
+func TestCode_SettingsTimeoutIsOpaqueText(t *testing.T) {
+	for _, value := range []string{"0", "unlimited", "5m"} {
+		t.Run(value, func(t *testing.T) {
+			h := local.New([]string{"code:rw"}, "controlrepo")
+			ctx := context.Background()
+			if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+				t.Fatalf("CreateEnvironment: %v", err)
+			}
+			if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+				Settings: &hostv1.EnvironmentSettings{Environment: "production", EnvironmentTimeout: strPtr(value)},
+			}); err != nil {
+				t.Fatalf("PutEnvironmentSettings(%q): %v", value, err)
+			}
+			got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+			if err != nil {
+				t.Fatalf("GetEnvironmentSettings: %v", err)
+			}
+			if got.EnvironmentTimeout == nil || *got.EnvironmentTimeout != value {
+				t.Fatalf("EnvironmentTimeout = %v, want %q", got.EnvironmentTimeout, value)
+			}
+		})
+	}
+
+	// A very long modulepath value survives storage and retrieval without
+	// truncation.
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	long := strings.Repeat("modules/path-segment:", 500)
+	if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+		Settings: &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr(long)},
+	}); err != nil {
+		t.Fatalf("PutEnvironmentSettings(long modulepath): %v", err)
+	}
+	got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings: %v", err)
+	}
+	if got.Modulepath == nil || *got.Modulepath != long {
+		t.Fatalf("long modulepath round-trip mismatch: got len %d, want len %d", len(strDeref(got.Modulepath)), len(long))
+	}
+}
+
+func strDeref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}

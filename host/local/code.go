@@ -2,15 +2,19 @@ package local
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"regexp"
 	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/puppet-stagehand/stagehand-sdk/code"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
 
@@ -384,6 +388,151 @@ func (s *codeServer) DeleteEnvironment(ctx context.Context, req *hostv1.DeleteEn
 		s.docs.deleteLocked(ref.collection, ref.docID)
 	}
 	return &emptypb.Empty{}, nil
+}
+
+// settingsFromDoc reads the "settings" sub-object out of a stored
+// code-environments Document body into a *hostv1.EnvironmentSettings. When
+// the key is absent, or present as an empty object, every setting field
+// stays unset — D-06's absent-stays-absent guarantee. The round trip goes
+// through protojson rather than hand-mapped fields so proto3 explicit
+// presence (optional) is preserved in both directions: protojson omits an
+// unset field from its JSON entirely and leaves it unset on decode.
+func settingsFromDoc(d *hostv1.Document, env string) (*hostv1.EnvironmentSettings, error) {
+	settings := &hostv1.EnvironmentSettings{}
+	if d != nil && d.Body != nil && d.Body.Value != nil {
+		if raw, ok := d.Body.Value.AsMap()["settings"]; ok {
+			if settingsMap, ok := raw.(map[string]any); ok && len(settingsMap) > 0 {
+				data, err := json.Marshal(settingsMap)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "marshaling stored settings for %q: %v", env, err)
+				}
+				if err := protojson.Unmarshal(data, settings); err != nil {
+					return nil, status.Errorf(codes.Internal, "decoding stored settings for %q: %v", env, err)
+				}
+			}
+		}
+	}
+	settings.Environment = env
+	return settings, nil
+}
+
+// settingsIntoBody produces the updated code-environments Document body for
+// a PutEnvironmentSettings write: existing's "name" field is preserved
+// unchanged, and its "settings" sub-object is wholly replaced (never
+// merged) with protojson's rendering of s, with Environment cleared first —
+// the environment name lives in the document's key and its "name" field, so
+// storing a third copy inside "settings" would be a value that can disagree
+// with itself.
+func settingsIntoBody(existing *hostv1.Json, s *hostv1.EnvironmentSettings) (*hostv1.Json, error) {
+	var name string
+	if existing != nil && existing.Value != nil {
+		if n, ok := existing.Value.AsMap()["name"].(string); ok {
+			name = n
+		}
+	}
+
+	clone := proto.Clone(s).(*hostv1.EnvironmentSettings)
+	clone.Environment = ""
+	data, err := protojson.Marshal(clone)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "marshaling settings: %v", err)
+	}
+	var settingsMap map[string]any
+	if err := json.Unmarshal(data, &settingsMap); err != nil {
+		return nil, status.Errorf(codes.Internal, "decoding settings json: %v", err)
+	}
+
+	st, err := structpb.NewStruct(map[string]any{
+		"name":     name,
+		"settings": settingsMap,
+	})
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "building environment document body: %v", err)
+	}
+	return &hostv1.Json{Value: st}, nil
+}
+
+// GetEnvironmentSettings validates the name, fetches the identity document
+// or returns codes.NotFound, and returns settingsFromDoc's result — a
+// never-configured environment's seven setting fields are all absent,
+// never Puppet's documented defaults (D-06).
+func (s *codeServer) GetEnvironmentSettings(ctx context.Context, req *hostv1.GetEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	doc, ok := s.docs.getLocked(envCollection, req.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+	settings, err := settingsFromDoc(doc, req.Environment)
+	if err != nil {
+		return nil, err
+	}
+	return proto.Clone(settings).(*hostv1.EnvironmentSettings), nil
+}
+
+// PutEnvironmentSettings replaces an environment's whole settings record.
+// Before storing anything it renders req.Settings to environment.conf text
+// via code.RenderEnvConf, re-parses that text via code.ParseEnvConf, and
+// refuses with codes.InvalidArgument unless the two are proto.Equal (with
+// Environment cleared on both sides, since environment.conf text carries no
+// environment name) — a record that cannot survive that cycle unchanged
+// would, the moment it reached a real environment.conf, forge an additional
+// unauthored setting line (T-06-02). This also keeps environment_timeout
+// opaque text: nothing in this path parses it as a number.
+func (s *codeServer) PutEnvironmentSettings(ctx context.Context, req *hostv1.PutEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	if req.Settings == nil {
+		return nil, status.Error(codes.InvalidArgument, "settings is required")
+	}
+	if err := validateEnvName(req.Settings.Environment); err != nil {
+		return nil, err
+	}
+
+	rendered, err := code.RenderEnvConf(req.Settings)
+	if err != nil {
+		if errors.Is(err, code.ErrEnvConfInvalid) {
+			return nil, status.Errorf(codes.InvalidArgument, "settings cannot be written to environment.conf: %v", err)
+		}
+		return nil, status.Errorf(codes.Internal, "rendering settings: %v", err)
+	}
+	reparsed, err := code.ParseEnvConf(rendered)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "re-parsing rendered settings: %v", err)
+	}
+	want := proto.Clone(req.Settings).(*hostv1.EnvironmentSettings)
+	want.Environment = ""
+	reparsed.Environment = ""
+	if !proto.Equal(want, reparsed) {
+		return nil, status.Error(codes.InvalidArgument, "settings do not survive an environment.conf render/re-parse cycle unchanged")
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	doc, ok := s.docs.getLocked(envCollection, req.Settings.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Settings.Environment)
+	}
+	body, err := settingsIntoBody(doc.Body, req.Settings)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.docs.putLocked(envCollection, req.Settings.Environment, body, false); err != nil {
+		return nil, err
+	}
+	stored, ok := s.docs.getLocked(envCollection, req.Settings.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "environment %q vanished immediately after settings write", req.Settings.Environment)
+	}
+	result, err := settingsFromDoc(stored, req.Settings.Environment)
+	if err != nil {
+		return nil, err
+	}
+	return proto.Clone(result).(*hostv1.EnvironmentSettings), nil
 }
 
 // gatedCode wraps codeServer with the code:rw permission check every one of
