@@ -535,6 +535,56 @@ func (s *codeServer) PutEnvironmentSettings(ctx context.Context, req *hostv1.Put
 	return proto.Clone(result).(*hostv1.EnvironmentSettings), nil
 }
 
+// DuplicateEnvironment validates both names against D-04 before taking any
+// lock, then copies every document req.SourceName owns to req.TargetName
+// under a single s.docs.mu acquisition: pass 1 confirms the source exists
+// and the target is absent everywhere (D-05), pass 2 writes every rekeyed,
+// deep-copied document with the create-only helper. No Documents gRPC
+// method is ever called from inside the locked section, and the lock is
+// never released between the two passes — nothing can appear at the target
+// in between, so a concurrent reader observes either the complete copy or
+// nothing (T-06-05).
+func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.DuplicateEnvironmentRequest) (*hostv1.Environment, error) {
+	if err := validateEnvName(req.SourceName); err != nil {
+		return nil, err
+	}
+	if err := validateEnvName(req.TargetName); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.SourceName); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.SourceName)
+	}
+	if s.targetInUseLocked(req.TargetName) {
+		return nil, status.Errorf(codes.AlreadyExists, "environment %q already exists", req.TargetName)
+	}
+
+	refs := s.envOwnedDocsLocked(req.SourceName)
+	writes, err := s.planRekeyedWritesLocked(refs, req.TargetName)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, w := range writes {
+		if _, err := s.docs.putLocked(w.collection, w.docID, w.body, true); err != nil {
+			return nil, status.Errorf(codes.Internal, "duplicate: writing %s/%s: %v", w.collection, w.docID, err)
+		}
+	}
+
+	doc, ok := s.docs.getLocked(envCollection, req.TargetName)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "duplicated environment %q vanished immediately", req.TargetName)
+	}
+	env, err := environmentFromDoc(doc)
+	if err != nil {
+		return nil, err
+	}
+	return cloneEnvironment(env), nil
+}
+
 // gatedCode wraps codeServer with the code:rw permission check every one of
 // the 22 Code RPCs requires, including the read-only ones — there is no
 // narrower per-RPC permission and no read-only exemption. Unlike Documents

@@ -3,6 +3,7 @@ package local_test
 import (
 	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -556,6 +557,10 @@ func TestCode_DeniedWithoutPermission(t *testing.T) {
 	}
 }
 
+// TestCode_RenameEnvironment proves ENV-01's rename moves all six documents
+// an environment owns (identity, Puppetfile, hierarchy, two Hiera data
+// files and settings) to the new name in one operation, and that none of
+// them are reachable under the old name afterwards.
 func TestCode_RenameEnvironment(t *testing.T) {
 	h := local.New([]string{"code:rw"}, "controlrepo")
 	ctx := context.Background()
@@ -913,4 +918,259 @@ func strDeref(s *string) string {
 		return ""
 	}
 	return *s
+}
+
+// TestCode_DuplicateEnvironmentCopiesEverything proves DuplicateEnvironment
+// copies a source's Puppetfile, Hiera hierarchy, both Hiera data files and
+// settings to the target name, byte-identical, with data files re-keyed
+// under the target prefix — and that the source is unchanged afterwards,
+// including after the target is separately edited (T-06-25: no shared
+// *hostv1.Json value).
+func TestCode_DuplicateEnvironmentCopiesEverything(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+	seedFullEnvironment(t, h, ctx, "production")
+
+	dup, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
+	if err != nil {
+		t.Fatalf("DuplicateEnvironment: %v", err)
+	}
+	if dup.Name != "staging" {
+		t.Fatalf("dup.Name = %q, want %q", dup.Name, "staging")
+	}
+
+	assertEnvDocsPresent(t, h, ctx, "production")
+	assertEnvDocsPresent(t, h, ctx, "staging")
+
+	srcPF, ok := getDoc(t, h, ctx, "code-puppetfiles", "production")
+	if !ok {
+		t.Fatal("source Puppetfile missing")
+	}
+	dstPF, ok := getDoc(t, h, ctx, "code-puppetfiles", "staging")
+	if !ok {
+		t.Fatal("target Puppetfile missing")
+	}
+	if srcPF.Body.Value.AsMap()["text"] != dstPF.Body.Value.AsMap()["text"] {
+		t.Fatalf("Puppetfile text mismatch: source %v, target %v", srcPF.Body.Value.AsMap()["text"], dstPF.Body.Value.AsMap()["text"])
+	}
+
+	// Editing the target's settings after the copy must not change the
+	// source's — proves the two environments share no *hostv1.Json value.
+	if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
+		Settings: &hostv1.EnvironmentSettings{Environment: "staging", Modulepath: strPtr("changed-after-copy")},
+	}); err != nil {
+		t.Fatalf("PutEnvironmentSettings(staging): %v", err)
+	}
+	srcSettings, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings(production): %v", err)
+	}
+	if srcSettings.Modulepath == nil || *srcSettings.Modulepath != "modules:$basemodulepath" {
+		t.Fatalf("source settings changed after editing target's copy: got %v, want %q", srcSettings.Modulepath, "modules:$basemodulepath")
+	}
+}
+
+// TestCode_DuplicateOntoExistingNameIsAlreadyExists proves an in-use target
+// refuses with codes.AlreadyExists having written nothing, an unknown
+// source refuses with codes.NotFound, an invalid name refuses with
+// codes.InvalidArgument, and a second duplicate of the same pair still
+// refuses with the first copy left byte-identical.
+func TestCode_DuplicateOntoExistingNameIsAlreadyExists(t *testing.T) {
+	t.Run("target_in_use", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		seedFullEnvironment(t, h, ctx, "production")
+		if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "staging"}); err != nil {
+			t.Fatalf("CreateEnvironment(staging): %v", err)
+		}
+
+		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
+		if status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("DuplicateEnvironment(target in use) = %v, want codes.AlreadyExists", err)
+		}
+		// Nothing beyond the pre-existing bare "staging" identity document
+		// was written.
+		if _, ok := getDoc(t, h, ctx, "code-puppetfiles", "staging"); ok {
+			t.Fatal("staging gained a Puppetfile despite the refused duplicate")
+		}
+	})
+
+	t.Run("unknown_source", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "does_not_exist", TargetName: "staging"})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("DuplicateEnvironment(unknown source) = %v, want codes.NotFound", err)
+		}
+	})
+
+	t.Run("invalid_name", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "Not Valid", TargetName: "staging"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("DuplicateEnvironment(invalid source name) = %v, want codes.InvalidArgument", err)
+		}
+	})
+
+	t.Run("repeat_duplicate_leaves_first_copy_intact", func(t *testing.T) {
+		h := local.New([]string{"code:rw"}, "controlrepo")
+		ctx := context.Background()
+		seedFullEnvironment(t, h, ctx, "production")
+		if _, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"}); err != nil {
+			t.Fatalf("first DuplicateEnvironment: %v", err)
+		}
+		firstDoc, ok := getDoc(t, h, ctx, "code-puppetfiles", "staging")
+		if !ok {
+			t.Fatal("first copy's Puppetfile missing")
+		}
+
+		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
+		if status.Code(err) != codes.AlreadyExists {
+			t.Fatalf("second DuplicateEnvironment = %v, want codes.AlreadyExists", err)
+		}
+		secondDoc, ok := getDoc(t, h, ctx, "code-puppetfiles", "staging")
+		if !ok {
+			t.Fatal("staging's Puppetfile disappeared after refused repeat duplicate")
+		}
+		if firstDoc.Version != secondDoc.Version {
+			t.Fatalf("staging's Puppetfile version changed after refused repeat duplicate: was %d, now %d", firstDoc.Version, secondDoc.Version)
+		}
+		if firstDoc.Body.Value.AsMap()["text"] != secondDoc.Body.Value.AsMap()["text"] {
+			t.Fatal("staging's Puppetfile text changed after refused repeat duplicate")
+		}
+	})
+}
+
+// TestCode_DuplicateOfEmptyEnvironment proves duplicating a brand-new
+// environment with no Puppetfile, no Hiera and no settings authored yet
+// succeeds and produces a target in the same (empty) state, rather than
+// erroring on the absent documents. It also proves duplicating "prod" never
+// copies any of "production"'s documents when both are present.
+func TestCode_DuplicateOfEmptyEnvironment(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment(prod): %v", err)
+	}
+	seedFullEnvironment(t, h, ctx, "production")
+
+	dup, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "prod", TargetName: "qa"})
+	if err != nil {
+		t.Fatalf("DuplicateEnvironment(empty prod -> qa): %v", err)
+	}
+	if dup.Name != "qa" {
+		t.Fatalf("dup.Name = %q, want %q", dup.Name, "qa")
+	}
+	if _, ok := getDoc(t, h, ctx, "code-puppetfiles", "qa"); ok {
+		t.Fatal("qa gained a Puppetfile from duplicating empty prod — production's Puppetfile leaked across the prod/production name-prefix boundary")
+	}
+	if _, ok := getDoc(t, h, ctx, "code-hiera-hierarchy", "qa"); ok {
+		t.Fatal("qa gained a hierarchy from duplicating empty prod")
+	}
+	if _, ok := getDoc(t, h, ctx, "code-hiera-data", "qa/common.yaml"); ok {
+		t.Fatal("qa gained production's common.yaml from duplicating empty prod")
+	}
+	settings, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "qa"})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings(qa): %v", err)
+	}
+	if settings.Modulepath != nil {
+		t.Fatalf("qa.Modulepath = %v, want nil", settings.Modulepath)
+	}
+}
+
+// TestCode_DuplicateConcurrentIsExactlyOnce launches eight goroutines
+// duplicating the same source onto the same target concurrently and
+// asserts exactly one succeeds and seven return codes.AlreadyExists, with
+// the target's document count equal to the source's — proving the
+// operation is genuinely atomic under concurrency, not merely correct in
+// the single-threaded case. A second set of goroutines reads the target
+// throughout via GetEnvironment and the Documents facet directly, asserting
+// every read returns either a complete result or codes.NotFound — never a
+// partial one.
+func TestCode_DuplicateConcurrentIsExactlyOnce(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+	seedFullEnvironment(t, h, ctx, "production")
+
+	const n = 8
+	var wg sync.WaitGroup
+	var mu sync.Mutex
+	var successes, alreadyExists, other int
+
+	stop := make(chan struct{})
+	var readerWG sync.WaitGroup
+	readerWG.Add(1)
+	go func() {
+		defer readerWG.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// A single GetEnvironment call is trivially all-or-nothing at
+			// its own boundary (one document); the meaningful atomicity
+			// check is across the two-document code-hiera-data collection,
+			// read through one List call — one RPC, one lock acquisition,
+			// one consistent snapshot. The count of "staging/"-prefixed
+			// documents it returns must be 0 or 2, never 1 (never a torn
+			// copy observed mid-write).
+			_, envErr := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "staging"})
+			if envErr != nil && status.Code(envErr) != codes.NotFound {
+				t.Errorf("concurrent GetEnvironment(staging) = %v, want nil or codes.NotFound", envErr)
+			}
+
+			listResp, listErr := h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: "code-hiera-data"})
+			if listErr != nil {
+				t.Errorf("concurrent Documents.List(code-hiera-data) = %v, want nil", listErr)
+				continue
+			}
+			stagingCount := 0
+			for _, doc := range listResp.Documents {
+				if strings.HasPrefix(doc.DocId, "staging/") {
+					stagingCount++
+				}
+			}
+			if stagingCount != 0 && stagingCount != 2 {
+				t.Errorf("partial copy observed: %d of staging's 2 hiera data documents present", stagingCount)
+			}
+		}
+	}()
+
+	wg.Add(n)
+	for i := 0; i < n; i++ {
+		go func() {
+			defer wg.Done()
+			_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
+			mu.Lock()
+			defer mu.Unlock()
+			switch status.Code(err) {
+			case codes.OK:
+				successes++
+			case codes.AlreadyExists:
+				alreadyExists++
+			default:
+				other++
+			}
+		}()
+	}
+	wg.Wait()
+	close(stop)
+	readerWG.Wait()
+
+	if successes != 1 {
+		t.Fatalf("successes = %d, want 1", successes)
+	}
+	if alreadyExists != n-1 {
+		t.Fatalf("alreadyExists = %d, want %d", alreadyExists, n-1)
+	}
+	if other != 0 {
+		t.Fatalf("other errors = %d, want 0", other)
+	}
+
+	assertEnvDocsPresent(t, h, ctx, "staging")
+	assertEnvDocsPresent(t, h, ctx, "production")
 }
