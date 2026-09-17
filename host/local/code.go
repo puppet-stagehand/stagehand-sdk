@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
@@ -248,4 +249,143 @@ func (g *gatedCode) ListEnvironments(ctx context.Context, req *hostv1.ListEnviro
 		return nil, err
 	}
 	return g.inner.ListEnvironments(ctx, req)
+}
+
+// The remaining nineteen forwarders resolve through codeServer's embedded
+// hostv1.UnimplementedCodeServer until later plans in this phase implement
+// their bodies (codes.Unimplemented in the meantime) — the gate below runs
+// first regardless, so the denial behavior is complete now even though the
+// inner behavior is not.
+
+func (g *gatedCode) RenameEnvironment(ctx context.Context, req *hostv1.RenameEnvironmentRequest) (*hostv1.Environment, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.RenameEnvironment(ctx, req)
+}
+
+func (g *gatedCode) DeleteEnvironment(ctx context.Context, req *hostv1.DeleteEnvironmentRequest) (*emptypb.Empty, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.DeleteEnvironment(ctx, req)
+}
+
+func (g *gatedCode) DuplicateEnvironment(ctx context.Context, req *hostv1.DuplicateEnvironmentRequest) (*hostv1.Environment, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.DuplicateEnvironment(ctx, req)
+}
+
+func (g *gatedCode) GetEnvironmentSettings(ctx context.Context, req *hostv1.GetEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.GetEnvironmentSettings(ctx, req)
+}
+
+func (g *gatedCode) PutEnvironmentSettings(ctx context.Context, req *hostv1.PutEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.PutEnvironmentSettings(ctx, req)
+}
+
+func (g *gatedCode) ListPuppetfileModules(ctx context.Context, req *hostv1.ListPuppetfileModulesRequest) (*hostv1.ListPuppetfileModulesResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListPuppetfileModules(ctx, req)
+}
+
+func (g *gatedCode) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPuppetfileModuleRequest) (*hostv1.PuppetfileModule, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.PutPuppetfileModule(ctx, req)
+}
+
+func (g *gatedCode) RemovePuppetfileModule(ctx context.Context, req *hostv1.RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.RemovePuppetfileModule(ctx, req)
+}
+
+func (g *gatedCode) SetModuledir(ctx context.Context, req *hostv1.SetModuledirRequest) (*hostv1.Puppetfile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.SetModuledir(ctx, req)
+}
+
+func (g *gatedCode) RenderPuppetfile(ctx context.Context, req *hostv1.RenderPuppetfileRequest) (*hostv1.RenderedPuppetfile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.RenderPuppetfile(ctx, req)
+}
+
+func (g *gatedCode) GetHieraHierarchy(ctx context.Context, req *hostv1.GetHieraHierarchyRequest) (*hostv1.HieraHierarchy, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.GetHieraHierarchy(ctx, req)
+}
+
+func (g *gatedCode) PutHieraLevel(ctx context.Context, req *hostv1.PutHieraLevelRequest) (*hostv1.PutHieraLevelResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.PutHieraLevel(ctx, req)
+}
+
+func (g *gatedCode) RemoveHieraLevel(ctx context.Context, req *hostv1.RemoveHieraLevelRequest) (*hostv1.HieraHierarchy, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.RemoveHieraLevel(ctx, req)
+}
+
+func (g *gatedCode) ReorderHieraLevels(ctx context.Context, req *hostv1.ReorderHieraLevelsRequest) (*hostv1.HieraHierarchy, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ReorderHieraLevels(ctx, req)
+}
+
+func (g *gatedCode) ListHieraDataFiles(ctx context.Context, req *hostv1.ListHieraDataFilesRequest) (*hostv1.ListHieraDataFilesResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ListHieraDataFiles(ctx, req)
+}
+
+func (g *gatedCode) GetHieraDataFile(ctx context.Context, req *hostv1.GetHieraDataFileRequest) (*hostv1.HieraDataFile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.GetHieraDataFile(ctx, req)
+}
+
+func (g *gatedCode) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.PutHieraDataKey(ctx, req)
+}
+
+func (g *gatedCode) RemoveHieraDataKey(ctx context.Context, req *hostv1.RemoveHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.RemoveHieraDataKey(ctx, req)
+}
+
+func (g *gatedCode) DeleteHieraDataFile(ctx context.Context, req *hostv1.DeleteHieraDataFileRequest) (*emptypb.Empty, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.DeleteHieraDataFile(ctx, req)
 }

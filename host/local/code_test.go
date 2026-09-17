@@ -2,12 +2,14 @@ package local_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 )
 
@@ -214,6 +216,31 @@ func TestCode_EnvironmentNameIsByteExact(t *testing.T) {
 	}
 }
 
+// TestCode_GetEnvironmentRejectsEmptyAndUnknownName covers the empty and
+// unknown-name edges of ENV-01: an empty name can never name an
+// environment, so it returns InvalidArgument rather than NotFound — the
+// two errors mean different things to a caller.
+func TestCode_GetEnvironmentRejectsEmptyAndUnknownName(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	_, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: ""})
+	if err == nil {
+		t.Fatal("GetEnvironment(\"\") succeeded, want InvalidArgument")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.InvalidArgument {
+		t.Fatalf("GetEnvironment(\"\") error = %v, want codes.InvalidArgument", err)
+	}
+
+	_, err = h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "does-not-exist"})
+	if err == nil {
+		t.Fatal("GetEnvironment(\"does-not-exist\") succeeded, want NotFound")
+	}
+	if st, ok := status.FromError(err); !ok || st.Code() != codes.NotFound {
+		t.Fatalf("GetEnvironment(\"does-not-exist\") error = %v, want codes.NotFound", err)
+	}
+}
+
 func TestCode_ReadPathClonesEnvironments(t *testing.T) {
 	h := local.New([]string{"code:rw"}, "controlrepo")
 	ctx := context.Background()
@@ -238,5 +265,172 @@ func TestCode_ReadPathClonesEnvironments(t *testing.T) {
 	}
 	if second.CreatedAt == nil {
 		t.Fatal("second read CreatedAt is nil (mutation of first leaked into stored state)")
+	}
+}
+
+// codeCall is one entry of the 22-RPC denial table TestCode_DeniedWithoutPermission
+// drives against every differently-permissioned host.
+type codeCall struct {
+	name string
+	call func(h *host.Host) error
+}
+
+// codeCallsTable builds one closure per Code RPC, each calling it with a
+// minimally-valid request. The gate is checked first in every gatedCode
+// forwarder, so it is exercised identically whether the inner RPC is a real
+// implementation (the three Task 1/2 RPCs) or still resolves through
+// codeServer's embedded hostv1.UnimplementedCodeServer (the remaining
+// nineteen, implemented by later plans in this phase).
+func codeCallsTable() []codeCall {
+	ctx := context.Background()
+	return []codeCall{
+		{"ListEnvironments", func(h *host.Host) error {
+			_, err := h.Code.ListEnvironments(ctx, &hostv1.ListEnvironmentsRequest{})
+			return err
+		}},
+		{"GetEnvironment", func(h *host.Host) error {
+			_, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "production"})
+			return err
+		}},
+		{"CreateEnvironment", func(h *host.Host) error {
+			_, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "denytest"})
+			return err
+		}},
+		{"RenameEnvironment", func(h *host.Host) error {
+			_, err := h.Code.RenameEnvironment(ctx, &hostv1.RenameEnvironmentRequest{Name: "a", NewName: "b"})
+			return err
+		}},
+		{"DeleteEnvironment", func(h *host.Host) error {
+			_, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "a"})
+			return err
+		}},
+		{"DuplicateEnvironment", func(h *host.Host) error {
+			_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "a", TargetName: "b"})
+			return err
+		}},
+		{"GetEnvironmentSettings", func(h *host.Host) error {
+			_, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "a"})
+			return err
+		}},
+		{"PutEnvironmentSettings", func(h *host.Host) error {
+			_, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{Settings: &hostv1.EnvironmentSettings{Environment: "a"}})
+			return err
+		}},
+		{"ListPuppetfileModules", func(h *host.Host) error {
+			_, err := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "a"})
+			return err
+		}},
+		{"PutPuppetfileModule", func(h *host.Host) error {
+			_, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: "a", Module: &hostv1.PuppetfileModule{Name: "m"}})
+			return err
+		}},
+		{"RemovePuppetfileModule", func(h *host.Host) error {
+			_, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "a", Name: "m"})
+			return err
+		}},
+		{"SetModuledir", func(h *host.Host) error {
+			_, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "a", Moduledir: "modules"})
+			return err
+		}},
+		{"RenderPuppetfile", func(h *host.Host) error {
+			_, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "a"})
+			return err
+		}},
+		{"GetHieraHierarchy", func(h *host.Host) error {
+			_, err := h.Code.GetHieraHierarchy(ctx, &hostv1.GetHieraHierarchyRequest{Environment: "a"})
+			return err
+		}},
+		{"PutHieraLevel", func(h *host.Host) error {
+			_, err := h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{Environment: "a", Level: &hostv1.HieraLevel{Name: "common"}})
+			return err
+		}},
+		{"RemoveHieraLevel", func(h *host.Host) error {
+			_, err := h.Code.RemoveHieraLevel(ctx, &hostv1.RemoveHieraLevelRequest{Environment: "a", Name: "common"})
+			return err
+		}},
+		{"ReorderHieraLevels", func(h *host.Host) error {
+			_, err := h.Code.ReorderHieraLevels(ctx, &hostv1.ReorderHieraLevelsRequest{Environment: "a", Names: []string{"common"}})
+			return err
+		}},
+		{"ListHieraDataFiles", func(h *host.Host) error {
+			_, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "a"})
+			return err
+		}},
+		{"GetHieraDataFile", func(h *host.Host) error {
+			_, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "a", Path: "common.yaml"})
+			return err
+		}},
+		{"PutHieraDataKey", func(h *host.Host) error {
+			_, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{Environment: "a", Path: "common.yaml", Key: "k", Value: &hostv1.Json{}})
+			return err
+		}},
+		{"RemoveHieraDataKey", func(h *host.Host) error {
+			_, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "a", Path: "common.yaml", Key: "k"})
+			return err
+		}},
+		{"DeleteHieraDataFile", func(h *host.Host) error {
+			_, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "a", Path: "common.yaml"})
+			return err
+		}},
+	}
+}
+
+// TestCode_DeniedWithoutPermission exercises all 22 Code RPCs against three
+// differently-permissioned hosts (no permissions, an unrelated permission,
+// and the pre-existing code:read permission bound to the dormant reference
+// tree's file-browser service) — 66 calls total, every one of which must be
+// refused with codes.PermissionDenied carrying an ErrorDetail whose Code is
+// facet_not_declared and whose Message names code:rw. It then drives the
+// same table once more against a code:rw host and asserts none of the 22 is
+// denied, which is what proves the table is wired to real methods rather
+// than passing vacuously.
+func TestCode_DeniedWithoutPermission(t *testing.T) {
+	calls := codeCallsTable()
+
+	deniedHosts := []struct {
+		label string
+		host  *host.Host
+	}{
+		{"no permissions", local.New(nil, "controlrepo")},
+		{"unrelated permission (inventory:rw)", local.New([]string{"inventory:rw"}, "controlrepo")},
+		{"pre-existing code:read", local.New([]string{"code:read"}, "controlrepo")},
+	}
+
+	for _, dh := range deniedHosts {
+		for _, c := range calls {
+			err := c.call(dh.host)
+			if err == nil {
+				t.Fatalf("%s/%s: succeeded, want PermissionDenied", dh.label, c.name)
+			}
+			st, ok := status.FromError(err)
+			if !ok || st.Code() != codes.PermissionDenied {
+				t.Fatalf("%s/%s: error = %v, want codes.PermissionDenied", dh.label, c.name, err)
+			}
+			var detail *hostv1.ErrorDetail
+			for _, d := range st.Details() {
+				if ed, ok := d.(*hostv1.ErrorDetail); ok {
+					detail = ed
+					break
+				}
+			}
+			if detail == nil {
+				t.Fatalf("%s/%s: PermissionDenied status has no ErrorDetail", dh.label, c.name)
+			}
+			if detail.Code != "facet_not_declared" {
+				t.Fatalf("%s/%s: ErrorDetail.Code = %q, want %q", dh.label, c.name, detail.Code, "facet_not_declared")
+			}
+			if !strings.Contains(detail.Message, "code:rw") {
+				t.Fatalf("%s/%s: ErrorDetail.Message = %q, want it to contain %q", dh.label, c.name, detail.Message, "code:rw")
+			}
+		}
+	}
+
+	permitted := local.New([]string{"code:rw"}, "controlrepo")
+	for _, c := range calls {
+		if err := c.call(permitted); err != nil {
+			if st, ok := status.FromError(err); ok && st.Code() == codes.PermissionDenied {
+				t.Fatalf("code:rw host: %s returned PermissionDenied, want the gate to pass it through to the inner method", c.name)
+			}
+		}
 	}
 }
