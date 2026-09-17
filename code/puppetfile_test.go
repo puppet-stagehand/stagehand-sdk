@@ -153,8 +153,11 @@ func TestPuppetfile_ParseQuoteStyleAndUnicode(t *testing.T) {
 		t.Fatalf("single-quoted and double-quoted parses differ: %v vs %v", single, double)
 	}
 
+	// Forge module names are validated against an ASCII slug pattern
+	// (ValidateModule, Task 2), so the unicode round-trip case uses a
+	// Git-sourced module, whose name carries no such constraint.
 	unicodeModel := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{
-		{Name: "puppetlabs/ntp-café", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+		{Name: "ntp-café", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/ntp-café.git"}}},
 	}}
 	rendered, err := RenderPuppetfile(unicodeModel)
 	if err != nil {
@@ -176,5 +179,248 @@ func TestPuppetfile_ParseRejectsUnknownAttribute(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "type") {
 		t.Fatalf("error = %v, want it to name the attribute", err)
+	}
+}
+
+func TestPuppetfile_ParseGitModules(t *testing.T) {
+	cases := []struct {
+		name string
+		text string
+		want *hostv1.GitSource
+	}{
+		{
+			name: "no_ref_attribute",
+			text: "mod 'apache',\n  :git => 'https://github.com/puppetlabs/puppetlabs-apache'\n",
+			want: &hostv1.GitSource{Url: "https://github.com/puppetlabs/puppetlabs-apache"},
+		},
+		{
+			name: "ref",
+			text: "mod 'apache',\n  :git => 'url',\n  :ref => 'docs_experiment'\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_Ref{Ref: "docs_experiment"}},
+		},
+		{
+			name: "tag",
+			text: "mod 'apache',\n  :git => 'url',\n  :tag => '0.9.0'\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_Tag{Tag: "0.9.0"}},
+		},
+		{
+			name: "branch",
+			text: "mod 'apache',\n  :git => 'url',\n  :branch => 'docs_experiment'\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_Branch{Branch: "docs_experiment"}},
+		},
+		{
+			name: "commit",
+			text: "mod 'apache',\n  :git => 'url',\n  :commit => '83401079053dca11d61945bd9beef9ecf7576cbf'\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_Commit{Commit: "83401079053dca11d61945bd9beef9ecf7576cbf"}},
+		},
+		{
+			name: "control_branch",
+			text: "mod 'apache',\n  :git => 'url',\n  :branch => :control_branch\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}},
+		},
+		{
+			name: "default_branch_no_ref_arm",
+			text: "mod 'apache',\n  :git => 'url',\n  :default_branch => 'main'\n",
+			want: &hostv1.GitSource{Url: "url", DefaultBranch: "main"},
+		},
+		{
+			name: "control_branch_with_default_branch",
+			text: "mod 'apache',\n  :git => 'url',\n  :branch => :control_branch,\n  :default_branch => 'main'\n",
+			want: &hostv1.GitSource{Url: "url", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}, DefaultBranch: "main"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := ParsePuppetfile(tc.text)
+			if err != nil {
+				t.Fatalf("ParsePuppetfile(%q) error = %v", tc.text, err)
+			}
+			want := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{
+				{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: tc.want}},
+			}}
+			if !proto.Equal(got, want) {
+				t.Fatalf("ParsePuppetfile(%q) = %v, want %v", tc.text, got, want)
+			}
+		})
+	}
+}
+
+func TestPuppetfile_ParseRejectsTwoRefSelectors(t *testing.T) {
+	cases := []string{
+		"mod 'apache',\n  :git => 'url',\n  :tag => '0.9.0',\n  :branch => 'main'\n",
+		"mod 'apache',\n  :git => 'url',\n  :ref => 'x',\n  :commit => 'y'\n",
+	}
+	for _, text := range cases {
+		_, err := ParsePuppetfile(text)
+		if !errors.Is(err, ErrPuppetfileParse) {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want wrapping ErrPuppetfileParse", text, err)
+		}
+	}
+}
+
+func TestPuppetfile_RenderControlBranchIsABareSymbol(t *testing.T) {
+	model := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{
+		{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url:           "git@git.example.com:puppet/profiles.git",
+			RefKind:       &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}},
+			DefaultBranch: "main",
+		}}},
+	}}
+	got, err := RenderPuppetfile(model)
+	if err != nil {
+		t.Fatalf("RenderPuppetfile error: %v", err)
+	}
+	if !strings.Contains(got, ":branch => :control_branch") {
+		t.Fatalf("RenderPuppetfile output %q does not contain the bare-symbol control-branch form", got)
+	}
+	if strings.Contains(got, ":control_branch =>") {
+		t.Fatalf("RenderPuppetfile output %q emits control_branch as a key, not a value (Pitfall 2)", got)
+	}
+	reparsed, err := ParsePuppetfile(got)
+	if err != nil {
+		t.Fatalf("ParsePuppetfile(rendered) error: %v", err)
+	}
+	if !proto.Equal(model, reparsed) {
+		t.Fatalf("control-branch round-trip mismatch: rendered %q, reparsed %v", got, reparsed)
+	}
+}
+
+func TestPuppetfile_ValidateModule(t *testing.T) {
+	invalid := []struct {
+		name string
+		mod  *hostv1.PuppetfileModule
+	}{
+		{"empty_name", &hostv1.PuppetfileModule{Name: "", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}}},
+		{"forge_version_and_latest", &hostv1.PuppetfileModule{Name: "puppetlabs/apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "1.0.0", Latest: true}}}},
+		{"forge_no_namespace", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}}},
+		{"git_empty_url", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{}}}},
+		{"git_url_with_space", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/a b.git"}}}},
+		{"git_url_with_newline", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/a\nb.git"}}}},
+		{"git_url_command_transport", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ext::sh -c 'touch pwned'"}}}},
+		{"git_url_proxycommand", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ssh://-oProxyCommand=touch pwned/repo.git"}}}},
+	}
+	for _, tc := range invalid {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateModule(tc.mod)
+			if !errors.Is(err, ErrPuppetfileInvalid) {
+				t.Fatalf("ValidateModule(%+v) error = %v, want wrapping ErrPuppetfileInvalid", tc.mod, err)
+			}
+		})
+	}
+
+	valid := []*hostv1.PuppetfileModule{
+		{Name: "puppetlabs/apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+		{Name: "puppetlabs-apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://github.com/puppetlabs/puppetlabs-apache"}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "git://github.com/puppetlabs/puppetlabs-apache"}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ssh://git@github.com/puppetlabs/puppetlabs-apache"}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "file:///var/repos/apache.git"}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "git@git.example.com:puppet/apache.git"}}},
+	}
+	for i, mod := range valid {
+		if err := ValidateModule(mod); err != nil {
+			t.Fatalf("ValidateModule(valid[%d]=%+v) unexpected error = %v", i, mod, err)
+		}
+	}
+}
+
+// roundTripFixtures holds at least ten *hostv1.Puppetfile values covering
+// every shape RenderPuppetfile/ParsePuppetfile support, per PF-05.
+var roundTripFixtures = []*hostv1.Puppetfile{
+	{},
+	{Moduledir: "thirdparty"},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "puppetlabs/ntp", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "puppetlabs/apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "0.10.0"}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "puppetlabs/stdlib", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Latest: true}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", RefKind: &hostv1.GitSource_Ref{Ref: "docs_experiment"}}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", RefKind: &hostv1.GitSource_Tag{Tag: "0.9.0"}}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", RefKind: &hostv1.GitSource_Branch{Branch: "docs_experiment"}}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", RefKind: &hostv1.GitSource_Commit{Commit: "83401079053dca11d61945bd9beef9ecf7576cbf"}}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git", DefaultBranch: "main"}}},
+	}},
+	{Modules: []*hostv1.PuppetfileModule{
+		{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "git@git.example.com:puppet/profiles.git", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}, DefaultBranch: "main"}}},
+	}},
+	{
+		Moduledir: "thirdparty",
+		Modules: []*hostv1.PuppetfileModule{
+			{Name: "puppetlabs/ntp", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+			{Name: "puppetlabs/apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "0.10.0"}}},
+			{Name: "puppetlabs/stdlib", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Latest: true}}},
+			{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://github.com/puppetlabs/puppetlabs-apache"}}},
+			{Name: "concat", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://github.com/puppetlabs/puppetlabs-concat", RefKind: &hostv1.GitSource_Tag{Tag: "0.9.0"}}}},
+			{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "git@git.example.com:puppet/profiles.git", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}, DefaultBranch: "main"}}},
+		},
+	},
+}
+
+func TestPuppetfile_RoundTrip(t *testing.T) {
+	if len(roundTripFixtures) < 10 {
+		t.Fatalf("roundTripFixtures has %d entries, want at least 10", len(roundTripFixtures))
+	}
+	for i, fixture := range roundTripFixtures {
+		rendered, err := RenderPuppetfile(fixture)
+		if err != nil {
+			t.Fatalf("fixture[%d]: RenderPuppetfile error = %v", i, err)
+		}
+		reparsed, err := ParsePuppetfile(rendered)
+		if err != nil {
+			t.Fatalf("fixture[%d]: ParsePuppetfile(rendered=%q) error = %v", i, rendered, err)
+		}
+		if !proto.Equal(fixture, reparsed) {
+			t.Fatalf("fixture[%d]: round-trip mismatch: rendered %q, reparsed %v, want %v", i, rendered, reparsed, fixture)
+		}
+		rerendered, err := RenderPuppetfile(reparsed)
+		if err != nil {
+			t.Fatalf("fixture[%d]: second RenderPuppetfile error = %v", i, err)
+		}
+		if rendered != rerendered {
+			t.Fatalf("fixture[%d]: second render not byte-identical:\nfirst:  %q\nsecond: %q", i, rendered, rerendered)
+		}
+	}
+}
+
+func TestPuppetfile_RenderMatchesCanonicalContractExample(t *testing.T) {
+	// The multi-shape fixture (index 12) mirrors <render_contract>'s
+	// canonical example verbatim.
+	fixture := roundTripFixtures[12]
+	got, err := RenderPuppetfile(fixture)
+	if err != nil {
+		t.Fatalf("RenderPuppetfile error: %v", err)
+	}
+	want := "moduledir 'thirdparty'\n" +
+		"\n" +
+		"mod 'puppetlabs/ntp'\n" +
+		"mod 'puppetlabs/apache', '0.10.0'\n" +
+		"mod 'puppetlabs/stdlib', :latest\n" +
+		"mod 'apache',\n" +
+		"  :git => 'https://github.com/puppetlabs/puppetlabs-apache'\n" +
+		"mod 'concat',\n" +
+		"  :git => 'https://github.com/puppetlabs/puppetlabs-concat',\n" +
+		"  :tag => '0.9.0'\n" +
+		"mod 'profiles',\n" +
+		"  :git => 'git@git.example.com:puppet/profiles.git',\n" +
+		"  :branch => :control_branch,\n" +
+		"  :default_branch => 'main'\n"
+	if got != want {
+		t.Fatalf("RenderPuppetfile canonical example mismatch:\ngot:  %q\nwant: %q", got, want)
 	}
 }

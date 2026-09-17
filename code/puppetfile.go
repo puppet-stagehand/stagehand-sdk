@@ -204,12 +204,74 @@ func parseModuleRemainder(name, remainder string, lineNo int) (*hostv1.Puppetfil
 	return mod, nil
 }
 
-// parseGitModule parses a Git-sourced mod block's remainder. Filled in
-// fully by Plan 06-03 Task 2 (D-02/D-03 ref-selector handling); this task
-// only detects the :git attribute and refuses the block so RenderPuppetfile's
-// Forge path can be proven first.
+// gitAttr is one recognised `:key => value` pair extracted from a Git
+// module's remainder, with value still in its raw (possibly quoted) form.
+type gitAttr struct {
+	key string
+	raw string
+}
+
+// parseGitModule parses a Git-sourced mod block's remainder into a
+// *hostv1.GitSource. It enforces D-02 (mutual exclusivity across
+// :ref/:tag/:branch/:commit) at runtime — the oneof ref_kind is D-02's
+// structural half, making two selectors impossible to construct in Go, so
+// the only place two can arrive is from text. :default_branch (D-03) is
+// outside the exclusivity group entirely and may accompany any ref arm or
+// none.
 func parseGitModule(name, remainder string, lineNo int) (*hostv1.PuppetfileModule, error) {
-	return nil, fmt.Errorf("%w: line %d: git-sourced modules not yet supported", ErrPuppetfileParse, lineNo)
+	for _, m := range reAttrKey.FindAllStringSubmatch(remainder, -1) {
+		if !knownGitAttrKeys[m[1]] {
+			return nil, fmt.Errorf("%w: line %d: unrecognized attribute :%s", ErrPuppetfileParse, lineNo, m[1])
+		}
+	}
+
+	var attrs []gitAttr
+	for _, m := range reGitAttr.FindAllStringSubmatch(remainder, -1) {
+		attrs = append(attrs, gitAttr{key: m[1], raw: m[2]})
+	}
+
+	gs := &hostv1.GitSource{}
+	var refKeys []string
+	for _, a := range attrs {
+		switch a.key {
+		case "git":
+			gs.Url = attrValue(a.raw)
+		case "default_branch":
+			gs.DefaultBranch = attrValue(a.raw)
+		case "ref", "tag", "branch", "commit":
+			refKeys = append(refKeys, a.key)
+		}
+	}
+
+	if len(refKeys) > 1 {
+		return nil, fmt.Errorf("%w: line %d: conflicting ref selectors :%s and :%s", ErrPuppetfileParse, lineNo, refKeys[0], refKeys[1])
+	}
+	if len(refKeys) == 1 {
+		key := refKeys[0]
+		var raw string
+		for _, a := range attrs {
+			if a.key == key {
+				raw = a.raw
+				break
+			}
+		}
+		switch key {
+		case "ref":
+			gs.RefKind = &hostv1.GitSource_Ref{Ref: attrValue(raw)}
+		case "tag":
+			gs.RefKind = &hostv1.GitSource_Tag{Tag: attrValue(raw)}
+		case "commit":
+			gs.RefKind = &hostv1.GitSource_Commit{Commit: attrValue(raw)}
+		case "branch":
+			if raw == ":control_branch" {
+				gs.RefKind = &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}
+			} else {
+				gs.RefKind = &hostv1.GitSource_Branch{Branch: attrValue(raw)}
+			}
+		}
+	}
+
+	return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Git{Git: gs}}, nil
 }
 
 // RenderPuppetfile emits canonical DSL text for p, matching
@@ -257,23 +319,118 @@ func renderForge(name string, f *hostv1.ForgeSource) string {
 	}
 }
 
-// renderGit is filled in by Plan 06-03 Task 2, per <render_contract>
-// rules 4 and 5.
+// renderGit renders a Git module's block per <render_contract> rules 4 and
+// 5: a `mod 'name',` opener, then one two-space-indented attribute line
+// per set field, in the fixed order :git, ref_kind arm, :default_branch —
+// every line but the last ends with a comma. The control-branch arm is the
+// one attribute value emitted unquoted, as a bare Ruby symbol, because
+// that is the only valid DSL spelling (06-RESEARCH.md Pitfall 2);
+// emitting it as its own key would produce text this package's own parser
+// rejects.
 func renderGit(name string, g *hostv1.GitSource) string {
-	return ""
+	var lines []string
+	lines = append(lines, fmt.Sprintf("  :git => '%s'", g.GetUrl()))
+	switch rk := g.GetRefKind().(type) {
+	case *hostv1.GitSource_Ref:
+		lines = append(lines, fmt.Sprintf("  :ref => '%s'", rk.Ref))
+	case *hostv1.GitSource_Tag:
+		lines = append(lines, fmt.Sprintf("  :tag => '%s'", rk.Tag))
+	case *hostv1.GitSource_Branch:
+		lines = append(lines, fmt.Sprintf("  :branch => '%s'", rk.Branch))
+	case *hostv1.GitSource_Commit:
+		lines = append(lines, fmt.Sprintf("  :commit => '%s'", rk.Commit))
+	case *hostv1.GitSource_ControlBranch:
+		lines = append(lines, "  :branch => :control_branch")
+	}
+	if g.GetDefaultBranch() != "" {
+		lines = append(lines, fmt.Sprintf("  :default_branch => '%s'", g.GetDefaultBranch()))
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "mod '%s',\n", name)
+	for i, line := range lines {
+		b.WriteString(line)
+		if i < len(lines)-1 {
+			b.WriteString(",")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
-// ValidateModule is fully implemented by Plan 06-03 Task 2; this task
-// stubs the two checks RenderPuppetfile's Forge path needs: a non-empty
-// name, and a ForgeSource that does not set both Version and Latest.
+// reForgeSlug matches the Forge slug grammar: an owner segment of
+// alphanumerics, a single '-' or '/', then a module segment starting with
+// a lowercase letter followed by lowercase alphanumerics and underscores.
+var reForgeSlug = regexp.MustCompile(`^[A-Za-z0-9]+[-/][a-z][a-z0-9_]*$`)
+
+// forgeSlugOK reports whether name is a valid Forge module slug
+// (puppetlabs/apache or puppetlabs-apache), per PF-02/PF-03's boundary
+// case.
+func forgeSlugOK(name string) bool {
+	return reForgeSlug.MatchString(name)
+}
+
+// reGitTransport matches the five accepted URL-scheme transports.
+var reGitTransport = regexp.MustCompile(`^(?:https?|git|ssh|file)://`)
+
+// reGitSCP matches the SCP-style user@host:path form.
+var reGitSCP = regexp.MustCompile(`^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:.+$`)
+
+// gitURLOK reports whether url is safe and well-formed for this facet's
+// model: non-empty, free of any whitespace byte (which would forge an
+// additional Puppetfile attribute line), free of a ProxyCommand option or
+// an ext:: command-executing transport prefix (the two documented ways a
+// git remote can be made to execute a command — T-06-04), and shaped as
+// one of the five accepted URL transports or the SCP-style form. This
+// facet never invokes git, so nothing executes today; the rule lands now
+// because Phase 10's import will feed externally-sourced Puppetfile text
+// through this same model, and a rule added after data exists is a
+// migration.
+func gitURLOK(url string) bool {
+	if url == "" {
+		return false
+	}
+	if strings.ContainsAny(url, " \t\r\n") {
+		return false
+	}
+	if strings.Contains(url, "ProxyCommand") {
+		return false
+	}
+	if strings.Contains(url, "ext::") {
+		return false
+	}
+	if reGitTransport.MatchString(url) {
+		return true
+	}
+	return reGitSCP.MatchString(url)
+}
+
+// ValidateModule rejects a Forge module with both version and latest set,
+// a Forge module whose name is not a valid slug, a Git module with an
+// empty url, a Git module whose url carries whitespace or a newline, and a
+// Git module whose url uses a command-executing transport or carries a
+// proxy-command option.
 func ValidateModule(m *hostv1.PuppetfileModule) error {
-	if m.GetName() == "" {
+	name := m.GetName()
+	if name == "" {
 		return fmt.Errorf("%w: module name must not be empty", ErrPuppetfileInvalid)
 	}
-	if f := m.GetForge(); f != nil {
+	switch {
+	case m.GetForge() != nil:
+		f := m.GetForge()
 		if f.GetVersion() != "" && f.GetLatest() {
-			return fmt.Errorf("%w: module %q sets both version and latest", ErrPuppetfileInvalid, m.GetName())
+			return fmt.Errorf("%w: module %q sets both version and latest", ErrPuppetfileInvalid, name)
 		}
+		if !forgeSlugOK(name) {
+			return fmt.Errorf("%w: module %q is not a valid Forge slug (expected ns/name or ns-name)", ErrPuppetfileInvalid, name)
+		}
+	case m.GetGit() != nil:
+		url := m.GetGit().GetUrl()
+		if !gitURLOK(url) {
+			return fmt.Errorf("%w: module %q has an invalid git url %q", ErrPuppetfileInvalid, name, url)
+		}
+	default:
+		return fmt.Errorf("%w: module %q has no source", ErrPuppetfileInvalid, name)
 	}
 	return nil
 }
