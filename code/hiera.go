@@ -32,10 +32,13 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 	yaml "go.yaml.in/yaml/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // ErrHieraParse is wrapped by every error this file returns when input
@@ -133,13 +136,21 @@ func mapValue(m *yaml.Node, key string) *yaml.Node {
 }
 
 // setMapValue replaces the value node paired with key in place when key
-// already exists in m, preserving that key's own comments and position.
-// When key does not exist, the pair is appended at the end of m.Content
-// rather than sorted into place — a data file's or hierarchy's key/level
-// order belongs to the operator or caller, not to this package.
+// already exists in m, preserving that key's own comments and position:
+// the replacement value node inherits the old value node's HeadComment,
+// LineComment and FootComment, because a trailing "key: value # comment"
+// annotation documents the key, not the specific value, and a caller
+// changing only the value should not silently delete it. When key does
+// not exist, the pair is appended at the end of m.Content rather than
+// sorted into place — a data file's or hierarchy's key/level order
+// belongs to the operator or caller, not to this package.
 func setMapValue(m *yaml.Node, key string, value *yaml.Node) {
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		if m.Content[i].Value == key {
+			old := m.Content[i+1]
+			value.HeadComment = old.HeadComment
+			value.LineComment = old.LineComment
+			value.FootComment = old.FootComment
 			m.Content[i+1] = value
 			return
 		}
@@ -550,4 +561,254 @@ func LintLevelPaths(level *hostv1.HieraLevel) []*hostv1.LintWarning {
 		flag("mapped_paths[2]", mp[2])
 	}
 	return warnings
+}
+
+// --- data files (data/*.yaml) ---
+
+// ParseDataFile turns a Hiera data file's YAML text into a
+// *hostv1.HieraDataFile. Every top-level key other than the reserved
+// lookup_options becomes a values entry, wrapped through nodeToJSON in
+// the repo's single-field "v" convention (documents.go's Query and
+// host/local/inventory.go's jsonScalar already rely on the same
+// convention, so a value written here reads back identically through any
+// other facet path). lookup_options is read separately into
+// LookupOptions and excluded from Values. Empty or whitespace-only text
+// returns a HieraDataFile with empty, non-nil Values and LookupOptions
+// maps and a nil error — an unauthored data file is a legitimate state.
+func ParseDataFile(yamlText string) (*hostv1.HieraDataFile, error) {
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return nil, err
+	}
+	df := &hostv1.HieraDataFile{
+		Values:        map[string]*hostv1.Json{},
+		LookupOptions: map[string]string{},
+	}
+	if doc == nil {
+		return df, nil
+	}
+	m := rootMapping(doc)
+	for i := 0; i+1 < len(m.Content); i += 2 {
+		key := m.Content[i].Value
+		val := m.Content[i+1]
+		if key == "lookup_options" {
+			if val.Kind != yaml.MappingNode {
+				continue
+			}
+			for j := 0; j+1 < len(val.Content); j += 2 {
+				optKey := val.Content[j].Value
+				df.LookupOptions[optKey] = lookupMergeValue(val.Content[j+1])
+			}
+			continue
+		}
+		j, err := nodeToJSON(val)
+		if err != nil {
+			return nil, err
+		}
+		df.Values[key] = j
+	}
+	return df, nil
+}
+
+// lookupMergeValue reads a lookup_options entry's merge behavior: the scalar
+// value when merge is itself a scalar, or the strategy child when merge
+// is a mapping (e.g. merge: {strategy: deep, ...}). It never builds or
+// evaluates a deep merge — HIERA-03 is read-for-display only this
+// milestone.
+func lookupMergeValue(optNode *yaml.Node) string {
+	merge := mapValue(optNode, "merge")
+	if merge == nil {
+		return ""
+	}
+	switch merge.Kind {
+	case yaml.ScalarNode:
+		return merge.Value
+	case yaml.MappingNode:
+		if sv := mapValue(merge, "strategy"); sv != nil {
+			return sv.Value
+		}
+	}
+	return ""
+}
+
+// nodeToJSON converts a data-file value node to *hostv1.Json, matching
+// the repo's single-field wrapper convention: a scalar or sequence value
+// is wrapped as {"v": value}; a mapping value is built directly as the
+// Json's Struct, matching how host/local/inventory.go's jsonScalar builds
+// an object-valued fact. This is the mirrored-helper convention Phase 3
+// records after getting it wrong once — a value written through this
+// path and a value read through any other facet path must be
+// indistinguishable.
+func nodeToJSON(n *yaml.Node) (*hostv1.Json, error) {
+	var v any
+	if err := n.Decode(&v); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrHieraParse, err)
+	}
+	if m, ok := v.(map[string]any); ok {
+		s, err := structpb.NewStruct(m)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrHieraInvalid, err)
+		}
+		return &hostv1.Json{Value: s}, nil
+	}
+	s, err := structpb.NewStruct(map[string]any{"v": v})
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrHieraInvalid, err)
+	}
+	return &hostv1.Json{Value: s}, nil
+}
+
+// jsonToNode is nodeToJSON's inverse: it unwraps the single-field "v"
+// convention back into a YAML node ready to be spliced into a data file's
+// node tree, quoting any resulting scalar that needsQuote requires.
+func jsonToNode(j *hostv1.Json) (*yaml.Node, error) {
+	if j == nil || j.Value == nil {
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "~"}, nil
+	}
+	m := j.Value.AsMap()
+	if v, ok := m["v"]; ok && len(m) == 1 {
+		return valueToNode(v)
+	}
+	return valueToNode(m)
+}
+
+// valueToNode converts a decoded JSON value (as produced by
+// structpb.Struct.AsMap/AsInterface: nil, bool, float64, string,
+// []interface{}, map[string]interface{}) into a YAML node. Map keys are
+// sorted for deterministic output, since a Go map carries no order of its
+// own — this only affects a brand-new value being written, never an
+// existing document's untouched keys, which are never round-tripped
+// through this function.
+func valueToNode(v any) (*yaml.Node, error) {
+	switch t := v.(type) {
+	case nil:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "~"}, nil
+	case bool:
+		val := "false"
+		if t {
+			val = "true"
+		}
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: val}, nil
+	case float64:
+		return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!float", Value: formatNumber(t)}, nil
+	case string:
+		return strNode(t), nil
+	case []any:
+		seq := &yaml.Node{Kind: yaml.SequenceNode, Tag: "!!seq"}
+		for _, item := range t {
+			n, err := valueToNode(item)
+			if err != nil {
+				return nil, err
+			}
+			seq.Content = append(seq.Content, n)
+		}
+		return seq, nil
+	case map[string]any:
+		m := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			n, err := valueToNode(t[k])
+			if err != nil {
+				return nil, err
+			}
+			m.Content = append(m.Content, scalarNode(k, false), n)
+		}
+		return m, nil
+	default:
+		return nil, fmt.Errorf("%w: unsupported JSON value type %T", ErrHieraInvalid, v)
+	}
+}
+
+// formatNumber renders f as a plain integer when it carries no fractional
+// part (JSON/structpb numbers are always float64, and a Hiera data value
+// like "port: 8080" should not come back out as "8080.0"), or as a
+// shortest-round-trip float otherwise.
+func formatNumber(f float64) string {
+	if f == float64(int64(f)) {
+		return strconv.FormatInt(int64(f), 10)
+	}
+	return strconv.FormatFloat(f, 'g', -1, 64)
+}
+
+// PutDataKey edits one named key of a data file's YAML node tree, leaving
+// every other key, its value, its comments and its relative order
+// untouched. An existing key's value is replaced in place; a new key is
+// appended at the end rather than sorted into place — a data file's key
+// order is the operator's. The reserved key lookup_options is refused
+// with an error wrapping ErrHieraInvalid before anything is decoded, so a
+// refused write cannot leave a half-decoded document behind:
+// lookup_options is readable for display and not writable this
+// milestone (HIERA-03). Empty or whitespace-only input text starts from
+// a fresh empty mapping document.
+func PutDataKey(yamlText string, key string, value *hostv1.Json) (string, error) {
+	if key == "lookup_options" {
+		return "", fmt.Errorf("%w: lookup_options is read-only this milestone", ErrHieraInvalid)
+	}
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return "", err
+	}
+	if doc == nil {
+		doc = emptyMappingDoc()
+	}
+	m := rootMapping(doc)
+	valNode, err := jsonToNode(value)
+	if err != nil {
+		return "", err
+	}
+	setMapValue(m, key, valNode)
+	return encodeDoc(doc)
+}
+
+// RemoveDataKey drops the named key from a data file's YAML node tree,
+// including its attached comments, and leaves everything else untouched.
+// An unknown key is an error wrapping ErrHieraInvalid.
+func RemoveDataKey(yamlText string, key string) (string, error) {
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return "", err
+	}
+	if doc == nil {
+		return "", fmt.Errorf("%w: no key named %q", ErrHieraInvalid, key)
+	}
+	m := rootMapping(doc)
+	if !deleteMapKey(m, key) {
+		return "", fmt.Errorf("%w: no key named %q", ErrHieraInvalid, key)
+	}
+	return encodeDoc(doc)
+}
+
+// ValidateDataPath rejects a data-file relative path that is empty, that
+// starts with '/', that contains a ".." segment, that contains a
+// backslash, or that contains a NUL or newline byte. It runs today
+// against an in-memory map where traversal cannot escape anything, so it
+// protects nothing at this instant — it exists because a later
+// real-backend implementation, filesystem- or database-backed, will not
+// have that accidental immunity, and because the composite
+// <env>/<relative-path> Documents doc id (06-01's contract_draft) only
+// stays unambiguous while the path side is well-formed. A validation
+// rule added after data exists is a migration, not a rule.
+func ValidateDataPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%w: data path must not be empty", ErrHieraInvalid)
+	}
+	if strings.HasPrefix(path, "/") {
+		return fmt.Errorf("%w: data path must not be absolute", ErrHieraInvalid)
+	}
+	for _, seg := range strings.Split(path, "/") {
+		if seg == ".." {
+			return fmt.Errorf("%w: data path must not contain a %q segment", ErrHieraInvalid, "..")
+		}
+	}
+	if strings.ContainsRune(path, '\\') {
+		return fmt.Errorf("%w: data path must not contain a backslash", ErrHieraInvalid)
+	}
+	if strings.ContainsAny(path, "\x00\n") {
+		return fmt.Errorf("%w: data path must not contain a NUL or newline byte", ErrHieraInvalid)
+	}
+	return nil
 }

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestHiera_ParseHierarchy(t *testing.T) {
@@ -330,5 +331,268 @@ func TestHiera_EnvironmentLint(t *testing.T) {
 	}
 	if got := LintLevelPaths(clean); len(got) != 0 {
 		t.Errorf("LintLevelPaths(clean) = %v, want empty", got)
+	}
+}
+
+// jsonScalar builds a *hostv1.Json using the repo's single-field "v"
+// wrapper convention, mirroring host/local/inventory.go's jsonScalar
+// without importing host/local (this package has no gRPC dependency).
+func jsonScalar(t *testing.T, v any) *hostv1.Json {
+	t.Helper()
+	s, err := structpb.NewStruct(map[string]any{"v": v})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	return &hostv1.Json{Value: s}
+}
+
+func jsonObject(t *testing.T, m map[string]any) *hostv1.Json {
+	t.Helper()
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	return &hostv1.Json{Value: s}
+}
+
+func TestHiera_ParseDataFileAndLookupOptions(t *testing.T) {
+	df, err := ParseDataFile("")
+	if err != nil {
+		t.Fatalf(`ParseDataFile(""): %v`, err)
+	}
+	if df.Values == nil || len(df.Values) != 0 {
+		t.Errorf("ParseDataFile(\"\").Values = %v, want empty non-nil", df.Values)
+	}
+	if df.LookupOptions == nil || len(df.LookupOptions) != 0 {
+		t.Errorf("ParseDataFile(\"\").LookupOptions = %v, want empty non-nil", df.LookupOptions)
+	}
+
+	text := `classes:
+  - apache
+  - mysql
+port: 8080
+site_name: "example"
+`
+	df2, err := ParseDataFile(text)
+	if err != nil {
+		t.Fatalf("ParseDataFile: %v", err)
+	}
+	if len(df2.Values) != 3 {
+		t.Fatalf("len(Values) = %d, want 3", len(df2.Values))
+	}
+	if len(df2.LookupOptions) != 0 {
+		t.Errorf("LookupOptions = %v, want empty (no lookup_options block)", df2.LookupOptions)
+	}
+	portJSON, ok := df2.Values["port"]
+	if !ok {
+		t.Fatal("Values[\"port\"] missing")
+	}
+	if got := portJSON.Value.AsMap()["v"]; got != float64(8080) {
+		t.Errorf("Values[\"port\"] = %v, want 8080", got)
+	}
+
+	textWithOptions := `classes:
+  - apache
+db_merge:
+  a: 1
+lookup_options:
+  classes:
+    merge: unique
+  db_merge:
+    merge:
+      strategy: deep
+`
+	df3, err := ParseDataFile(textWithOptions)
+	if err != nil {
+		t.Fatalf("ParseDataFile with lookup_options: %v", err)
+	}
+	if _, ok := df3.Values["lookup_options"]; ok {
+		t.Error("Values must not include the lookup_options key itself")
+	}
+	if len(df3.Values) != 2 {
+		t.Errorf("len(Values) = %d, want 2 (classes, db_merge)", len(df3.Values))
+	}
+	if df3.LookupOptions["classes"] != "unique" {
+		t.Errorf("LookupOptions[\"classes\"] = %q, want unique (scalar merge form)", df3.LookupOptions["classes"])
+	}
+	if df3.LookupOptions["db_merge"] != "deep" {
+		t.Errorf("LookupOptions[\"db_merge\"] = %q, want deep (merge.strategy mapping form)", df3.LookupOptions["db_merge"])
+	}
+}
+
+func TestHiera_PutDataKeyPreservesStructure(t *testing.T) {
+	text := `# head comment on the document
+classes:
+  - apache
+  - mysql
+nested:
+  cpu:
+    cores: 8
+port: 8080 # trailing comment on port
+site_name: "example"
+`
+	out, err := PutDataKey(text, "new_key", jsonScalar(t, "new_value"))
+	if err != nil {
+		t.Fatalf("PutDataKey: %v", err)
+	}
+
+	for _, want := range []string{
+		"# head comment on the document",
+		"classes:",
+		"- apache",
+		"- mysql",
+		"nested:",
+		"cpu:",
+		"cores: 8",
+		"port: 8080 # trailing comment on port",
+		`site_name: "example"`,
+		"new_key: new_value",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+
+	// Original relative order must be preserved, with the new key
+	// appended at the end rather than sorted into place.
+	idx := func(s string) int { return strings.Index(out, s) }
+	keysInOrder := []string{"classes:", "nested:", "port:", "site_name:", "new_key:"}
+	for i := 1; i < len(keysInOrder); i++ {
+		if idx(keysInOrder[i-1]) >= idx(keysInOrder[i]) {
+			t.Errorf("key order violated: %q did not come before %q in:\n%s", keysInOrder[i-1], keysInOrder[i], out)
+		}
+	}
+
+	if strings.Count(out, "\n    ") > 0 && strings.Count(out, "\n  ") == 0 {
+		t.Error("output appears to use four-space indentation, not two")
+	}
+
+	df, err := ParseDataFile(out)
+	if err != nil {
+		t.Fatalf("ParseDataFile(output): %v", err)
+	}
+	if len(df.Values) != 5 {
+		t.Fatalf("len(Values) = %d, want 5", len(df.Values))
+	}
+	if v := df.Values["new_key"].Value.AsMap()["v"]; v != "new_value" {
+		t.Errorf("new_key = %v, want new_value", v)
+	}
+
+	// Replacing an existing key changes only that key's value.
+	out2, err := PutDataKey(out, "port", jsonScalar(t, float64(9090)))
+	if err != nil {
+		t.Fatalf("PutDataKey replace: %v", err)
+	}
+	df2, err := ParseDataFile(out2)
+	if err != nil {
+		t.Fatalf("ParseDataFile(replaced): %v", err)
+	}
+	if v := df2.Values["port"].Value.AsMap()["v"]; v != float64(9090) {
+		t.Errorf("port after replace = %v, want 9090", v)
+	}
+	if v := df2.Values["site_name"].Value.AsMap()["v"]; v != "example" {
+		t.Errorf("site_name changed by an unrelated put: %v", v)
+	}
+	if !strings.Contains(out2, "# trailing comment on port") {
+		t.Error("trailing comment on port lost after replacing an unrelated key's sibling")
+	}
+
+	// Put against empty text creates a one-key document.
+	fromEmpty, err := PutDataKey("", "only_key", jsonScalar(t, "only_value"))
+	if err != nil {
+		t.Fatalf("PutDataKey against empty text: %v", err)
+	}
+	dfEmpty, err := ParseDataFile(fromEmpty)
+	if err != nil {
+		t.Fatalf("ParseDataFile(fromEmpty): %v", err)
+	}
+	if len(dfEmpty.Values) != 1 {
+		t.Fatalf("len(Values) = %d, want 1", len(dfEmpty.Values))
+	}
+}
+
+func TestHiera_PutDataKeyRefusesLookupOptions(t *testing.T) {
+	text := "existing: value\n"
+	out, err := PutDataKey(text, "lookup_options", jsonObject(t, map[string]any{"classes": map[string]any{"merge": "unique"}}))
+	if !errors.Is(err, ErrHieraInvalid) {
+		t.Errorf("PutDataKey(lookup_options): err = %v, want ErrHieraInvalid", err)
+	}
+	if out != "" {
+		t.Errorf("PutDataKey(lookup_options) emitted non-empty output %q", out)
+	}
+}
+
+func TestHiera_DataFileEncoding(t *testing.T) {
+	text := `unicode_key: "café — 日本語"
+colon_value: "10:30 AM meeting"
+percent_value: "%{not_an_interpolation_if_quoted}"
+block_scalar: |
+  line one
+  line two
+  line three
+untouched_other: original
+`
+	out, err := PutDataKey(text, "untouched_other", jsonScalar(t, "changed"))
+	if err != nil {
+		t.Fatalf("PutDataKey: %v", err)
+	}
+
+	df, err := ParseDataFile(out)
+	if err != nil {
+		t.Fatalf("ParseDataFile(output): %v", err)
+	}
+	if v := df.Values["unicode_key"].Value.AsMap()["v"]; v != "café — 日本語" {
+		t.Errorf("unicode_key = %v", v)
+	}
+	if v := df.Values["colon_value"].Value.AsMap()["v"]; v != "10:30 AM meeting" {
+		t.Errorf("colon_value = %v", v)
+	}
+	if v := df.Values["percent_value"].Value.AsMap()["v"]; v != "%{not_an_interpolation_if_quoted}" {
+		t.Errorf("percent_value = %v", v)
+	}
+	if v := df.Values["block_scalar"].Value.AsMap()["v"]; v != "line one\nline two\nline three\n" {
+		t.Errorf("block_scalar = %q", v)
+	}
+	if v := df.Values["untouched_other"].Value.AsMap()["v"]; v != "changed" {
+		t.Errorf("untouched_other = %v, want changed", v)
+	}
+
+	// Byte-intact in the raw output text too, not just after re-parsing.
+	for _, want := range []string{
+		"café — 日本語",
+		"10:30 AM meeting",
+		"%{not_an_interpolation_if_quoted}",
+		"line one",
+		"line two",
+		"line three",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHiera_ValidateDataPath(t *testing.T) {
+	for _, bad := range []string{
+		"",
+		"   ",
+		"/etc/passwd",
+		"../secrets.yaml",
+		"nodes/../../etc/x.yaml",
+		"nodes\\web01.yaml",
+		"nodes/web01\n.yaml",
+		"nodes/web01\x00.yaml",
+	} {
+		if err := ValidateDataPath(bad); !errors.Is(err, ErrHieraInvalid) {
+			t.Errorf("ValidateDataPath(%q): err = %v, want ErrHieraInvalid", bad, err)
+		}
+	}
+	for _, good := range []string{
+		"common.yaml",
+		"nodes/web01.example.test.yaml",
+	} {
+		if err := ValidateDataPath(good); err != nil {
+			t.Errorf("ValidateDataPath(%q): unexpected error %v", good, err)
+		}
 	}
 }
