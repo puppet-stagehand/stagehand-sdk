@@ -416,3 +416,78 @@ message PutHieraDataKeyRequest {
 }
 message RemoveHieraDataKeyRequest { string environment = 1; string path = 2; string key = 3; }
 message DeleteHieraDataFileRequest { string environment = 1; string path = 2; }
+
+// ---------------------------------------------------------------------- Forge
+// Permission: forge:rw. Forge is an authoring-advisory facet: these
+// read-only RPCs inspect registry data and never modify a Puppetfile or run
+// r10k/g10k deployment work.
+service Forge {
+  // Search returns metadata-rich module candidates from exactly one selected
+  // registry source. It does not resolve dependencies for every result.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Resolve walks one selected module release and returns a reviewable,
+  // advisory dependency tree. It does not apply the result to a Puppetfile.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+}
+
+// Source identifies the registry queried by a Forge operation. The public
+// registry uses the stable name "puppet-forge"; private names refer to a
+// source configured by the pack through the Secrets facet.
+message ForgeSourceSelection { string name = 1; }
+message ForgeSourceConfig {
+  string name = 1;
+  string label = 2;
+  string secret_ref = 3;
+}
+
+message SearchRequest {
+  string query = 1;
+  ForgeSourceSelection source = 2;
+  Page page = 3;
+}
+message SearchResponse {
+  repeated ForgeSearchResult results = 1;
+  PageInfo page = 2;
+}
+message ForgeSearchResult {
+  string name = 1;
+  string version = 2;
+  string source = 3;
+  string endorsement = 4;
+  double quality_score = 5;
+  google.protobuf.Timestamp release_date = 6;
+  bool deprecated = 7;
+  string superseded_by = 8;
+}
+
+message ResolveRequest {
+  string name = 1;
+  string version = 2;
+  ForgeSourceSelection source = 3;
+  string environment = 4;
+}
+message ResolveResponse {
+  DependencyNode root = 1;
+  repeated ForgeAdvisoryWarning warnings = 2;
+  bool advisory_only = 3;
+  string advisory_message = 4;
+}
+message DependencyNode {
+  string name = 1;
+  string version = 2;
+  string version_requirement = 3;
+  string source = 4;
+  repeated DependencyNode dependencies = 5;
+  bool cycle = 6;
+  bool conflict = 7;
+  bool unresolved = 8;
+  bool already_in_puppetfile = 9;
+  repeated ForgeAdvisoryWarning warnings = 10;
+}
+message ForgeAdvisoryWarning {
+  string code = 1;
+  string message = 2;
+  string module = 3;
+  string requirement = 4;
+  repeated string origins = 5;
+}
