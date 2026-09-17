@@ -160,3 +160,259 @@ message Class { string name = 1; Json parameters = 2; }
 message ClassList { repeated Class classes = 1; }
 
 message OnboardNodeRequest { string proposal_id = 1; }
+
+// --------------------------------------------------------------------- Code
+// Permission: code:rw (added to manifest/ in this phase) for every RPC below,
+// uniformly, including the read-only ones — the same single facet-level gate
+// Inventory uses. There is no narrower per-RPC permission.
+//
+// Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
+// content as structured, versioned resources. It never executes r10k/g10k,
+// never shells out to git, never writes to a real filesystem, and never
+// clones a remote repo (import is a later phase). Every RPC below reads and
+// writes namespaced JSON Documents through the SAME documentsServer instance
+// host.Host.Documents holds, across four collections kept deliberately
+// separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
+// code-hiera-data — because they have different write cadences, different
+// round-trip risk profiles, and different future approval-gate granularity.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// read-only git file browser (Repos/Tree/File). This shape is designed fresh
+// from this milestone's actual environment/Puppetfile/Hiera authoring
+// requirements; no RPC or message name was taken from the reference tree.
+//
+// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
+// a name that already exists is refused outright (AlreadyExists), never
+// silently applied. Deliberate overwrite of existing content is a later
+// phase's approval-gated path, not something this contract offers.
+service Code {
+  // ------------------------------------------------------ Environments
+  // An environment's name is its branch/directory identity, 1:1 with the
+  // name r10k/g10k will map to at deploy time.
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
+  rpc GetEnvironment(GetEnvironmentRequest) returns (Environment);
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (Environment);
+  rpc RenameEnvironment(RenameEnvironmentRequest) returns (Environment);
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (google.protobuf.Empty);
+  // DuplicateEnvironment copies the source environment's Puppetfile, Hiera
+  // hierarchy, Hiera data files and settings to a NEW target name in one
+  // atomic write. A target that already exists is refused, never merged.
+  rpc DuplicateEnvironment(DuplicateEnvironmentRequest) returns (Environment);
+
+  // ------------------------------------------------- environment.conf
+  // Fields a pack never wrote come back absent, not pre-filled with Puppet's
+  // documented defaults — Puppet applies those at catalog-compile time, and a
+  // second copy of them here would be a second source of truth.
+  rpc GetEnvironmentSettings(GetEnvironmentSettingsRequest) returns (EnvironmentSettings);
+  rpc PutEnvironmentSettings(PutEnvironmentSettingsRequest) returns (EnvironmentSettings);
+
+  // ------------------------------------------------------- Puppetfile
+  rpc ListPuppetfileModules(ListPuppetfileModulesRequest) returns (ListPuppetfileModulesResponse);
+  // PutPuppetfileModule upserts by module name: a name not present is
+  // appended, a name already present is replaced in place, preserving its
+  // position in the render order.
+  rpc PutPuppetfileModule(PutPuppetfileModuleRequest) returns (PuppetfileModule);
+  rpc RemovePuppetfileModule(RemovePuppetfileModuleRequest) returns (google.protobuf.Empty);
+  rpc SetModuledir(SetModuledirRequest) returns (Puppetfile);
+  // RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
+  // module model. Re-parsing that text yields the identical model — the
+  // writer is a fixed point of its own parser, so an unchanged save produces
+  // no diff. It does NOT preserve an original file's comments or quoting
+  // style; the ecosystem's own tooling discards those on parse too.
+  rpc RenderPuppetfile(RenderPuppetfileRequest) returns (RenderedPuppetfile);
+
+  // -------------------------------------------------- Hiera hierarchy
+  rpc GetHieraHierarchy(GetHieraHierarchyRequest) returns (HieraHierarchy);
+  // PutHieraLevel inserts or replaces one level. Level order is preserved and
+  // semantically meaningful (first match wins). The response carries lint
+  // warnings alongside the already-applied write — a flagged anti-pattern
+  // never blocks the write.
+  rpc PutHieraLevel(PutHieraLevelRequest) returns (PutHieraLevelResponse);
+  rpc RemoveHieraLevel(RemoveHieraLevelRequest) returns (HieraHierarchy);
+  rpc ReorderHieraLevels(ReorderHieraLevelsRequest) returns (HieraHierarchy);
+
+  // ------------------------------------------------ Hiera data files
+  rpc ListHieraDataFiles(ListHieraDataFilesRequest) returns (ListHieraDataFilesResponse);
+  rpc GetHieraDataFile(GetHieraDataFileRequest) returns (HieraDataFile);
+  rpc PutHieraDataKey(PutHieraDataKeyRequest) returns (HieraDataFile);
+  rpc RemoveHieraDataKey(RemoveHieraDataKeyRequest) returns (HieraDataFile);
+  rpc DeleteHieraDataFile(DeleteHieraDataFileRequest) returns (google.protobuf.Empty);
+}
+
+// ------------------------------------------------------------ Environments
+
+message Environment {
+  // name is both the git branch name and the on-disk directory name a
+  // deploy would use. Validated against Puppet's real deploy-time rule
+  // ^[a-z0-9_]+$ at create and rename time, because a name violating it can
+  // never actually deploy.
+  string name = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+message ListEnvironmentsRequest { Page page = 1; }
+message ListEnvironmentsResponse { repeated Environment environments = 1; PageInfo page = 2; }
+message GetEnvironmentRequest { string name = 1; }
+message CreateEnvironmentRequest { string name = 1; }
+message RenameEnvironmentRequest { string name = 1; string new_name = 2; }
+message DeleteEnvironmentRequest { string name = 1; }
+message DuplicateEnvironmentRequest { string source_name = 1; string target_name = 2; }
+
+// -------------------------------------------------------- environment.conf
+
+// EnvironmentSettings is the structured form of one environment's
+// environment.conf. Every setting uses proto3 explicit presence so "never
+// written" stays distinguishable from "written as empty".
+message EnvironmentSettings {
+  string environment = 1;
+  // Primary fields.
+  optional string modulepath = 2;
+  optional string manifest = 3;
+  optional string config_version = 4;
+  // environment_timeout is a string, not a number: Puppet accepts 0,
+  // unlimited, and duration forms like 5m.
+  optional string environment_timeout = 5;
+  // Advanced/collapsed group.
+  optional bool disable_per_environment_manifest = 6;
+  optional bool static_catalogs = 7;
+  optional bool rich_data = 8;
+}
+message GetEnvironmentSettingsRequest { string environment = 1; }
+message PutEnvironmentSettingsRequest { EnvironmentSettings settings = 1; }
+
+// -------------------------------------------------------------- Puppetfile
+
+message PuppetfileModule {
+  // name is the full slug for a Forge module (puppetlabs/apache) and the
+  // bare module name for a Git module (apache).
+  string name = 1;
+  oneof source {
+    ForgeSource forge = 2;
+    GitSource git = 3;
+  }
+}
+// ForgeSource renders `mod 'ns/name', 'x.y.z'` when version is set,
+// `mod 'ns/name', :latest` when latest is true, and a bare `mod 'ns/name'`
+// when neither is set. Setting both is refused.
+message ForgeSource {
+  string version = 1;
+  bool latest = 2;
+}
+// GitSource's ref_kind group holds at most one ref selector. control_branch
+// is a VALUE of the DSL's :branch key (`:branch => :control_branch`), not a
+// key of its own, which is why it sits inside the same group as branch
+// rather than beside it. default_branch is a genuinely separate DSL key and
+// may accompany any ref_kind arm.
+message GitSource {
+  string url = 1;
+  oneof ref_kind {
+    string ref = 2;
+    string tag = 3;
+    string branch = 4;
+    string commit = 5;
+    ControlBranch control_branch = 6;
+  }
+  string default_branch = 7;
+}
+// ControlBranch is a presence-only marker: its presence in GitSource.ref_kind
+// means `:branch => :control_branch`. It carries no fields, so there is no
+// "set but false" state to misread.
+message ControlBranch {}
+
+message Puppetfile {
+  string environment = 1;
+  // moduledir renders a leading `moduledir '<path>'` line when set; empty
+  // means the line is absent entirely.
+  string moduledir = 2;
+  // modules is the render order, preserved exactly.
+  repeated PuppetfileModule modules = 3;
+}
+message ListPuppetfileModulesRequest { string environment = 1; Page page = 2; }
+message ListPuppetfileModulesResponse {
+  repeated PuppetfileModule modules = 1;
+  PageInfo page = 2;
+  string moduledir = 3;
+}
+message PutPuppetfileModuleRequest { string environment = 1; PuppetfileModule module = 2; }
+message RemovePuppetfileModuleRequest { string environment = 1; string name = 2; }
+message SetModuledirRequest { string environment = 1; string moduledir = 2; }
+message RenderPuppetfileRequest { string environment = 1; }
+message RenderedPuppetfile { string text = 1; }
+
+// ------------------------------------------------------------------- Hiera
+
+// HieraLevel is one entry of a hiera.yaml v5 hierarchy. Exactly one of
+// path/paths/glob/mapped_paths selects the level's data.
+message HieraLevel {
+  string name = 1;
+  string path = 2;
+  repeated string paths = 3;
+  string glob = 4;
+  // mapped_paths carries exactly three elements when set: the source fact,
+  // the loop variable, and the path template referencing that variable.
+  repeated string mapped_paths = 5;
+  string datadir = 6;
+  string data_hash = 7;
+  // lookup_options is READ-ONLY this milestone: the server populates it for
+  // display from the data file a non-interpolated path names, and refuses a
+  // write that carries it. Values are merge behaviors: first, unique, hash,
+  // deep.
+  map<string, string> lookup_options = 8;
+}
+message HieraHierarchy {
+  string environment = 1;
+  int32 version = 2;
+  string default_datadir = 3;
+  string default_data_hash = 4;
+  // levels order is first-match-wins and is preserved byte-for-byte across a
+  // read/modify/write cycle, comments included.
+  repeated HieraLevel levels = 5;
+}
+// LintWarning is advisory only. It accompanies a write that already
+// succeeded; it is never returned in place of one.
+message LintWarning {
+  string code = 1;
+  string message = 2;
+  string field = 3;
+}
+message GetHieraHierarchyRequest { string environment = 1; }
+message PutHieraLevelRequest {
+  string environment = 1;
+  HieraLevel level = 2;
+  // index is the insert position when insert is true. When insert is false
+  // the level whose name matches level.name is replaced in place and index
+  // is ignored.
+  int32 index = 3;
+  bool insert = 4;
+}
+message PutHieraLevelResponse {
+  HieraHierarchy hierarchy = 1;
+  repeated LintWarning warnings = 2;
+}
+message RemoveHieraLevelRequest { string environment = 1; string name = 2; }
+// ReorderHieraLevelsRequest.names must be a permutation of the current level
+// names — every existing name exactly once, no additions, no omissions.
+message ReorderHieraLevelsRequest { string environment = 1; repeated string names = 2; }
+
+message HieraDataFile {
+  string environment = 1;
+  // path is relative to the datadir, e.g. common.yaml or nodes/web01.yaml.
+  // Absolute paths and any .. segment are refused.
+  string path = 2;
+  // values holds the file's top-level keys with lookup_options excluded.
+  map<string, Json> values = 3;
+  // lookup_options is READ-ONLY this milestone, surfaced for display only.
+  map<string, string> lookup_options = 4;
+}
+message ListHieraDataFilesRequest { string environment = 1; Page page = 2; }
+message ListHieraDataFilesResponse { repeated string paths = 1; PageInfo page = 2; }
+message GetHieraDataFileRequest { string environment = 1; string path = 2; }
+message PutHieraDataKeyRequest {
+  string environment = 1;
+  string path = 2;
+  string key = 3;
+  Json value = 4;
+}
+message RemoveHieraDataKeyRequest { string environment = 1; string path = 2; string key = 3; }
+message DeleteHieraDataFileRequest { string environment = 1; string path = 2; }

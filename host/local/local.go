@@ -92,13 +92,13 @@ func WithGroupClasses(classes map[string][]*hostv1.Class) Option {
 // New builds an in-process host.Host scoped to a manifest's declared
 // permissions. Documents is always available (scoped to packID's own
 // namespace instead of permission-gated); Settings is always available;
-// Secrets requires "secrets:rw", Auth requires "tokens:issue", and
-// Inventory requires "inventory:rw" — calling a gated facet without its
-// permission declared returns the same PERMISSION_DENIED a real Expansion
-// Pack would get from the console's gRPC interceptor.
+// Secrets requires "secrets:rw", Auth requires "tokens:issue", Inventory
+// requires "inventory:rw", and Code requires "code:rw" — calling a gated
+// facet without its permission declared returns the same PERMISSION_DENIED
+// a real Expansion Pack would get from the console's gRPC interceptor.
 //
-// All five in-scope facets (Documents, Settings, Secrets, Auth, Inventory)
-// are real implementations as of this plan (03-01).
+// All six in-scope facets (Documents, Settings, Secrets, Auth, Inventory,
+// Code) are real implementations as of this plan (06-01).
 func New(permissions []string, packID string, opts ...Option) *host.Host {
 	perms := make(map[string]bool, len(permissions))
 	for _, p := range permissions {
@@ -115,6 +115,7 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: newSecretsServer(packID)},
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
+		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs)},
 	}
 }
 

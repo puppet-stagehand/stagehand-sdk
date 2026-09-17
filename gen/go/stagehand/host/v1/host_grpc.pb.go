@@ -1439,3 +1439,1005 @@ var Inventory_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "stagehand/host/v1/host.proto",
 }
+
+const (
+	Code_ListEnvironments_FullMethodName       = "/stagehand.host.v1.Code/ListEnvironments"
+	Code_GetEnvironment_FullMethodName         = "/stagehand.host.v1.Code/GetEnvironment"
+	Code_CreateEnvironment_FullMethodName      = "/stagehand.host.v1.Code/CreateEnvironment"
+	Code_RenameEnvironment_FullMethodName      = "/stagehand.host.v1.Code/RenameEnvironment"
+	Code_DeleteEnvironment_FullMethodName      = "/stagehand.host.v1.Code/DeleteEnvironment"
+	Code_DuplicateEnvironment_FullMethodName   = "/stagehand.host.v1.Code/DuplicateEnvironment"
+	Code_GetEnvironmentSettings_FullMethodName = "/stagehand.host.v1.Code/GetEnvironmentSettings"
+	Code_PutEnvironmentSettings_FullMethodName = "/stagehand.host.v1.Code/PutEnvironmentSettings"
+	Code_ListPuppetfileModules_FullMethodName  = "/stagehand.host.v1.Code/ListPuppetfileModules"
+	Code_PutPuppetfileModule_FullMethodName    = "/stagehand.host.v1.Code/PutPuppetfileModule"
+	Code_RemovePuppetfileModule_FullMethodName = "/stagehand.host.v1.Code/RemovePuppetfileModule"
+	Code_SetModuledir_FullMethodName           = "/stagehand.host.v1.Code/SetModuledir"
+	Code_RenderPuppetfile_FullMethodName       = "/stagehand.host.v1.Code/RenderPuppetfile"
+	Code_GetHieraHierarchy_FullMethodName      = "/stagehand.host.v1.Code/GetHieraHierarchy"
+	Code_PutHieraLevel_FullMethodName          = "/stagehand.host.v1.Code/PutHieraLevel"
+	Code_RemoveHieraLevel_FullMethodName       = "/stagehand.host.v1.Code/RemoveHieraLevel"
+	Code_ReorderHieraLevels_FullMethodName     = "/stagehand.host.v1.Code/ReorderHieraLevels"
+	Code_ListHieraDataFiles_FullMethodName     = "/stagehand.host.v1.Code/ListHieraDataFiles"
+	Code_GetHieraDataFile_FullMethodName       = "/stagehand.host.v1.Code/GetHieraDataFile"
+	Code_PutHieraDataKey_FullMethodName        = "/stagehand.host.v1.Code/PutHieraDataKey"
+	Code_RemoveHieraDataKey_FullMethodName     = "/stagehand.host.v1.Code/RemoveHieraDataKey"
+	Code_DeleteHieraDataFile_FullMethodName    = "/stagehand.host.v1.Code/DeleteHieraDataFile"
+)
+
+// CodeClient is the client API for Code service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// --------------------------------------------------------------------- Code
+// Permission: code:rw (added to manifest/ in this phase) for every RPC below,
+// uniformly, including the read-only ones — the same single facet-level gate
+// Inventory uses. There is no narrower per-RPC permission.
+//
+// Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
+// content as structured, versioned resources. It never executes r10k/g10k,
+// never shells out to git, never writes to a real filesystem, and never
+// clones a remote repo (import is a later phase). Every RPC below reads and
+// writes namespaced JSON Documents through the SAME documentsServer instance
+// host.Host.Documents holds, across four collections kept deliberately
+// separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
+// code-hiera-data — because they have different write cadences, different
+// round-trip risk profiles, and different future approval-gate granularity.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// read-only git file browser (Repos/Tree/File). This shape is designed fresh
+// from this milestone's actual environment/Puppetfile/Hiera authoring
+// requirements; no RPC or message name was taken from the reference tree.
+//
+// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
+// a name that already exists is refused outright (AlreadyExists), never
+// silently applied. Deliberate overwrite of existing content is a later
+// phase's approval-gated path, not something this contract offers.
+type CodeClient interface {
+	// ------------------------------------------------------ Environments
+	// An environment's name is its branch/directory identity, 1:1 with the
+	// name r10k/g10k will map to at deploy time.
+	ListEnvironments(ctx context.Context, in *ListEnvironmentsRequest, opts ...grpc.CallOption) (*ListEnvironmentsResponse, error)
+	GetEnvironment(ctx context.Context, in *GetEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
+	CreateEnvironment(ctx context.Context, in *CreateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
+	RenameEnvironment(ctx context.Context, in *RenameEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
+	DeleteEnvironment(ctx context.Context, in *DeleteEnvironmentRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// DuplicateEnvironment copies the source environment's Puppetfile, Hiera
+	// hierarchy, Hiera data files and settings to a NEW target name in one
+	// atomic write. A target that already exists is refused, never merged.
+	DuplicateEnvironment(ctx context.Context, in *DuplicateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
+	// ------------------------------------------------- environment.conf
+	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
+	// documented defaults — Puppet applies those at catalog-compile time, and a
+	// second copy of them here would be a second source of truth.
+	GetEnvironmentSettings(ctx context.Context, in *GetEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
+	PutEnvironmentSettings(ctx context.Context, in *PutEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
+	// ------------------------------------------------------- Puppetfile
+	ListPuppetfileModules(ctx context.Context, in *ListPuppetfileModulesRequest, opts ...grpc.CallOption) (*ListPuppetfileModulesResponse, error)
+	// PutPuppetfileModule upserts by module name: a name not present is
+	// appended, a name already present is replaced in place, preserving its
+	// position in the render order.
+	PutPuppetfileModule(ctx context.Context, in *PutPuppetfileModuleRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
+	RemovePuppetfileModule(ctx context.Context, in *RemovePuppetfileModuleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	SetModuledir(ctx context.Context, in *SetModuledirRequest, opts ...grpc.CallOption) (*Puppetfile, error)
+	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
+	// module model. Re-parsing that text yields the identical model — the
+	// writer is a fixed point of its own parser, so an unchanged save produces
+	// no diff. It does NOT preserve an original file's comments or quoting
+	// style; the ecosystem's own tooling discards those on parse too.
+	RenderPuppetfile(ctx context.Context, in *RenderPuppetfileRequest, opts ...grpc.CallOption) (*RenderedPuppetfile, error)
+	// -------------------------------------------------- Hiera hierarchy
+	GetHieraHierarchy(ctx context.Context, in *GetHieraHierarchyRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
+	// PutHieraLevel inserts or replaces one level. Level order is preserved and
+	// semantically meaningful (first match wins). The response carries lint
+	// warnings alongside the already-applied write — a flagged anti-pattern
+	// never blocks the write.
+	PutHieraLevel(ctx context.Context, in *PutHieraLevelRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error)
+	RemoveHieraLevel(ctx context.Context, in *RemoveHieraLevelRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
+	ReorderHieraLevels(ctx context.Context, in *ReorderHieraLevelsRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
+	// ------------------------------------------------ Hiera data files
+	ListHieraDataFiles(ctx context.Context, in *ListHieraDataFilesRequest, opts ...grpc.CallOption) (*ListHieraDataFilesResponse, error)
+	GetHieraDataFile(ctx context.Context, in *GetHieraDataFileRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
+	PutHieraDataKey(ctx context.Context, in *PutHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
+	RemoveHieraDataKey(ctx context.Context, in *RemoveHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
+	DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDataFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+}
+
+type codeClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCodeClient(cc grpc.ClientConnInterface) CodeClient {
+	return &codeClient{cc}
+}
+
+func (c *codeClient) ListEnvironments(ctx context.Context, in *ListEnvironmentsRequest, opts ...grpc.CallOption) (*ListEnvironmentsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListEnvironmentsResponse)
+	err := c.cc.Invoke(ctx, Code_ListEnvironments_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) GetEnvironment(ctx context.Context, in *GetEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Environment)
+	err := c.cc.Invoke(ctx, Code_GetEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) CreateEnvironment(ctx context.Context, in *CreateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Environment)
+	err := c.cc.Invoke(ctx, Code_CreateEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) RenameEnvironment(ctx context.Context, in *RenameEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Environment)
+	err := c.cc.Invoke(ctx, Code_RenameEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) DeleteEnvironment(ctx context.Context, in *DeleteEnvironmentRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Code_DeleteEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) DuplicateEnvironment(ctx context.Context, in *DuplicateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Environment)
+	err := c.cc.Invoke(ctx, Code_DuplicateEnvironment_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) GetEnvironmentSettings(ctx context.Context, in *GetEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnvironmentSettings)
+	err := c.cc.Invoke(ctx, Code_GetEnvironmentSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) PutEnvironmentSettings(ctx context.Context, in *PutEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnvironmentSettings)
+	err := c.cc.Invoke(ctx, Code_PutEnvironmentSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ListPuppetfileModules(ctx context.Context, in *ListPuppetfileModulesRequest, opts ...grpc.CallOption) (*ListPuppetfileModulesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListPuppetfileModulesResponse)
+	err := c.cc.Invoke(ctx, Code_ListPuppetfileModules_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) PutPuppetfileModule(ctx context.Context, in *PutPuppetfileModuleRequest, opts ...grpc.CallOption) (*PuppetfileModule, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PuppetfileModule)
+	err := c.cc.Invoke(ctx, Code_PutPuppetfileModule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) RemovePuppetfileModule(ctx context.Context, in *RemovePuppetfileModuleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Code_RemovePuppetfileModule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) SetModuledir(ctx context.Context, in *SetModuledirRequest, opts ...grpc.CallOption) (*Puppetfile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Puppetfile)
+	err := c.cc.Invoke(ctx, Code_SetModuledir_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) RenderPuppetfile(ctx context.Context, in *RenderPuppetfileRequest, opts ...grpc.CallOption) (*RenderedPuppetfile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RenderedPuppetfile)
+	err := c.cc.Invoke(ctx, Code_RenderPuppetfile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) GetHieraHierarchy(ctx context.Context, in *GetHieraHierarchyRequest, opts ...grpc.CallOption) (*HieraHierarchy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraHierarchy)
+	err := c.cc.Invoke(ctx, Code_GetHieraHierarchy_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) PutHieraLevel(ctx context.Context, in *PutHieraLevelRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutHieraLevelResponse)
+	err := c.cc.Invoke(ctx, Code_PutHieraLevel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) RemoveHieraLevel(ctx context.Context, in *RemoveHieraLevelRequest, opts ...grpc.CallOption) (*HieraHierarchy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraHierarchy)
+	err := c.cc.Invoke(ctx, Code_RemoveHieraLevel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ReorderHieraLevels(ctx context.Context, in *ReorderHieraLevelsRequest, opts ...grpc.CallOption) (*HieraHierarchy, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraHierarchy)
+	err := c.cc.Invoke(ctx, Code_ReorderHieraLevels_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ListHieraDataFiles(ctx context.Context, in *ListHieraDataFilesRequest, opts ...grpc.CallOption) (*ListHieraDataFilesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListHieraDataFilesResponse)
+	err := c.cc.Invoke(ctx, Code_ListHieraDataFiles_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) GetHieraDataFile(ctx context.Context, in *GetHieraDataFileRequest, opts ...grpc.CallOption) (*HieraDataFile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraDataFile)
+	err := c.cc.Invoke(ctx, Code_GetHieraDataFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) PutHieraDataKey(ctx context.Context, in *PutHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraDataFile)
+	err := c.cc.Invoke(ctx, Code_PutHieraDataKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) RemoveHieraDataKey(ctx context.Context, in *RemoveHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraDataFile)
+	err := c.cc.Invoke(ctx, Code_RemoveHieraDataKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDataFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, Code_DeleteHieraDataFile_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CodeServer is the server API for Code service.
+// All implementations must embed UnimplementedCodeServer
+// for forward compatibility.
+//
+// --------------------------------------------------------------------- Code
+// Permission: code:rw (added to manifest/ in this phase) for every RPC below,
+// uniformly, including the read-only ones — the same single facet-level gate
+// Inventory uses. There is no narrower per-RPC permission.
+//
+// Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
+// content as structured, versioned resources. It never executes r10k/g10k,
+// never shells out to git, never writes to a real filesystem, and never
+// clones a remote repo (import is a later phase). Every RPC below reads and
+// writes namespaced JSON Documents through the SAME documentsServer instance
+// host.Host.Documents holds, across four collections kept deliberately
+// separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
+// code-hiera-data — because they have different write cadences, different
+// round-trip risk profiles, and different future approval-gate granularity.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// read-only git file browser (Repos/Tree/File). This shape is designed fresh
+// from this milestone's actual environment/Puppetfile/Hiera authoring
+// requirements; no RPC or message name was taken from the reference tree.
+//
+// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
+// a name that already exists is refused outright (AlreadyExists), never
+// silently applied. Deliberate overwrite of existing content is a later
+// phase's approval-gated path, not something this contract offers.
+type CodeServer interface {
+	// ------------------------------------------------------ Environments
+	// An environment's name is its branch/directory identity, 1:1 with the
+	// name r10k/g10k will map to at deploy time.
+	ListEnvironments(context.Context, *ListEnvironmentsRequest) (*ListEnvironmentsResponse, error)
+	GetEnvironment(context.Context, *GetEnvironmentRequest) (*Environment, error)
+	CreateEnvironment(context.Context, *CreateEnvironmentRequest) (*Environment, error)
+	RenameEnvironment(context.Context, *RenameEnvironmentRequest) (*Environment, error)
+	DeleteEnvironment(context.Context, *DeleteEnvironmentRequest) (*emptypb.Empty, error)
+	// DuplicateEnvironment copies the source environment's Puppetfile, Hiera
+	// hierarchy, Hiera data files and settings to a NEW target name in one
+	// atomic write. A target that already exists is refused, never merged.
+	DuplicateEnvironment(context.Context, *DuplicateEnvironmentRequest) (*Environment, error)
+	// ------------------------------------------------- environment.conf
+	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
+	// documented defaults — Puppet applies those at catalog-compile time, and a
+	// second copy of them here would be a second source of truth.
+	GetEnvironmentSettings(context.Context, *GetEnvironmentSettingsRequest) (*EnvironmentSettings, error)
+	PutEnvironmentSettings(context.Context, *PutEnvironmentSettingsRequest) (*EnvironmentSettings, error)
+	// ------------------------------------------------------- Puppetfile
+	ListPuppetfileModules(context.Context, *ListPuppetfileModulesRequest) (*ListPuppetfileModulesResponse, error)
+	// PutPuppetfileModule upserts by module name: a name not present is
+	// appended, a name already present is replaced in place, preserving its
+	// position in the render order.
+	PutPuppetfileModule(context.Context, *PutPuppetfileModuleRequest) (*PuppetfileModule, error)
+	RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error)
+	SetModuledir(context.Context, *SetModuledirRequest) (*Puppetfile, error)
+	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
+	// module model. Re-parsing that text yields the identical model — the
+	// writer is a fixed point of its own parser, so an unchanged save produces
+	// no diff. It does NOT preserve an original file's comments or quoting
+	// style; the ecosystem's own tooling discards those on parse too.
+	RenderPuppetfile(context.Context, *RenderPuppetfileRequest) (*RenderedPuppetfile, error)
+	// -------------------------------------------------- Hiera hierarchy
+	GetHieraHierarchy(context.Context, *GetHieraHierarchyRequest) (*HieraHierarchy, error)
+	// PutHieraLevel inserts or replaces one level. Level order is preserved and
+	// semantically meaningful (first match wins). The response carries lint
+	// warnings alongside the already-applied write — a flagged anti-pattern
+	// never blocks the write.
+	PutHieraLevel(context.Context, *PutHieraLevelRequest) (*PutHieraLevelResponse, error)
+	RemoveHieraLevel(context.Context, *RemoveHieraLevelRequest) (*HieraHierarchy, error)
+	ReorderHieraLevels(context.Context, *ReorderHieraLevelsRequest) (*HieraHierarchy, error)
+	// ------------------------------------------------ Hiera data files
+	ListHieraDataFiles(context.Context, *ListHieraDataFilesRequest) (*ListHieraDataFilesResponse, error)
+	GetHieraDataFile(context.Context, *GetHieraDataFileRequest) (*HieraDataFile, error)
+	PutHieraDataKey(context.Context, *PutHieraDataKeyRequest) (*HieraDataFile, error)
+	RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error)
+	DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error)
+	mustEmbedUnimplementedCodeServer()
+}
+
+// UnimplementedCodeServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCodeServer struct{}
+
+func (UnimplementedCodeServer) ListEnvironments(context.Context, *ListEnvironmentsRequest) (*ListEnvironmentsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListEnvironments not implemented")
+}
+func (UnimplementedCodeServer) GetEnvironment(context.Context, *GetEnvironmentRequest) (*Environment, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetEnvironment not implemented")
+}
+func (UnimplementedCodeServer) CreateEnvironment(context.Context, *CreateEnvironmentRequest) (*Environment, error) {
+	return nil, status.Error(codes.Unimplemented, "method CreateEnvironment not implemented")
+}
+func (UnimplementedCodeServer) RenameEnvironment(context.Context, *RenameEnvironmentRequest) (*Environment, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenameEnvironment not implemented")
+}
+func (UnimplementedCodeServer) DeleteEnvironment(context.Context, *DeleteEnvironmentRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteEnvironment not implemented")
+}
+func (UnimplementedCodeServer) DuplicateEnvironment(context.Context, *DuplicateEnvironmentRequest) (*Environment, error) {
+	return nil, status.Error(codes.Unimplemented, "method DuplicateEnvironment not implemented")
+}
+func (UnimplementedCodeServer) GetEnvironmentSettings(context.Context, *GetEnvironmentSettingsRequest) (*EnvironmentSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetEnvironmentSettings not implemented")
+}
+func (UnimplementedCodeServer) PutEnvironmentSettings(context.Context, *PutEnvironmentSettingsRequest) (*EnvironmentSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutEnvironmentSettings not implemented")
+}
+func (UnimplementedCodeServer) ListPuppetfileModules(context.Context, *ListPuppetfileModulesRequest) (*ListPuppetfileModulesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListPuppetfileModules not implemented")
+}
+func (UnimplementedCodeServer) PutPuppetfileModule(context.Context, *PutPuppetfileModuleRequest) (*PuppetfileModule, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutPuppetfileModule not implemented")
+}
+func (UnimplementedCodeServer) RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemovePuppetfileModule not implemented")
+}
+func (UnimplementedCodeServer) SetModuledir(context.Context, *SetModuledirRequest) (*Puppetfile, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetModuledir not implemented")
+}
+func (UnimplementedCodeServer) RenderPuppetfile(context.Context, *RenderPuppetfileRequest) (*RenderedPuppetfile, error) {
+	return nil, status.Error(codes.Unimplemented, "method RenderPuppetfile not implemented")
+}
+func (UnimplementedCodeServer) GetHieraHierarchy(context.Context, *GetHieraHierarchyRequest) (*HieraHierarchy, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetHieraHierarchy not implemented")
+}
+func (UnimplementedCodeServer) PutHieraLevel(context.Context, *PutHieraLevelRequest) (*PutHieraLevelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutHieraLevel not implemented")
+}
+func (UnimplementedCodeServer) RemoveHieraLevel(context.Context, *RemoveHieraLevelRequest) (*HieraHierarchy, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveHieraLevel not implemented")
+}
+func (UnimplementedCodeServer) ReorderHieraLevels(context.Context, *ReorderHieraLevelsRequest) (*HieraHierarchy, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReorderHieraLevels not implemented")
+}
+func (UnimplementedCodeServer) ListHieraDataFiles(context.Context, *ListHieraDataFilesRequest) (*ListHieraDataFilesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListHieraDataFiles not implemented")
+}
+func (UnimplementedCodeServer) GetHieraDataFile(context.Context, *GetHieraDataFileRequest) (*HieraDataFile, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetHieraDataFile not implemented")
+}
+func (UnimplementedCodeServer) PutHieraDataKey(context.Context, *PutHieraDataKeyRequest) (*HieraDataFile, error) {
+	return nil, status.Error(codes.Unimplemented, "method PutHieraDataKey not implemented")
+}
+func (UnimplementedCodeServer) RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error) {
+	return nil, status.Error(codes.Unimplemented, "method RemoveHieraDataKey not implemented")
+}
+func (UnimplementedCodeServer) DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteHieraDataFile not implemented")
+}
+func (UnimplementedCodeServer) mustEmbedUnimplementedCodeServer() {}
+func (UnimplementedCodeServer) testEmbeddedByValue()              {}
+
+// UnsafeCodeServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CodeServer will
+// result in compilation errors.
+type UnsafeCodeServer interface {
+	mustEmbedUnimplementedCodeServer()
+}
+
+func RegisterCodeServer(s grpc.ServiceRegistrar, srv CodeServer) {
+	// If the following call panics, it indicates UnimplementedCodeServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Code_ServiceDesc, srv)
+}
+
+func _Code_ListEnvironments_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListEnvironmentsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ListEnvironments(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ListEnvironments_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ListEnvironments(ctx, req.(*ListEnvironmentsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_GetEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).GetEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_GetEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).GetEnvironment(ctx, req.(*GetEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_CreateEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).CreateEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_CreateEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).CreateEnvironment(ctx, req.(*CreateEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_RenameEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenameEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).RenameEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_RenameEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).RenameEnvironment(ctx, req.(*RenameEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_DeleteEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).DeleteEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_DeleteEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).DeleteEnvironment(ctx, req.(*DeleteEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_DuplicateEnvironment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DuplicateEnvironmentRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).DuplicateEnvironment(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_DuplicateEnvironment_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).DuplicateEnvironment(ctx, req.(*DuplicateEnvironmentRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_GetEnvironmentSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetEnvironmentSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).GetEnvironmentSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_GetEnvironmentSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).GetEnvironmentSettings(ctx, req.(*GetEnvironmentSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_PutEnvironmentSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutEnvironmentSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).PutEnvironmentSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_PutEnvironmentSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).PutEnvironmentSettings(ctx, req.(*PutEnvironmentSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ListPuppetfileModules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListPuppetfileModulesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ListPuppetfileModules(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ListPuppetfileModules_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ListPuppetfileModules(ctx, req.(*ListPuppetfileModulesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_PutPuppetfileModule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutPuppetfileModuleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).PutPuppetfileModule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_PutPuppetfileModule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).PutPuppetfileModule(ctx, req.(*PutPuppetfileModuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_RemovePuppetfileModule_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemovePuppetfileModuleRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).RemovePuppetfileModule(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_RemovePuppetfileModule_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).RemovePuppetfileModule(ctx, req.(*RemovePuppetfileModuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_SetModuledir_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetModuledirRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).SetModuledir(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_SetModuledir_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).SetModuledir(ctx, req.(*SetModuledirRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_RenderPuppetfile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RenderPuppetfileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).RenderPuppetfile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_RenderPuppetfile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).RenderPuppetfile(ctx, req.(*RenderPuppetfileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_GetHieraHierarchy_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetHieraHierarchyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).GetHieraHierarchy(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_GetHieraHierarchy_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).GetHieraHierarchy(ctx, req.(*GetHieraHierarchyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_PutHieraLevel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutHieraLevelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).PutHieraLevel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_PutHieraLevel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).PutHieraLevel(ctx, req.(*PutHieraLevelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_RemoveHieraLevel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveHieraLevelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).RemoveHieraLevel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_RemoveHieraLevel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).RemoveHieraLevel(ctx, req.(*RemoveHieraLevelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ReorderHieraLevels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReorderHieraLevelsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ReorderHieraLevels(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ReorderHieraLevels_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ReorderHieraLevels(ctx, req.(*ReorderHieraLevelsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ListHieraDataFiles_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListHieraDataFilesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ListHieraDataFiles(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ListHieraDataFiles_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ListHieraDataFiles(ctx, req.(*ListHieraDataFilesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_GetHieraDataFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetHieraDataFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).GetHieraDataFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_GetHieraDataFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).GetHieraDataFile(ctx, req.(*GetHieraDataFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_PutHieraDataKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PutHieraDataKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).PutHieraDataKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_PutHieraDataKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).PutHieraDataKey(ctx, req.(*PutHieraDataKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_RemoveHieraDataKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RemoveHieraDataKeyRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).RemoveHieraDataKey(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_RemoveHieraDataKey_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).RemoveHieraDataKey(ctx, req.(*RemoveHieraDataKeyRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_DeleteHieraDataFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteHieraDataFileRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).DeleteHieraDataFile(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_DeleteHieraDataFile_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).DeleteHieraDataFile(ctx, req.(*DeleteHieraDataFileRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Code_ServiceDesc is the grpc.ServiceDesc for Code service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Code_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "stagehand.host.v1.Code",
+	HandlerType: (*CodeServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListEnvironments",
+			Handler:    _Code_ListEnvironments_Handler,
+		},
+		{
+			MethodName: "GetEnvironment",
+			Handler:    _Code_GetEnvironment_Handler,
+		},
+		{
+			MethodName: "CreateEnvironment",
+			Handler:    _Code_CreateEnvironment_Handler,
+		},
+		{
+			MethodName: "RenameEnvironment",
+			Handler:    _Code_RenameEnvironment_Handler,
+		},
+		{
+			MethodName: "DeleteEnvironment",
+			Handler:    _Code_DeleteEnvironment_Handler,
+		},
+		{
+			MethodName: "DuplicateEnvironment",
+			Handler:    _Code_DuplicateEnvironment_Handler,
+		},
+		{
+			MethodName: "GetEnvironmentSettings",
+			Handler:    _Code_GetEnvironmentSettings_Handler,
+		},
+		{
+			MethodName: "PutEnvironmentSettings",
+			Handler:    _Code_PutEnvironmentSettings_Handler,
+		},
+		{
+			MethodName: "ListPuppetfileModules",
+			Handler:    _Code_ListPuppetfileModules_Handler,
+		},
+		{
+			MethodName: "PutPuppetfileModule",
+			Handler:    _Code_PutPuppetfileModule_Handler,
+		},
+		{
+			MethodName: "RemovePuppetfileModule",
+			Handler:    _Code_RemovePuppetfileModule_Handler,
+		},
+		{
+			MethodName: "SetModuledir",
+			Handler:    _Code_SetModuledir_Handler,
+		},
+		{
+			MethodName: "RenderPuppetfile",
+			Handler:    _Code_RenderPuppetfile_Handler,
+		},
+		{
+			MethodName: "GetHieraHierarchy",
+			Handler:    _Code_GetHieraHierarchy_Handler,
+		},
+		{
+			MethodName: "PutHieraLevel",
+			Handler:    _Code_PutHieraLevel_Handler,
+		},
+		{
+			MethodName: "RemoveHieraLevel",
+			Handler:    _Code_RemoveHieraLevel_Handler,
+		},
+		{
+			MethodName: "ReorderHieraLevels",
+			Handler:    _Code_ReorderHieraLevels_Handler,
+		},
+		{
+			MethodName: "ListHieraDataFiles",
+			Handler:    _Code_ListHieraDataFiles_Handler,
+		},
+		{
+			MethodName: "GetHieraDataFile",
+			Handler:    _Code_GetHieraDataFile_Handler,
+		},
+		{
+			MethodName: "PutHieraDataKey",
+			Handler:    _Code_PutHieraDataKey_Handler,
+		},
+		{
+			MethodName: "RemoveHieraDataKey",
+			Handler:    _Code_RemoveHieraDataKey_Handler,
+		},
+		{
+			MethodName: "DeleteHieraDataFile",
+			Handler:    _Code_DeleteHieraDataFile_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "stagehand/host/v1/host.proto",
+}

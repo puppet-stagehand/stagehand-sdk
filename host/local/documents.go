@@ -171,6 +171,78 @@ func cloneDocument(d *hostv1.Document) *hostv1.Document {
 	return proto.Clone(d).(*hostv1.Document)
 }
 
+// getLocked returns the live stored document pointer for collection/docID
+// and whether it was found. The caller must already hold s.mu. It returns
+// the live pointer, not a clone — a caller handing the value outward must
+// clone it itself (see cloneDocument); an internal read-modify-write path
+// that only inspects the value does not need to.
+func (s *documentsServer) getLocked(collection, docID string) (*hostv1.Document, bool) {
+	coll, ok := s.store[collection]
+	if !ok {
+		return nil, false
+	}
+	doc, ok := coll[docID]
+	return doc, ok
+}
+
+// putLocked writes body into collection/docID and returns the new version.
+// The caller must already hold s.mu. When createOnly is true and a document
+// already exists at that id, it writes nothing and returns
+// codes.AlreadyExists. Otherwise it writes with version = existing.Version +
+// 1 (or 1 when new), preserving CreatedAt across an update and setting
+// UpdatedAt to the current time.
+func (s *documentsServer) putLocked(collection, docID string, body *hostv1.Json, createOnly bool) (int64, error) {
+	coll, ok := s.store[collection]
+	if !ok {
+		coll = map[string]*hostv1.Document{}
+		s.store[collection] = coll
+	}
+	existing, exists := coll[docID]
+	if createOnly && exists {
+		return 0, status.Errorf(codes.AlreadyExists, "document %s/%s already exists", collection, docID)
+	}
+
+	now := timestamppb.Now()
+	newVersion := int64(1)
+	createdAt := now
+	if exists {
+		newVersion = existing.Version + 1
+		createdAt = existing.CreatedAt
+	}
+	coll[docID] = &hostv1.Document{
+		Collection: collection, DocId: docID, Body: body,
+		Version: newVersion, CreatedAt: createdAt, UpdatedAt: now,
+	}
+	return newVersion, nil
+}
+
+// deleteLocked removes the document at collection/docID, returning whether
+// it was present. The caller must already hold s.mu.
+func (s *documentsServer) deleteLocked(collection, docID string) bool {
+	coll, ok := s.store[collection]
+	if !ok {
+		return false
+	}
+	if _, ok := coll[docID]; !ok {
+		return false
+	}
+	delete(coll, docID)
+	return true
+}
+
+// idsLocked returns collection's doc ids sorted ascending, or an empty
+// (non-nil) slice for a collection that does not exist. The caller must
+// already hold s.mu.
+func (s *documentsServer) idsLocked(collection string) []string {
+	coll := s.store[collection]
+	ids := make([]string, 0, len(coll))
+	for id := range coll {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
 func fieldAt(m map[string]any, dotted string) any {
 	cur := any(m)
 	for _, part := range splitDots(dotted) {
