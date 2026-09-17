@@ -212,6 +212,74 @@ func TestInventoryRWPermissionIsAccepted(t *testing.T) {
 	}
 }
 
+func TestCodeRWPermissionIsAccepted(t *testing.T) {
+	m := load(t, "../examples/hello/manifest.json")
+	m.Permissions = append(m.Permissions, "code:rw")
+	if fs := Validate(m); len(fs) != 0 {
+		t.Fatalf("code:rw must validate clean; got %v", fs)
+	}
+
+	m2 := load(t, "../examples/hello/manifest.json")
+	m2.Permissions = append(m2.Permissions, "code:write")
+	fs := Validate(m2)
+	var found *Finding
+	for i := range fs {
+		if fs[i].Code == "permission_unknown" {
+			found = &fs[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected a permission_unknown finding, got %v", codes(fs))
+	}
+	if !strings.Contains(found.Fix, "code:rw") {
+		t.Fatalf("permission_unknown fix line must offer code:rw; got %q", found.Fix)
+	}
+}
+
+// TestCodeRWIsAnExactLiteralNotAPrefix fails if the two code: branches are
+// ever "simplified" into one prefix pattern — the widening that would hand
+// a pack permissions it never declared (T-06-10).
+func TestCodeRWIsAnExactLiteralNotAPrefix(t *testing.T) {
+	for _, p := range []string{"code:rw", "code:read"} {
+		if !rePerm.MatchString(p) {
+			t.Errorf("rePerm must match %q", p)
+		}
+	}
+	for _, p := range []string{"code:write", "code:readwrite", "code:rw:all", "code:"} {
+		if rePerm.MatchString(p) {
+			t.Errorf("rePerm must NOT match %q — code:rw must be an exact literal, not a widened prefix", p)
+		}
+	}
+}
+
+// TestCodeReadSurvivesTheCodeRWAddition pins T-06-13: code:read names a
+// different, dormant service (a read-only file browser) than this
+// milestone's write-capable Code facet, so it must be added alongside,
+// never in place of, the existing permission.
+func TestCodeReadSurvivesTheCodeRWAddition(t *testing.T) {
+	var found bool
+	for _, p := range Permissions {
+		if p == "code:read" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Permissions slice must still contain code:read")
+	}
+	if !rePerm.MatchString("code:read") {
+		t.Error("rePerm must still match code:read")
+	}
+	raw, err := os.ReadFile("schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "code:read") {
+		t.Error("schema.json must still contain the literal code:read")
+	}
+}
+
 // TestApprovalScopeIsNotAManifestPermission pins the orthogonality ONB-05
 // shipped in Phase 3: a facet permission is granted once at install and
 // held for the pack's whole lifetime, while the "inventory:approve" scope
