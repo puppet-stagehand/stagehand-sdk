@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/puppet-stagehand/stagehand-sdk/code"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
@@ -357,11 +358,247 @@ func TestCode_PuppetfileUnknownEnvironmentAndModule(t *testing.T) {
 	if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "ghost", Name: "puppetlabs/ntp"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("RemovePuppetfileModule(ghost): got %v, want NotFound", err)
 	}
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "ghost", Moduledir: "thirdparty"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("SetModuledir(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "ghost"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RenderPuppetfile(ghost): got %v, want NotFound", err)
+	}
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
 	if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "does-not-exist"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("RemovePuppetfileModule(unknown module): got %v, want NotFound", err)
+	}
+}
+
+func TestCode_ModuledirSetAndClear(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	// RenderPuppetfile for an environment with no Puppetfile document
+	// returns the empty string and a nil error.
+	unauthored, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile (unauthored): %v", err)
+	}
+	if unauthored.Text != "" {
+		t.Fatalf("expected empty text for an unauthored Puppetfile, got %q", unauthored.Text)
+	}
+
+	pf, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: "thirdparty"})
+	if err != nil {
+		t.Fatalf("SetModuledir(thirdparty): %v", err)
+	}
+	if pf.Moduledir != "thirdparty" {
+		t.Fatalf("expected returned Puppetfile.Moduledir == thirdparty, got %q", pf.Moduledir)
+	}
+
+	resp, err := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("ListPuppetfileModules: %v", err)
+	}
+	if resp.Moduledir != "thirdparty" {
+		t.Fatalf("expected Moduledir == thirdparty, got %q", resp.Moduledir)
+	}
+
+	rendered, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile: %v", err)
+	}
+	if rendered.Text != "moduledir 'thirdparty'\n" {
+		t.Fatalf("expected moduledir-only render, got %q", rendered.Text)
+	}
+
+	// Setting the same value twice leaves the stored text byte-identical.
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: "thirdparty"}); err != nil {
+		t.Fatalf("SetModuledir(thirdparty again): %v", err)
+	}
+	rendered2, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile (2nd): %v", err)
+	}
+	if rendered.Text != rendered2.Text {
+		t.Fatalf("expected byte-identical text after idempotent SetModuledir, got:\nfirst:  %q\nsecond: %q", rendered.Text, rendered2.Text)
+	}
+
+	// Clearing removes the moduledir line entirely.
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: ""}); err != nil {
+		t.Fatalf("SetModuledir(clear): %v", err)
+	}
+	cleared, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile after clear: %v", err)
+	}
+	if cleared.Text != "" {
+		t.Fatalf("expected empty text after clearing moduledir with no modules, got %q", cleared.Text)
+	}
+}
+
+func TestCode_PuppetfileNoSpuriousDiff(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	assertFixedPoint := func(t *testing.T, step string) {
+		t.Helper()
+		rendered, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+		if err != nil {
+			t.Fatalf("%s: RenderPuppetfile: %v", step, err)
+		}
+		// This assertion is deliberately NOT a comparison against some
+		// original hand-written file's bytes — PF-05 is model round-trip
+		// idempotency (the writer being a fixed point of its own parser),
+		// not preservation of an imported file's comments or quoting
+		// style. The ecosystem's own tooling discards those on parse.
+		model, err := code.ParsePuppetfile(rendered.Text)
+		if err != nil {
+			t.Fatalf("%s: ParsePuppetfile(%q): %v", step, rendered.Text, err)
+		}
+		rerendered, err := code.RenderPuppetfile(model)
+		if err != nil {
+			t.Fatalf("%s: RenderPuppetfile(model): %v", step, err)
+		}
+		if rendered.Text != rerendered {
+			t.Fatalf("%s: not a fixed point:\nstored:     %q\nre-rendered: %q", step, rendered.Text, rerendered)
+		}
+	}
+
+	// 1. Add a Forge module.
+	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod",
+		Module: &hostv1.PuppetfileModule{
+			Name:   "puppetlabs/apache",
+			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "0.10.0"}},
+		},
+	}); err != nil {
+		t.Fatalf("add forge module: %v", err)
+	}
+	assertFixedPoint(t, "after add Forge module")
+
+	// 2. Add a Git module.
+	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod",
+		Module: &hostv1.PuppetfileModule{
+			Name: "concat",
+			Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+				Url:     "https://github.com/puppetlabs/puppetlabs-concat",
+				RefKind: &hostv1.GitSource_Tag{Tag: "0.9.0"},
+			}},
+		},
+	}); err != nil {
+		t.Fatalf("add git module: %v", err)
+	}
+	assertFixedPoint(t, "after add Git module")
+
+	// 3. Edit the Forge module's version.
+	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod",
+		Module: &hostv1.PuppetfileModule{
+			Name:   "puppetlabs/apache",
+			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "6.1.0"}},
+		},
+	}); err != nil {
+		t.Fatalf("edit forge module: %v", err)
+	}
+	assertFixedPoint(t, "after edit Forge module")
+
+	// 4. Set moduledir.
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: "thirdparty"}); err != nil {
+		t.Fatalf("set moduledir: %v", err)
+	}
+	assertFixedPoint(t, "after set moduledir")
+
+	// 5. Remove the Git module.
+	if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "concat"}); err != nil {
+		t.Fatalf("remove git module: %v", err)
+	}
+	assertFixedPoint(t, "after remove Git module")
+
+	// 6. Clear moduledir.
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: ""}); err != nil {
+		t.Fatalf("clear moduledir: %v", err)
+	}
+	assertFixedPoint(t, "after clear moduledir")
+
+	// Calling RenderPuppetfile twice with no intervening write returns
+	// identical text both times.
+	first, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile (first, no write): %v", err)
+	}
+	second, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile (second, no write): %v", err)
+	}
+	if first.Text != second.Text {
+		t.Fatalf("RenderPuppetfile not stable across repeated calls: %q vs %q", first.Text, second.Text)
+	}
+}
+
+func TestCode_PuppetfileRenderMatchesRenderContract(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: "thirdparty"}); err != nil {
+		t.Fatalf("SetModuledir: %v", err)
+	}
+
+	modules := []*hostv1.PuppetfileModule{
+		{Name: "puppetlabs/ntp", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}},
+		{Name: "puppetlabs/apache", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "0.10.0"}}},
+		{Name: "puppetlabs/stdlib", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Latest: true}}},
+		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://github.com/puppetlabs/puppetlabs-apache",
+		}}},
+		{Name: "concat", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url:     "https://github.com/puppetlabs/puppetlabs-concat",
+			RefKind: &hostv1.GitSource_Tag{Tag: "0.9.0"},
+		}}},
+		{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url:           "git@git.example.com:puppet/profiles.git",
+			RefKind:       &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}},
+			DefaultBranch: "main",
+		}}},
+	}
+	for _, m := range modules {
+		if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: "prod", Module: m}); err != nil {
+			t.Fatalf("PutPuppetfileModule(%s): %v", m.GetName(), err)
+		}
+	}
+
+	want := `moduledir 'thirdparty'
+
+mod 'puppetlabs/ntp'
+mod 'puppetlabs/apache', '0.10.0'
+mod 'puppetlabs/stdlib', :latest
+mod 'apache',
+  :git => 'https://github.com/puppetlabs/puppetlabs-apache'
+mod 'concat',
+  :git => 'https://github.com/puppetlabs/puppetlabs-concat',
+  :tag => '0.9.0'
+mod 'profiles',
+  :git => 'git@git.example.com:puppet/profiles.git',
+  :branch => :control_branch,
+  :default_branch => 'main'
+`
+
+	rendered, err := h.Code.RenderPuppetfile(ctx, &hostv1.RenderPuppetfileRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile: %v", err)
+	}
+	if rendered.Text != want {
+		t.Fatalf("render mismatch:\ngot:\n%s\nwant:\n%s", rendered.Text, want)
 	}
 }

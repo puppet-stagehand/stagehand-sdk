@@ -228,3 +228,58 @@ func (s *codeServer) RemovePuppetfileModule(ctx context.Context, req *hostv1.Rem
 	}
 	return &emptypb.Empty{}, nil
 }
+
+// SetModuledir sets Puppetfile.moduledir and stores it. The empty string is
+// a legitimate value meaning "no moduledir line" — it is not treated as a
+// missing argument and is not rejected, because clearing the setting is how
+// a pack undoes it and there is no separate clear RPC in the contract.
+func (s *codeServer) SetModuledir(ctx context.Context, req *hostv1.SetModuledirRequest) (*hostv1.Puppetfile, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	pf, err := s.loadPuppetfileLocked(req.Environment)
+	if err != nil {
+		return nil, err
+	}
+	pf.Moduledir = req.Moduledir
+
+	if err := s.storePuppetfileLocked(req.Environment, pf); err != nil {
+		return nil, err
+	}
+
+	reloaded, err := s.loadPuppetfileLocked(req.Environment)
+	if err != nil {
+		return nil, err
+	}
+	return proto.Clone(reloaded).(*hostv1.Puppetfile), nil
+}
+
+// RenderPuppetfile returns the stored text verbatim through
+// puppetfileTextLocked — the empty string when no document exists — rather
+// than re-rendering the parsed model: the stored text already is the
+// canonical render, because every write path in this file goes through
+// storePuppetfileLocked. Re-rendering here would hide a divergence between
+// the two instead of surfacing it.
+func (s *codeServer) RenderPuppetfile(ctx context.Context, req *hostv1.RenderPuppetfileRequest) (*hostv1.RenderedPuppetfile, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	text, _ := s.puppetfileTextLocked(req.Environment)
+	return &hostv1.RenderedPuppetfile{Text: text}, nil
+}
