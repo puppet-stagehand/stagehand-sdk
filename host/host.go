@@ -18,4 +18,5 @@ type Host struct {
 	Auth      hostv1.AuthServer
 	Inventory hostv1.InventoryServer
 	Code      hostv1.CodeServer
+	Forge     hostv1.ForgeServer
 }
