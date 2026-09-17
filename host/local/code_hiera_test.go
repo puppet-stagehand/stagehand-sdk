@@ -57,6 +57,20 @@ func TestCode_HieraEmptyEnvironment(t *testing.T) {
 	if _, err := h.Code.GetHieraHierarchy(ctx, &hostv1.GetHieraHierarchyRequest{Environment: "ghost"}); status.Code(err) != codes.NotFound {
 		t.Fatalf("GetHieraHierarchy(ghost): got %v, want NotFound", err)
 	}
+
+	// An environment with no hiera.yaml and no data files returns zero
+	// levels and zero paths with no error from both GetHieraHierarchy
+	// (above) and ListHieraDataFiles (Task 2 of this plan).
+	files, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("ListHieraDataFiles: %v", err)
+	}
+	if len(files.Paths) != 0 {
+		t.Fatalf("expected zero paths, got %d", len(files.Paths))
+	}
+	if files.Page.GetNextCursor() != "" {
+		t.Fatalf("expected empty NextCursor, got %q", files.Page.GetNextCursor())
+	}
 }
 
 func TestCode_HieraLevelLifecycle(t *testing.T) {
@@ -429,5 +443,310 @@ func TestCode_HieraLookupOptionsAreReadOnly(t *testing.T) {
 	}
 	if nodes == nil || len(nodes.LookupOptions) != 0 {
 		t.Fatalf("expected nodes' lookup_options to be empty (interpolated path), got %+v", nodes)
+	}
+}
+
+// TestCode_HieraDataFileLifecycle carries the structure-preservation
+// assertion end to end: seed a data file with a head comment, a trailing
+// key comment, a nested mapping, and a sequence value; write one
+// unrelated key; read the stored document back and assert everything
+// seeded, plus the new key, is intact. It also proves PutHieraDataKey
+// refuses the reserved key "lookup_options" (HIERA-03's write-side half
+// on the data-key path), stores nothing, ListHieraDataFiles pagination,
+// and the "prod"/"production" isolation.
+func TestCode_HieraDataFileLifecycle(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	seeded := `# head-of-document comment
+ntp::servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+apache::config:
+  listen: 80
+  docroot: /var/www
+port: 8080 # trailing comment on port
+`
+	seedDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml", map[string]any{"path": "common.yaml", "yaml": seeded})
+	seedDoc(t, h, ctx, "code-hiera-data", "prod/nodes/web01.yaml", map[string]any{"path": "nodes/web01.yaml", "yaml": "role: web\n"})
+
+	// PutHieraDataKey against an unrelated key.
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "prod", Path: "common.yaml", Key: "newkey",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": "newvalue"})},
+	}); err != nil {
+		t.Fatalf("PutHieraDataKey(newkey): %v", err)
+	}
+
+	stored := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+	for _, want := range []string{
+		"# head-of-document comment",
+		"0.pool.ntp.org",
+		"1.pool.ntp.org",
+		"listen: 80",
+		"docroot: /var/www",
+		"port: 8080 # trailing comment on port",
+		"newkey: newvalue",
+	} {
+		if !strings.Contains(stored, want) {
+			t.Fatalf("expected %q to survive, stored text:\n%s", want, stored)
+		}
+	}
+
+	// GetHieraDataFile excludes lookup_options from values.
+	df, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "prod", Path: "common.yaml"})
+	if err != nil {
+		t.Fatalf("GetHieraDataFile: %v", err)
+	}
+	if _, ok := df.Values["lookup_options"]; ok {
+		t.Fatalf("expected lookup_options excluded from Values")
+	}
+	if _, ok := df.Values["newkey"]; !ok {
+		t.Fatalf("expected newkey present in Values, got %+v", df.Values)
+	}
+
+	// PutHieraDataKey("lookup_options", ...) is refused and stores
+	// nothing (HIERA-03's write-side half on the data-key path).
+	before := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "prod", Path: "common.yaml", Key: "lookup_options",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"foo": map[string]any{"merge": "first"}})},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("PutHieraDataKey(lookup_options): got %v, want InvalidArgument", err)
+	}
+	after := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+	if before != after {
+		t.Fatalf("expected document unchanged after refused lookup_options write:\nbefore: %q\nafter:  %q", before, after)
+	}
+
+	// ListHieraDataFiles returns both paths ascending, prefix stripped.
+	files, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("ListHieraDataFiles: %v", err)
+	}
+	if len(files.Paths) != 2 || files.Paths[0] != "common.yaml" || files.Paths[1] != "nodes/web01.yaml" {
+		t.Fatalf("expected [common.yaml, nodes/web01.yaml], got %+v", files.Paths)
+	}
+
+	// RemoveHieraDataKey removes the named key.
+	if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: "common.yaml", Key: "newkey"}); err != nil {
+		t.Fatalf("RemoveHieraDataKey(newkey): %v", err)
+	}
+	afterRemove, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "prod", Path: "common.yaml"})
+	if err != nil {
+		t.Fatalf("GetHieraDataFile after remove: %v", err)
+	}
+	if _, ok := afterRemove.Values["newkey"]; ok {
+		t.Fatalf("expected newkey removed, got %+v", afterRemove.Values)
+	}
+
+	// RemoveHieraDataKey with an unknown key.
+	if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: "common.yaml", Key: "does-not-exist"}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("RemoveHieraDataKey(unknown key): got %v, want InvalidArgument", err)
+	}
+
+	// DeleteHieraDataFile removes the whole document.
+	if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "prod", Path: "nodes/web01.yaml"}); err != nil {
+		t.Fatalf("DeleteHieraDataFile: %v", err)
+	}
+	if _, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "prod", Path: "nodes/web01.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetHieraDataFile after delete: got %v, want NotFound", err)
+	}
+	if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "prod", Path: "nodes/web01.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteHieraDataFile(already deleted): got %v, want NotFound", err)
+	}
+
+	// ListHieraDataFiles for "prod" never returns a path belonging to
+	// "production".
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatalf("CreateEnvironment(production): %v", err)
+	}
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "production", Path: "common.yaml", Key: "k",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": "v"})},
+	}); err != nil {
+		t.Fatalf("PutHieraDataKey(production): %v", err)
+	}
+	prodFiles, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "prod"})
+	if err != nil {
+		t.Fatalf("ListHieraDataFiles(prod): %v", err)
+	}
+	if len(prodFiles.Paths) != 1 || prodFiles.Paths[0] != "common.yaml" {
+		t.Fatalf("expected prod's listing to carry only its own common.yaml, got %+v", prodFiles.Paths)
+	}
+
+	// Pagination: 2 then 1 over three modules ... here, exercise a
+	// non-numeric cursor's InvalidArgument.
+	if _, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{
+		Environment: "prod",
+		Page:        &hostv1.Page{Cursor: "abc"},
+	}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ListHieraDataFiles(bad cursor): got %v, want InvalidArgument", err)
+	}
+
+	// Add two more prod files so pagination has three entries total, and
+	// page through them 2 then 1.
+	for _, p := range []string{"a.yaml", "b.yaml"} {
+		if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+			Environment: "prod", Path: p, Key: "k",
+			Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": "v"})},
+		}); err != nil {
+			t.Fatalf("PutHieraDataKey(%s): %v", p, err)
+		}
+	}
+	page1, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "prod", Page: &hostv1.Page{Limit: 2}})
+	if err != nil {
+		t.Fatalf("ListHieraDataFiles page1: %v", err)
+	}
+	if len(page1.Paths) != 2 {
+		t.Fatalf("page1: expected 2 paths, got %d", len(page1.Paths))
+	}
+	if page1.Page.GetNextCursor() == "" {
+		t.Fatalf("page1: expected non-empty NextCursor")
+	}
+	page2, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{
+		Environment: "prod",
+		Page:        &hostv1.Page{Limit: 2, Cursor: page1.Page.GetNextCursor()},
+	})
+	if err != nil {
+		t.Fatalf("ListHieraDataFiles page2: %v", err)
+	}
+	if len(page2.Paths) != 1 {
+		t.Fatalf("page2: expected 1 path, got %d", len(page2.Paths))
+	}
+	if page2.Page.GetNextCursor() != "" {
+		t.Fatalf("page2: expected empty NextCursor, got %q", page2.Page.GetNextCursor())
+	}
+}
+
+func TestCode_HieraDataKeyIsIdempotent(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	// PutHieraDataKey against a path with no document yet creates it
+	// with one key.
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "prod", Path: "common.yaml", Key: "port",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": float64(8080)})},
+	}); err != nil {
+		t.Fatalf("PutHieraDataKey(port, create): %v", err)
+	}
+	first := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+
+	// Writing the identical key and value twice leaves the stored YAML
+	// byte-identical.
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "prod", Path: "common.yaml", Key: "port",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": float64(8080)})},
+	}); err != nil {
+		t.Fatalf("PutHieraDataKey(port, repeat): %v", err)
+	}
+	second := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+	if first != second {
+		t.Fatalf("expected byte-identical text after idempotent put, got:\nfirst:  %q\nsecond: %q", first, second)
+	}
+}
+
+// TestCode_HieraDataPathIsRefused drives all six refused paths through
+// every path-taking RPC (Get, Put, Remove, Delete), before any storage
+// key is constructed.
+func TestCode_HieraDataPathIsRefused(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+
+	badPaths := []string{
+		"",
+		"/etc/passwd",
+		"../secrets.yaml",
+		"nodes/../../etc/x.yaml",
+		"nodes\\web01.yaml",
+		"nodes/web01\n.yaml",
+	}
+
+	for _, p := range badPaths {
+		if _, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "prod", Path: p}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("GetHieraDataFile(%q): got %v, want InvalidArgument", p, err)
+		}
+		if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+			Environment: "prod", Path: p, Key: "k",
+			Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": "v"})},
+		}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("PutHieraDataKey(%q): got %v, want InvalidArgument", p, err)
+		}
+		if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: p, Key: "k"}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("RemoveHieraDataKey(%q): got %v, want InvalidArgument", p, err)
+		}
+		if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "prod", Path: p}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("DeleteHieraDataFile(%q): got %v, want InvalidArgument", p, err)
+		}
+	}
+}
+
+// TestCode_HieraUnknownEnvironmentAndPath drives every Hiera RPC against
+// an unknown environment, then a subset of the data-file RPCs against a
+// known environment with a path it does not carry.
+func TestCode_HieraUnknownEnvironmentAndPath(t *testing.T) {
+	h := local.New([]string{"code:rw"}, "controlrepo")
+	ctx := context.Background()
+
+	if _, err := h.Code.GetHieraHierarchy(ctx, &hostv1.GetHieraHierarchyRequest{Environment: "ghost"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetHieraHierarchy(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{
+		Environment: "ghost",
+		Level:       &hostv1.HieraLevel{Name: "common"},
+		Insert:      true,
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("PutHieraLevel(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.RemoveHieraLevel(ctx, &hostv1.RemoveHieraLevelRequest{Environment: "ghost", Name: "common"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RemoveHieraLevel(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.ReorderHieraLevels(ctx, &hostv1.ReorderHieraLevelsRequest{Environment: "ghost", Names: []string{"common"}}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ReorderHieraLevels(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "ghost"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("ListHieraDataFiles(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "ghost", Path: "common.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetHieraDataFile(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+		Environment: "ghost", Path: "common.yaml", Key: "k",
+		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": "v"})},
+	}); status.Code(err) != codes.NotFound {
+		t.Fatalf("PutHieraDataKey(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "ghost", Path: "common.yaml", Key: "k"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RemoveHieraDataKey(ghost): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "ghost", Path: "common.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteHieraDataFile(ghost): got %v, want NotFound", err)
+	}
+
+	// A path the environment does not carry.
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if _, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "prod", Path: "absent.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("GetHieraDataFile(prod, absent path): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: "absent.yaml", Key: "k"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("RemoveHieraDataKey(prod, absent path): got %v, want NotFound", err)
+	}
+	if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "prod", Path: "absent.yaml"}); status.Code(err) != codes.NotFound {
+		t.Fatalf("DeleteHieraDataFile(prod, absent path): got %v, want NotFound", err)
 	}
 }

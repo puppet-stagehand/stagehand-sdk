@@ -16,11 +16,13 @@ package local
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/puppet-stagehand/stagehand-sdk/code"
@@ -267,4 +269,208 @@ func (s *codeServer) ReorderHieraLevels(ctx context.Context, req *hostv1.Reorder
 	h.Environment = req.Environment
 	s.mirrorLookupOptionsLocked(req.Environment, h)
 	return proto.Clone(h).(*hostv1.HieraHierarchy), nil
+}
+
+// --- data files (data/*.yaml) helpers and RPCs (Task 2) ---
+
+// storeDataFileLocked writes yamlText into the code-hiera-data document
+// for env/path, alongside a "path" field so a listing can report the
+// relative path without re-splitting every doc id. Reading a listing still
+// goes through hieraDataEnvAndPath on the doc id, because that is the
+// authoritative ownership rule; the stored "path" field is a convenience,
+// not a second source of truth, and the two must agree. The caller must
+// already hold s.docs.mu.
+func (s *codeServer) storeDataFileLocked(env, path, yamlText string) error {
+	st, err := structpb.NewStruct(map[string]any{"path": path, "yaml": yamlText})
+	if err != nil {
+		return status.Errorf(codes.Internal, "building hiera data document body: %v", err)
+	}
+	if _, err := s.docs.putLocked(hieraDataCollection, hieraDataKey(env, path), &hostv1.Json{Value: st}, false); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ListHieraDataFiles walks the code-hiera-data collection, keeps only ids
+// whose hieraDataEnvAndPath split yields this environment — deciding
+// ownership by the separator-anchored split rather than a bare name
+// prefix, which is what keeps "prod"'s listing free of "production"'s
+// files — collects the relative paths (already ascending, since
+// idsLocked's sorted ids share a fixed environment prefix once filtered),
+// and paginates with the shared pageBounds helper.
+func (s *codeServer) ListHieraDataFiles(ctx context.Context, req *hostv1.ListHieraDataFilesRequest) (*hostv1.ListHieraDataFilesResponse, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	var allPaths []string
+	for _, id := range s.docs.idsLocked(hieraDataCollection) {
+		if env, path, ok := hieraDataEnvAndPath(id); ok && env == req.Environment {
+			allPaths = append(allPaths, path)
+		}
+	}
+
+	start, limit, err := pageBounds(req.Page, len(allPaths))
+	if err != nil {
+		return nil, err
+	}
+
+	paths := make([]string, 0, limit)
+	end := start
+	for end < len(allPaths) && len(paths) < limit {
+		paths = append(paths, allPaths[end])
+		end++
+	}
+	pageInfo := &hostv1.PageInfo{}
+	if end < len(allPaths) {
+		pageInfo.NextCursor = strconv.Itoa(end)
+	}
+	return &hostv1.ListHieraDataFilesResponse{Paths: paths, Page: pageInfo}, nil
+}
+
+// GetHieraDataFile reads the stored text, returns codes.NotFound when
+// absent, parses it, sets Environment and Path, and returns it cloned.
+func (s *codeServer) GetHieraDataFile(ctx context.Context, req *hostv1.GetHieraDataFileRequest) (*hostv1.HieraDataFile, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+	if err := code.ValidateDataPath(req.Path); err != nil {
+		return nil, mapHieraErr(err)
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	text, ok := s.dataFileTextLocked(req.Environment, req.Path)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "environment %q has no hiera data file %q", req.Environment, req.Path)
+	}
+	df, err := code.ParseDataFile(text)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	df.Environment = req.Environment
+	df.Path = req.Path
+	return proto.Clone(df).(*hostv1.HieraDataFile), nil
+}
+
+// PutHieraDataKey rejects an empty req.Key, reads the stored text (the
+// empty string when absent, which code.PutDataKey treats as a new
+// document), calls code.PutDataKey — which is where the reserved-key
+// refusal for "lookup_options" surfaces as codes.InvalidArgument — stores
+// the returned text, and returns the re-read file. The whole edit is
+// routed through the format package's node-tree function and exactly the
+// text it returns is stored; nothing here parses the file into a Go map,
+// mutates that, and re-serialises it, which would drop every comment and
+// can reorder keys.
+func (s *codeServer) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+	if err := code.ValidateDataPath(req.Path); err != nil {
+		return nil, mapHieraErr(err)
+	}
+	if req.Key == "" {
+		return nil, status.Error(codes.InvalidArgument, "key is required")
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	text, _ := s.dataFileTextLocked(req.Environment, req.Path)
+	newText, err := code.PutDataKey(text, req.Key, req.Value)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	if err := s.storeDataFileLocked(req.Environment, req.Path, newText); err != nil {
+		return nil, err
+	}
+
+	stored, _ := s.dataFileTextLocked(req.Environment, req.Path)
+	df, err := code.ParseDataFile(stored)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	df.Environment = req.Environment
+	df.Path = req.Path
+	return proto.Clone(df).(*hostv1.HieraDataFile), nil
+}
+
+// RemoveHieraDataKey mirrors PutHieraDataKey over code.RemoveDataKey: an
+// unknown path returns codes.NotFound (checked before the format package
+// is ever invoked) and an unknown key returns codes.InvalidArgument (via
+// mapHieraErr on code.RemoveDataKey's ErrHieraInvalid).
+func (s *codeServer) RemoveHieraDataKey(ctx context.Context, req *hostv1.RemoveHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+	if err := code.ValidateDataPath(req.Path); err != nil {
+		return nil, mapHieraErr(err)
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	text, ok := s.dataFileTextLocked(req.Environment, req.Path)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "environment %q has no hiera data file %q", req.Environment, req.Path)
+	}
+	newText, err := code.RemoveDataKey(text, req.Key)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	if err := s.storeDataFileLocked(req.Environment, req.Path, newText); err != nil {
+		return nil, err
+	}
+
+	stored, _ := s.dataFileTextLocked(req.Environment, req.Path)
+	df, err := code.ParseDataFile(stored)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	df.Environment = req.Environment
+	df.Path = req.Path
+	return proto.Clone(df).(*hostv1.HieraDataFile), nil
+}
+
+// DeleteHieraDataFile removes the whole document through the lock-free
+// deleter, returning codes.NotFound when it was not present.
+func (s *codeServer) DeleteHieraDataFile(ctx context.Context, req *hostv1.DeleteHieraDataFileRequest) (*emptypb.Empty, error) {
+	if err := validateEnvName(req.Environment); err != nil {
+		return nil, err
+	}
+	if err := code.ValidateDataPath(req.Path); err != nil {
+		return nil, mapHieraErr(err)
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, req.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
+	}
+
+	if !s.docs.deleteLocked(hieraDataCollection, hieraDataKey(req.Environment, req.Path)) {
+		return nil, status.Errorf(codes.NotFound, "environment %q has no hiera data file %q", req.Environment, req.Path)
+	}
+	return &emptypb.Empty{}, nil
 }
