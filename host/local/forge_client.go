@@ -452,7 +452,7 @@ type forgeModuleCollectionJSON struct {
 }
 
 type forgeReleaseCollectionJSON struct {
-	Pagination forgePaginationJSON      `json:"pagination"`
+	Pagination forgePaginationJSON       `json:"pagination"`
 	Results    []forgeReleaseSummaryJSON `json:"results"`
 }
 
