@@ -268,3 +268,185 @@ func TestForgeSearchCorruptSecretRefIsInternal(t *testing.T) {
 		t.Fatalf("expected Internal for an unresolvable secret_ref, got %v", err)
 	}
 }
+
+// --------------------------------------- Resolve: Puppetfile integration
+
+// mustCreateEnvironmentWithPuppetfile creates env via the real Code facet
+// and writes each given module into its Puppetfile via the real
+// PutPuppetfileModule RPC — Task 2's tests integrate against Code's actual
+// RPCs, not a Documents shortcut, so a passing test proves the real
+// cross-facet seam (D-15) works, not just this package's own conventions.
+func mustCreateEnvironmentWithPuppetfile(t *testing.T, h *host.Host, env string, modules ...string) {
+	t.Helper()
+	if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: env}); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range modules {
+		if _, err := h.Code.PutPuppetfileModule(context.Background(), &hostv1.PutPuppetfileModuleRequest{
+			Environment: env,
+			Module: &hostv1.PuppetfileModule{
+				Name:   name,
+				Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "1.0.0"}},
+			},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestForgeResolvePuppetfileStatusMarksExistingAndNewModules(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0",
+		ForgeDependency{Name: "puppetlabs/stdlib", VersionRequirement: ">= 1.0.0"},
+		ForgeDependency{Name: "acme/new", VersionRequirement: ">= 1.0.0"},
+	)
+	c.versions["puppetlabs/stdlib"] = []string{"9.0.0"}
+	c.addRelease("puppetlabs/stdlib", "9.0.0")
+	c.versions["acme/new"] = []string{"1.0.0"}
+	c.addRelease("acme/new", "1.0.0")
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	mustCreateEnvironmentWithPuppetfile(t, h, "production", "puppetlabs/stdlib")
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Root.AlreadyInPuppetfile {
+		t.Fatalf("root itself was never added to the Puppetfile, expected AlreadyInPuppetfile=false, got true")
+	}
+	stdlib := findChild(resp.Root, "puppetlabs/stdlib")
+	if stdlib == nil || !stdlib.AlreadyInPuppetfile {
+		t.Fatalf("expected puppetlabs/stdlib to be marked already_in_puppetfile, got %+v", stdlib)
+	}
+	fresh := findChild(resp.Root, "acme/new")
+	if fresh == nil || fresh.AlreadyInPuppetfile {
+		t.Fatalf("expected acme/new to be marked net-new (already_in_puppetfile=false), got %+v", fresh)
+	}
+}
+
+func TestForgeResolvePuppetfileStatusRecognizesHyphenSlugForm(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "puppetlabs/stdlib", VersionRequirement: ">= 1.0.0"})
+	c.versions["puppetlabs/stdlib"] = []string{"9.0.0"}
+	c.addRelease("puppetlabs/stdlib", "9.0.0")
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	// Written with the ns-name hyphen slug form, matching how a human or
+	// an imported Puppetfile might spell it (code/puppetfile.go's
+	// forgeSlugOK accepts both) — normalizeModuleName must still match it
+	// against this facet's ns/name result.
+	mustCreateEnvironmentWithPuppetfile(t, h, "production", "puppetlabs-stdlib")
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdlib := findChild(resp.Root, "puppetlabs/stdlib")
+	if stdlib == nil || !stdlib.AlreadyInPuppetfile {
+		t.Fatalf("expected the hyphen-slug Puppetfile entry to match the ns/name result, got %+v", stdlib)
+	}
+}
+
+func TestForgeResolveWithoutEnvironmentLeavesStatusFalse(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "acme/child", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/child"] = []string{"1.0.0"}
+	c.addRelease("acme/child", "1.0.0")
+
+	h := New([]string{"forge:rw"}, "pkg", WithForgeClient(c))
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{Name: "acme/root", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Root.AlreadyInPuppetfile {
+		t.Fatal("expected AlreadyInPuppetfile=false when no environment is given")
+	}
+	if child := findChild(resp.Root, "acme/child"); child == nil || child.AlreadyInPuppetfile {
+		t.Fatalf("expected no already_in_puppetfile status without an environment, got %+v", child)
+	}
+}
+
+func TestForgeResolveNeverMutatesThePuppetfile(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0",
+		ForgeDependency{Name: "acme/a", VersionRequirement: ">= 1.0.0"},
+		ForgeDependency{Name: "acme/cyclic", VersionRequirement: ">= 1.0.0"},
+	)
+	c.versions["acme/a"] = []string{"1.0.0"}
+	c.addRelease("acme/a", "1.0.0", ForgeDependency{Name: "acme/cyclic", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/cyclic"] = []string{"1.0.0"}
+	c.addRelease("acme/cyclic", "1.0.0", ForgeDependency{Name: "acme/root", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/root"] = []string{"1.0.0"}
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	mustCreateEnvironmentWithPuppetfile(t, h, "production", "acme/a")
+
+	before, err := h.Code.RenderPuppetfile(context.Background(), &hostv1.RenderPuppetfileRequest{Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	modsBefore, err := h.Code.ListPuppetfileModules(context.Background(), &hostv1.ListPuppetfileModulesRequest{Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Root == nil || len(resp.Root.Dependencies) == 0 {
+		t.Fatalf("expected a non-trivial resolved tree to exercise the read path, got %+v", resp.Root)
+	}
+
+	after, err := h.Code.RenderPuppetfile(context.Background(), &hostv1.RenderPuppetfileRequest{Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.Text != after.Text {
+		t.Fatalf("Resolve must never mutate the Puppetfile: before=%q after=%q", before.Text, after.Text)
+	}
+	modsAfter, err := h.Code.ListPuppetfileModules(context.Background(), &hostv1.ListPuppetfileModulesRequest{Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(modsBefore.Modules) != len(modsAfter.Modules) {
+		t.Fatalf("Resolve must never change the Puppetfile module count: before=%d after=%d", len(modsBefore.Modules), len(modsAfter.Modules))
+	}
+}
+
+func TestForgeResolveUnconfiguredSourceIsNotFound(t *testing.T) {
+	h := New([]string{"forge:rw"}, "pkg", WithForgeClient(newResolverFixtureClient()))
+	_, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Source: &hostv1.ForgeSourceSelection{Name: "ghost"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("expected NotFound for an unconfigured source, got %v", err)
+	}
+}
+
+func TestForgeResolveTopLevelWarningsAggregateTree(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "acme/ghost", VersionRequirement: ">= 1.0.0"})
+	// acme/ghost is intentionally unregistered -> ErrForgeNotFound -> one
+	// "unresolved" warning, which must surface in the response-level
+	// Warnings rollup as well as on the node itself.
+
+	h := New([]string{"forge:rw"}, "pkg", WithForgeClient(c))
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{Name: "acme/root", Version: "1.0.0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "unresolved" {
+		t.Fatalf("expected exactly one aggregated unresolved warning, got %+v", resp.Warnings)
+	}
+	if !resp.AdvisoryOnly || resp.AdvisoryMessage == "" {
+		t.Fatalf("expected an explicit advisory-only marker and message, got %+v", resp)
+	}
+}

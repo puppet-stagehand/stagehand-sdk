@@ -11,21 +11,22 @@ package local
 // second write path for the same data. Forge's own job is reading that
 // convention back at Search/Resolve time.
 //
-// 07-03 replaces Resolve's body with the full recursive, cycle/conflict-
-// aware advisory resolver (forge_resolver.go); this plan wires Resolve
-// through the real client and source selection with a single-node result
-// only — FORGE-04/05/06 are this phase's next plan's requirements, not
-// this one's.
+// Resolve is wired onto forge_resolver.go's pure recursive walk and stamps
+// each node's already_in_puppetfile status by reading (never writing)
+// env's stored Puppetfile through the same code-puppetfiles Documents
+// collection the Code facet owns (D-15) — Forge never calls
+// PutPuppetfileModule or any other Code mutation (D-14/FORGE-06).
 
 import (
 	"context"
 	"encoding/json"
-	"errors"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/puppet-stagehand/stagehand-sdk/code"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
 
@@ -162,31 +163,99 @@ func (s *forgeServer) Resolve(ctx context.Context, req *hostv1.ResolveRequest) (
 		return nil, err
 	}
 
-	const advisoryMessage = "authoring advisory; does not emulate r10k deployment"
-	rel, err := s.client.GetRelease(ctx, ep, req.Name, req.Version)
+	// resolveDependencyTree (forge_resolver.go) handles a typed not-found
+	// anywhere in the tree — root included — as an unresolved advisory
+	// node, never a whole-RPC failure (D-12); only a real transport or
+	// malformed-payload error returns here as err (D-03).
+	root, err := resolveDependencyTree(ctx, s.client, ep, source, req.Name, req.Version)
 	if err != nil {
-		if errors.Is(err, ErrForgeNotFound) {
-			// A typed not-found is advisory data (D-12), never a whole-RPC
-			// failure: the caller gets back a reviewable unresolved node,
-			// not an error, so it can decide what to do next.
-			return &hostv1.ResolveResponse{
-				AdvisoryOnly:    true,
-				AdvisoryMessage: advisoryMessage,
-				Root: &hostv1.DependencyNode{
-					Name: req.Name, Version: req.Version, Source: source, Unresolved: true,
-				},
-				Warnings: []*hostv1.ForgeAdvisoryWarning{{
-					Code: "unresolved", Message: "module or release not found", Module: req.Name,
-				}},
-			}, nil
-		}
 		return nil, err
 	}
+
+	if req.Environment != "" {
+		present := s.currentPuppetfileModuleNames(req.Environment)
+		attachAlreadyInPuppetfile(root, present)
+	}
+
 	return &hostv1.ResolveResponse{
+		Root:            root,
+		Warnings:        collectTreeWarnings(root),
 		AdvisoryOnly:    true,
-		AdvisoryMessage: advisoryMessage,
-		Root:            &hostv1.DependencyNode{Name: rel.Name, Version: rel.Version, Source: source},
+		AdvisoryMessage: "authoring advisory; does not emulate r10k deployment",
 	}, nil
+}
+
+// currentPuppetfileModuleNames reads env's stored Puppetfile text (if any)
+// — through the SAME code-puppetfiles Documents collection and docs.mu
+// lock discipline codeServer uses (D-15) — and returns the set of module
+// names it currently contains, normalized (D-08/D-15's "already there"
+// check must not be fooled by a Puppetfile author having written the
+// ns-name hyphen form where this facet's own results use ns/name). A
+// missing or unparseable Puppetfile reports an empty set rather than an
+// error: Resolve's job is describing current reality, not validating the
+// environment on Forge's behalf — Code already does that on its own write
+// paths. This function only ever reads; it never calls Put/RemovePuppetfileModule
+// or any other Code mutation (D-14/FORGE-06).
+func (s *forgeServer) currentPuppetfileModuleNames(env string) map[string]bool {
+	s.docs.mu.Lock()
+	doc, ok := s.docs.getLocked(puppetfileCollection, env)
+	var text string
+	if ok && doc.Body != nil && doc.Body.Value != nil {
+		text, _ = doc.Body.Value.AsMap()["text"].(string)
+	}
+	s.docs.mu.Unlock()
+
+	pf, err := code.ParsePuppetfile(text)
+	if err != nil {
+		return nil
+	}
+	names := make(map[string]bool, len(pf.Modules))
+	for _, m := range pf.Modules {
+		names[normalizeModuleName(m.GetName())] = true
+	}
+	return names
+}
+
+// normalizeModuleName converts a module identity to its ns/name form. A
+// Puppetfile module name may be written in either the ns/name or ns-name
+// slug form (code/puppetfile.go's forgeSlugOK accepts both); this facet's
+// own Search/Resolve results always use ns/name (forge_client.go). Only
+// the first separator is replaced, mirroring forge_client.go's
+// forgeModuleSlug — the module-name segment itself never contains a
+// hyphen (Forge's slug grammar restricts it to [a-z][a-z0-9_]*).
+func normalizeModuleName(name string) string {
+	if strings.Contains(name, "/") {
+		return name
+	}
+	return strings.Replace(name, "-", "/", 1)
+}
+
+// attachAlreadyInPuppetfile walks tree, setting AlreadyInPuppetfile on
+// every node (root included) from present — a read-only annotation pass
+// that never touches Documents/Code (D-15).
+func attachAlreadyInPuppetfile(node *hostv1.DependencyNode, present map[string]bool) {
+	if node == nil {
+		return
+	}
+	node.AlreadyInPuppetfile = present[normalizeModuleName(node.Name)]
+	for _, child := range node.Dependencies {
+		attachAlreadyInPuppetfile(child, present)
+	}
+}
+
+// collectTreeWarnings flattens every node's own Warnings (D-13: each node
+// keeps its warnings so a caller can see *why* it is flagged) into the
+// response-level Warnings list, a convenience rollup for a caller that
+// wants "everything advisory about this tree" without walking it itself.
+func collectTreeWarnings(node *hostv1.DependencyNode) []*hostv1.ForgeAdvisoryWarning {
+	if node == nil {
+		return nil
+	}
+	warnings := append([]*hostv1.ForgeAdvisoryWarning{}, node.Warnings...)
+	for _, child := range node.Dependencies {
+		warnings = append(warnings, collectTreeWarnings(child)...)
+	}
+	return warnings
 }
 
 // gatedForge wraps forgeServer with the forge:rw permission check every
