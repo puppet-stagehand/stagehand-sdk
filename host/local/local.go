@@ -117,14 +117,15 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		opt(cfg)
 	}
 	docs := newDocumentsServer(packID)
+	secrets := newSecretsServer(packID)
 	return &host.Host{
 		Documents: docs,
 		Settings:  newSettingsServer(),
-		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: newSecretsServer(packID)},
+		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: secrets},
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
 		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs)},
-		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(cfg.forgeClient)},
+		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, cfg.forgeClient)},
 	}
 }
 

@@ -9,16 +9,24 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// forgeFixture is a deterministic ForgeClient double used by every
+// host.Local-level Forge test in this package — the real transport is
+// exercised only in forge_client_test.go's httptest-backed tests.
 type forgeFixture struct{}
 
-func (forgeFixture) Search(context.Context, *hostv1.SearchRequest) (*hostv1.SearchResponse, error) {
-	return &hostv1.SearchResponse{Results: []*hostv1.ForgeSearchResult{{
-		Name: "puppetlabs/apache", Version: "12.0.0", Source: "puppet-forge",
+func (forgeFixture) Search(_ context.Context, ep ForgeEndpoint, source, query string, _ *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	return []*hostv1.ForgeSearchResult{{
+		Name: "puppetlabs/apache", Version: "12.0.0", Source: source,
 		Endorsement: "Supported", QualityScore: 0.98, Deprecated: false,
-	}}}, nil
+	}}, &hostv1.PageInfo{}, nil
 }
-func (forgeFixture) Resolve(context.Context, *hostv1.ResolveRequest) (*hostv1.ResolveResponse, error) {
-	return &hostv1.ResolveResponse{AdvisoryOnly: true, AdvisoryMessage: "authoring advisory; does not emulate r10k deployment", Root: &hostv1.DependencyNode{Name: "puppetlabs/apache", Version: "12.0.0"}}, nil
+
+func (forgeFixture) ListReleases(context.Context, ForgeEndpoint, string) ([]string, error) {
+	return []string{"12.0.0"}, nil
+}
+
+func (forgeFixture) GetRelease(_ context.Context, _ ForgeEndpoint, name, version string) (*ForgeRelease, error) {
+	return &ForgeRelease{Name: name, Version: version}, nil
 }
 
 func TestForgeTracer(t *testing.T) {
