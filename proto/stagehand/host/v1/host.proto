@@ -199,7 +199,9 @@ message OnboardNodeRequest { string proposal_id = 1; }
 //      proposal_id. The Apply RPC reads the approved proposal, writes the
 //      payload frozen inside it, and never accepts a payload from its
 //      caller, so an approved proposal cannot be used to write content its
-//      approver never saw.
+//      approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//      which freezes only the source and target names and reads the source
+//      at apply time; see its comment.
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
 // Every Apply* RPC needs code:rw and nothing narrower.
@@ -227,11 +229,23 @@ service Code {
   // hierarchy, Hiera data files and settings to a NEW target name in one
   // atomic write. A target that already exists is refused, never merged.
   rpc DuplicateEnvironment(DuplicateEnvironmentRequest) returns (Environment);
-  // ApplyEnvironmentDuplicate reads the referenced "code-overwrites" proposal and refuses with
-  // FAILED_PRECONDITION unless its status is approved. It writes the payload
-  // frozen in that proposal (the request carries only a proposal_id) and is
-  // idempotent: a repeat call for the same approved proposal returns the same
-  // result rather than failing or writing twice. Requires code:rw only.
+  // ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+  // proposal: the target environment's whole owned document set (Puppetfile,
+  // Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+  // the source environment's, in one atomic step. The request carries only a
+  // proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+  // proposal but the source and target names: the source is read at apply
+  // time, so the approver approved the operation "replace the target with a
+  // copy of the source", not a fixed set of documents. It refuses with
+  // NOT_FOUND for an unknown proposal or a source environment that no longer
+  // exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+  // decision made under the code:approve scope and targets an environment
+  // duplicate, or when source and target are the same environment. An approval
+  // covers one application: a repeat call after the proposal was applied
+  // returns the environment without writing when the target already equals a
+  // copy of the source, and is refused with FAILED_PRECONDITION when the source
+  // or target has changed since, so an approval is never a standing permission
+  // to copy whatever the source later becomes. Requires code:rw only.
   rpc ApplyEnvironmentDuplicate(ApplyEnvironmentDuplicateRequest) returns (Environment);
 
   // ------------------------------------------------- environment.conf
@@ -240,11 +254,17 @@ service Code {
   // second copy of them here would be a second source of truth.
   rpc GetEnvironmentSettings(GetEnvironmentSettingsRequest) returns (EnvironmentSettings);
   rpc PutEnvironmentSettings(PutEnvironmentSettingsRequest) returns (EnvironmentSettings);
-  // ApplyEnvironmentSettings reads the referenced "code-overwrites" proposal and refuses with
-  // FAILED_PRECONDITION unless its status is approved. It writes the payload
-  // frozen in that proposal (the request carries only a proposal_id) and is
-  // idempotent: a repeat call for the same approved proposal returns the same
-  // result rather than failing or writing twice. Requires code:rw only.
+  // ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
   rpc ApplyEnvironmentSettings(ApplyEnvironmentSettingsRequest) returns (EnvironmentSettings);
 
   // ------------------------------------------------------- Puppetfile
@@ -253,11 +273,17 @@ service Code {
   // appended, a name already present is replaced in place, preserving its
   // position in the render order.
   rpc PutPuppetfileModule(PutPuppetfileModuleRequest) returns (PuppetfileModule);
-  // ApplyPuppetfileModuleOverwrite reads the referenced "code-overwrites" proposal and refuses with
-  // FAILED_PRECONDITION unless its status is approved. It writes the payload
-  // frozen in that proposal (the request carries only a proposal_id) and is
-  // idempotent: a repeat call for the same approved proposal returns the same
-  // result rather than failing or writing twice. Requires code:rw only.
+  // ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
   rpc ApplyPuppetfileModuleOverwrite(ApplyPuppetfileModuleOverwriteRequest) returns (PuppetfileModule);
   rpc RemovePuppetfileModule(RemovePuppetfileModuleRequest) returns (google.protobuf.Empty);
   rpc SetModuledir(SetModuledirRequest) returns (Puppetfile);
@@ -275,11 +301,17 @@ service Code {
   // warnings alongside the already-applied write — a flagged anti-pattern
   // never blocks the write.
   rpc PutHieraLevel(PutHieraLevelRequest) returns (PutHieraLevelResponse);
-  // ApplyHieraLevelOverwrite reads the referenced "code-overwrites" proposal and refuses with
-  // FAILED_PRECONDITION unless its status is approved. It writes the payload
-  // frozen in that proposal (the request carries only a proposal_id) and is
-  // idempotent: a repeat call for the same approved proposal returns the same
-  // result rather than failing or writing twice. Requires code:rw only.
+  // ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
   rpc ApplyHieraLevelOverwrite(ApplyHieraLevelOverwriteRequest) returns (PutHieraLevelResponse);
   rpc RemoveHieraLevel(RemoveHieraLevelRequest) returns (HieraHierarchy);
   rpc ReorderHieraLevels(ReorderHieraLevelsRequest) returns (HieraHierarchy);
@@ -288,11 +320,17 @@ service Code {
   rpc ListHieraDataFiles(ListHieraDataFilesRequest) returns (ListHieraDataFilesResponse);
   rpc GetHieraDataFile(GetHieraDataFileRequest) returns (HieraDataFile);
   rpc PutHieraDataKey(PutHieraDataKeyRequest) returns (HieraDataFile);
-  // ApplyHieraDataKeyOverwrite reads the referenced "code-overwrites" proposal and refuses with
-  // FAILED_PRECONDITION unless its status is approved. It writes the payload
-  // frozen in that proposal (the request carries only a proposal_id) and is
-  // idempotent: a repeat call for the same approved proposal returns the same
-  // result rather than failing or writing twice. Requires code:rw only.
+  // ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
   rpc ApplyHieraDataKeyOverwrite(ApplyHieraDataKeyOverwriteRequest) returns (HieraDataFile);
   rpc RemoveHieraDataKey(RemoveHieraDataKeyRequest) returns (HieraDataFile);
   rpc DeleteHieraDataFile(DeleteHieraDataFileRequest) returns (google.protobuf.Empty);
@@ -301,7 +339,8 @@ service Code {
 // ------------------------------------------------------- Overwrite approval
 // Every Apply* request carries only the proposal id. The resource payload was
 // frozen into the proposal body at propose time and is never taken from the
-// caller of Apply.
+// caller of Apply. (For ApplyEnvironmentDuplicate the frozen part is the source
+// and target names; the source's contents are read at apply time.)
 message ApplyEnvironmentDuplicateRequest { string proposal_id = 1; }
 message ApplyEnvironmentSettingsRequest { string proposal_id = 1; }
 message ApplyPuppetfileModuleOverwriteRequest { string proposal_id = 1; }

@@ -1512,7 +1512,9 @@ const (
 //     proposal_id. The Apply RPC reads the approved proposal, writes the
 //     payload frozen inside it, and never accepts a payload from its
 //     caller, so an approved proposal cannot be used to write content its
-//     approver never saw.
+//     approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//     which freezes only the source and target names and reads the source
+//     at apply time; see its comment.
 //
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
@@ -1541,11 +1543,23 @@ type CodeClient interface {
 	// hierarchy, Hiera data files and settings to a NEW target name in one
 	// atomic write. A target that already exists is refused, never merged.
 	DuplicateEnvironment(ctx context.Context, in *DuplicateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
-	// ApplyEnvironmentDuplicate reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+	// proposal: the target environment's whole owned document set (Puppetfile,
+	// Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+	// the source environment's, in one atomic step. The request carries only a
+	// proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+	// proposal but the source and target names: the source is read at apply
+	// time, so the approver approved the operation "replace the target with a
+	// copy of the source", not a fixed set of documents. It refuses with
+	// NOT_FOUND for an unknown proposal or a source environment that no longer
+	// exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+	// decision made under the code:approve scope and targets an environment
+	// duplicate, or when source and target are the same environment. An approval
+	// covers one application: a repeat call after the proposal was applied
+	// returns the environment without writing when the target already equals a
+	// copy of the source, and is refused with FAILED_PRECONDITION when the source
+	// or target has changed since, so an approval is never a standing permission
+	// to copy whatever the source later becomes. Requires code:rw only.
 	ApplyEnvironmentDuplicate(ctx context.Context, in *ApplyEnvironmentDuplicateRequest, opts ...grpc.CallOption) (*Environment, error)
 	// ------------------------------------------------- environment.conf
 	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
@@ -1553,11 +1567,17 @@ type CodeClient interface {
 	// second copy of them here would be a second source of truth.
 	GetEnvironmentSettings(ctx context.Context, in *GetEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
 	PutEnvironmentSettings(ctx context.Context, in *PutEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
-	// ApplyEnvironmentSettings reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyEnvironmentSettings(ctx context.Context, in *ApplyEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
 	// ------------------------------------------------------- Puppetfile
 	ListPuppetfileModules(ctx context.Context, in *ListPuppetfileModulesRequest, opts ...grpc.CallOption) (*ListPuppetfileModulesResponse, error)
@@ -1565,11 +1585,17 @@ type CodeClient interface {
 	// appended, a name already present is replaced in place, preserving its
 	// position in the render order.
 	PutPuppetfileModule(ctx context.Context, in *PutPuppetfileModuleRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
-	// ApplyPuppetfileModuleOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyPuppetfileModuleOverwrite(ctx context.Context, in *ApplyPuppetfileModuleOverwriteRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
 	RemovePuppetfileModule(ctx context.Context, in *RemovePuppetfileModuleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	SetModuledir(ctx context.Context, in *SetModuledirRequest, opts ...grpc.CallOption) (*Puppetfile, error)
@@ -1586,11 +1612,17 @@ type CodeClient interface {
 	// warnings alongside the already-applied write — a flagged anti-pattern
 	// never blocks the write.
 	PutHieraLevel(ctx context.Context, in *PutHieraLevelRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error)
-	// ApplyHieraLevelOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyHieraLevelOverwrite(ctx context.Context, in *ApplyHieraLevelOverwriteRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error)
 	RemoveHieraLevel(ctx context.Context, in *RemoveHieraLevelRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
 	ReorderHieraLevels(ctx context.Context, in *ReorderHieraLevelsRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
@@ -1598,11 +1630,17 @@ type CodeClient interface {
 	ListHieraDataFiles(ctx context.Context, in *ListHieraDataFilesRequest, opts ...grpc.CallOption) (*ListHieraDataFilesResponse, error)
 	GetHieraDataFile(ctx context.Context, in *GetHieraDataFileRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	PutHieraDataKey(ctx context.Context, in *PutHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
-	// ApplyHieraDataKeyOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyHieraDataKeyOverwrite(ctx context.Context, in *ApplyHieraDataKeyOverwriteRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	RemoveHieraDataKey(ctx context.Context, in *RemoveHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDataFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
@@ -1928,7 +1966,9 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 //     proposal_id. The Apply RPC reads the approved proposal, writes the
 //     payload frozen inside it, and never accepts a payload from its
 //     caller, so an approved proposal cannot be used to write content its
-//     approver never saw.
+//     approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//     which freezes only the source and target names and reads the source
+//     at apply time; see its comment.
 //
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
@@ -1957,11 +1997,23 @@ type CodeServer interface {
 	// hierarchy, Hiera data files and settings to a NEW target name in one
 	// atomic write. A target that already exists is refused, never merged.
 	DuplicateEnvironment(context.Context, *DuplicateEnvironmentRequest) (*Environment, error)
-	// ApplyEnvironmentDuplicate reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+	// proposal: the target environment's whole owned document set (Puppetfile,
+	// Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+	// the source environment's, in one atomic step. The request carries only a
+	// proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+	// proposal but the source and target names: the source is read at apply
+	// time, so the approver approved the operation "replace the target with a
+	// copy of the source", not a fixed set of documents. It refuses with
+	// NOT_FOUND for an unknown proposal or a source environment that no longer
+	// exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+	// decision made under the code:approve scope and targets an environment
+	// duplicate, or when source and target are the same environment. An approval
+	// covers one application: a repeat call after the proposal was applied
+	// returns the environment without writing when the target already equals a
+	// copy of the source, and is refused with FAILED_PRECONDITION when the source
+	// or target has changed since, so an approval is never a standing permission
+	// to copy whatever the source later becomes. Requires code:rw only.
 	ApplyEnvironmentDuplicate(context.Context, *ApplyEnvironmentDuplicateRequest) (*Environment, error)
 	// ------------------------------------------------- environment.conf
 	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
@@ -1969,11 +2021,17 @@ type CodeServer interface {
 	// second copy of them here would be a second source of truth.
 	GetEnvironmentSettings(context.Context, *GetEnvironmentSettingsRequest) (*EnvironmentSettings, error)
 	PutEnvironmentSettings(context.Context, *PutEnvironmentSettingsRequest) (*EnvironmentSettings, error)
-	// ApplyEnvironmentSettings reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyEnvironmentSettings(context.Context, *ApplyEnvironmentSettingsRequest) (*EnvironmentSettings, error)
 	// ------------------------------------------------------- Puppetfile
 	ListPuppetfileModules(context.Context, *ListPuppetfileModulesRequest) (*ListPuppetfileModulesResponse, error)
@@ -1981,11 +2039,17 @@ type CodeServer interface {
 	// appended, a name already present is replaced in place, preserving its
 	// position in the render order.
 	PutPuppetfileModule(context.Context, *PutPuppetfileModuleRequest) (*PuppetfileModule, error)
-	// ApplyPuppetfileModuleOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyPuppetfileModuleOverwrite(context.Context, *ApplyPuppetfileModuleOverwriteRequest) (*PuppetfileModule, error)
 	RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error)
 	SetModuledir(context.Context, *SetModuledirRequest) (*Puppetfile, error)
@@ -2002,11 +2066,17 @@ type CodeServer interface {
 	// warnings alongside the already-applied write — a flagged anti-pattern
 	// never blocks the write.
 	PutHieraLevel(context.Context, *PutHieraLevelRequest) (*PutHieraLevelResponse, error)
-	// ApplyHieraLevelOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyHieraLevelOverwrite(context.Context, *ApplyHieraLevelOverwriteRequest) (*PutHieraLevelResponse, error)
 	RemoveHieraLevel(context.Context, *RemoveHieraLevelRequest) (*HieraHierarchy, error)
 	ReorderHieraLevels(context.Context, *ReorderHieraLevelsRequest) (*HieraHierarchy, error)
@@ -2014,11 +2084,17 @@ type CodeServer interface {
 	ListHieraDataFiles(context.Context, *ListHieraDataFilesRequest) (*ListHieraDataFilesResponse, error)
 	GetHieraDataFile(context.Context, *GetHieraDataFileRequest) (*HieraDataFile, error)
 	PutHieraDataKey(context.Context, *PutHieraDataKeyRequest) (*HieraDataFile, error)
-	// ApplyHieraDataKeyOverwrite reads the referenced "code-overwrites" proposal and refuses with
-	// FAILED_PRECONDITION unless its status is approved. It writes the payload
-	// frozen in that proposal (the request carries only a proposal_id) and is
-	// idempotent: a repeat call for the same approved proposal returns the same
-	// result rather than failing or writing twice. Requires code:rw only.
+	// ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
 	ApplyHieraDataKeyOverwrite(context.Context, *ApplyHieraDataKeyOverwriteRequest) (*HieraDataFile, error)
 	RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error)
 	DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error)

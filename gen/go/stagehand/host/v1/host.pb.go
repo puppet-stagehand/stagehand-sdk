@@ -2086,7 +2086,8 @@ func (x *OnboardNodeRequest) GetProposalId() string {
 // ------------------------------------------------------- Overwrite approval
 // Every Apply* request carries only the proposal id. The resource payload was
 // frozen into the proposal body at propose time and is never taken from the
-// caller of Apply.
+// caller of Apply. (For ApplyEnvironmentDuplicate the frozen part is the source
+// and target names; the source's contents are read at apply time.)
 type ApplyEnvironmentDuplicateRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
