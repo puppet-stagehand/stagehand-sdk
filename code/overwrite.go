@@ -401,11 +401,9 @@ func OverwritePayloadHieraLevel(body map[string]any) (*hostv1.HieraLevel, int32,
 			return nil, 0, false, fmt.Errorf("%w: payload index %v is not an int32", ErrOverwriteBodyInvalid, n)
 		}
 		index = int32(n)
-	case int32:
-		index = n
-	case int:
-		index = int32(n)
 	default:
+		// structpb decoding only ever yields float64 for a number, so any
+		// other type here is not a stored payload index.
 		return nil, 0, false, fmt.Errorf("%w: payload index is not a number", ErrOverwriteBodyInvalid)
 	}
 	insert := false
