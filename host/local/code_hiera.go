@@ -184,19 +184,16 @@ func (s *codeServer) PutHieraLevel(ctx context.Context, req *hostv1.PutHieraLeve
 
 	text, _ := s.hierarchyTextLocked(req.Environment)
 
-	// Overwrite gate (D-02): the existence check runs against the parsed
-	// hierarchy before code.PutLevel is ever called, so the format package
-	// never decides overwrite-versus-create for gating purposes and a refused
-	// write never reaches it. Adding a level whose name is not present stays
+	// Overwrite gate (D-02): the existence check runs against the hierarchy's
+	// node tree (names only, no other level converted) before code.PutLevel is
+	// ever called, so a refused write never reaches it and an unrelated level
+	// that cannot be parsed cannot block adding a new one. Adding a level whose name is not present stays
 	// ungated create.
-	current, err := code.ParseHierarchy(text)
+	exists, err := code.LevelExists(text, req.Level.GetName())
 	if err != nil {
 		return nil, mapHieraErr(err)
 	}
-	for _, existing := range current.GetLevels() {
-		if existing.GetName() != req.Level.GetName() {
-			continue
-		}
+	if exists {
 		target := code.OverwriteTarget{
 			Environment: req.Environment,
 			Resource:    code.OverwriteResourceHieraLevel,
@@ -430,16 +427,18 @@ func (s *codeServer) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDa
 
 	text, present := s.dataFileTextLocked(req.Environment, req.Path)
 
-	// Overwrite gate (D-02): only a key already present in the parsed file is
-	// an overwrite. An absent file, or a key not in it, stays ungated create.
-	// The reserved lookup_options key is excluded from ParseDataFile's values,
-	// so it falls through to code.PutDataKey's own refusal.
+	// Overwrite gate (D-02): only a key already present in the file is an
+	// overwrite. An absent file, or a key not in it, stays ungated create. The
+	// existence check reads the node tree's keys only and converts no value, so
+	// a value ParseDataFile could not represent cannot block adding an unrelated
+	// key. The reserved lookup_options key reports absent, so it falls through
+	// to code.PutDataKey's own refusal.
 	if present {
-		df, err := code.ParseDataFile(text)
+		exists, err := code.DataKeyExists(text, req.Key)
 		if err != nil {
 			return nil, mapHieraErr(err)
 		}
-		if _, exists := df.Values[req.Key]; exists {
+		if exists {
 			target := code.OverwriteTarget{
 				Environment: req.Environment,
 				Resource:    code.OverwriteResourceHieraDataKey,

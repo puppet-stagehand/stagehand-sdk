@@ -576,27 +576,20 @@ func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.A
 	}
 
 	text, _ := s.hierarchyTextLocked(target.Environment)
-	current, err := code.ParseHierarchy(text)
+	have, exists, err := code.LevelByName(text, lvl.GetName())
 	if err != nil {
 		return nil, mapHieraErr(err)
 	}
-	idx := -1
-	for i, existing := range current.GetLevels() {
-		if existing.GetName() == lvl.GetName() {
-			idx = i
-			break
-		}
-	}
-	if idx < 0 && !insert {
+	if !exists && !insert {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"overwrite proposal %q replaces level %q in place but the hierarchy no longer has it", req.ProposalId, lvl.GetName())
 	}
 
-	if idx < 0 || !proto.Equal(current.GetLevels()[idx], lvl) {
+	if !exists || !proto.Equal(have, lvl) {
 		if s.overwriteAppliedLocked(req.ProposalId) {
 			return nil, errOverwriteAlreadyApplied(req.ProposalId)
 		}
-		newText, err := code.PutLevel(text, lvl, index, insert && idx < 0)
+		newText, err := code.PutLevel(text, lvl, index, insert && !exists)
 		if err != nil {
 			return nil, mapHieraErr(err)
 		}
@@ -658,11 +651,11 @@ func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1
 	text, present := s.dataFileTextLocked(target.Environment, target.Path)
 	unchanged := false
 	if present {
-		df, err := code.ParseDataFile(text)
+		have, exists, err := code.DataKeyValue(text, target.Name)
 		if err != nil {
 			return nil, mapHieraErr(err)
 		}
-		if have, exists := df.Values[target.Name]; exists && proto.Equal(have, value) {
+		if exists && proto.Equal(have, value) {
 			unchanged = true
 		}
 	}

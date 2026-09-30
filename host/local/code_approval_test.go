@@ -1768,3 +1768,76 @@ func TestCodeOverwriteRemoveThenPutBypassesTheGate(t *testing.T) {
 		}
 	})
 }
+
+// TestCodeOverwriteGateDoesNotParseWholeFiles pins WR-06: deciding whether a
+// Put is an overwrite must not depend on every other value or level in the file
+// converting cleanly, or a file the gate cannot fully parse becomes impossible to
+// add to even though nothing is being replaced.
+func TestCodeOverwriteGateDoesNotParseWholeFiles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a new data key next to an unrepresentable value stays ungated", func(t *testing.T) {
+		h := newHieraHost(t)
+		seedDoc(t, h, ctx, "code-hiera-data", "prod/odd.yaml", map[string]any{
+			"path": "odd.yaml",
+			"yaml": "when: 2020-01-02T03:04:05Z\nports:\n  80: http\nname: web\n",
+		})
+		// The call's response re-reads the whole file (a separate, pre-existing
+		// step) and so may still report that file as unrepresentable. What this
+		// pins is that the overwrite gate itself no longer refuses, so the write
+		// reaches storage.
+		err := putKeyErr(h, "prod", "odd.yaml", "fresh", scalarJSON(t, "x"))
+		if local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("adding a new key was refused by the overwrite gate: %v", err)
+		}
+		if got, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/odd.yaml"); !strings.Contains(got.Body.Value.AsMap()["yaml"].(string), "fresh") {
+			t.Fatalf("the new key never reached storage (err = %v)", err)
+		}
+		if err := putKeyErr(h, "prod", "odd.yaml", "name", scalarJSON(t, "x")); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("replacing an existing key in that file: got %v, want requires-approval", err)
+		}
+	})
+
+	t.Run("a new level beside an unparseable level stays ungated", func(t *testing.T) {
+		h := newHieraHost(t)
+		cur, _ := getDoc(t, h, ctx, "code-hiera-hierarchy", "prod")
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: "code-hiera-hierarchy", DocId: "prod", IfVersion: cur.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{
+				"yaml": "version: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml\n  - just-a-string\n",
+			})},
+		}); err != nil {
+			t.Fatalf("seeding hierarchy: %v", err)
+		}
+		// As above: the response re-reads the whole hierarchy and may still
+		// report the unparseable level; the gate itself must not refuse.
+		err := putLevelErr(h, "prod", &hostv1.HieraLevel{Name: "fresh", Path: "fresh.yaml"}, 0, true)
+		if local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("adding a new level was refused by the overwrite gate: %v", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); !strings.Contains(got, "fresh.yaml") {
+			t.Fatalf("the new level never reached storage (err = %v)", err)
+		}
+		if err := putLevelErr(h, "prod", &hostv1.HieraLevel{Name: "role", Path: "other.yaml"}, 0, false); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("replacing an existing level: got %v, want requires-approval", err)
+		}
+	})
+
+	t.Run("Apply of a data key idempotence check ignores unrelated unrepresentable values", func(t *testing.T) {
+		h := newHieraHost(t)
+		seedDoc(t, h, ctx, "code-hiera-data", "prod/odd.yaml", map[string]any{
+			"path": "odd.yaml",
+			"yaml": "when: 2020-01-02T03:04:05Z\nname: web\n",
+		})
+		proposeHieraDataKey(t, h, "k1", "prod", "odd.yaml", "name", scalarJSON(t, "api"))
+		approveOverwrite(t, h, "k1")
+		// The response re-reads the whole file, which cannot be represented, so
+		// the call may report that; what matters is that the gate and the write
+		// were not blocked before it, so the stored file holds the new value.
+		_, _ = applyHieraDataKey(h, "k1")
+		got, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/odd.yaml")
+		if y := got.Body.Value.AsMap()["yaml"].(string); !strings.Contains(y, "api") || strings.Contains(y, "web") {
+			t.Fatalf("Apply did not write the approved value: %q", y)
+		}
+	})
+}

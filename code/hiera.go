@@ -385,6 +385,60 @@ func levelIndexByName(seq *yaml.Node, name string) int {
 	return -1
 }
 
+// LevelExists reports whether yamlText's hierarchy holds a level whose name is
+// exactly name. It walks the node tree and reads names only, so it does not
+// require every other level to convert cleanly: a hierarchy carrying an
+// unrelated level ParseHierarchy would reject can still be asked about one
+// level. It matches on the same name node PutLevel and RemoveLevel match on, so
+// "does it exist" and "would PutLevel replace it" always agree. A hierarchy
+// with no hierarchy sequence, or one that is not a sequence, has no level and
+// returns false; PutLevel reports the malformed shape itself when it writes.
+// Empty or whitespace-only text has no level. An error is returned only when
+// yamlText is not a parseable YAML mapping document.
+func LevelExists(yamlText, name string) (bool, error) {
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return false, err
+	}
+	if doc == nil {
+		return false, nil
+	}
+	seq := mapValue(rootMapping(doc), "hierarchy")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return false, nil
+	}
+	return levelIndexByName(seq, name) >= 0, nil
+}
+
+// LevelByName returns the level named name, read without converting any other
+// level, and whether one exists. A level that exists but cannot be read back
+// as a HieraLevel (for example one that is not a mapping) returns (nil, true,
+// nil): it is present, and it equals no level a caller could compare it to. An
+// error is returned only when yamlText is not a parseable YAML mapping
+// document.
+func LevelByName(yamlText, name string) (*hostv1.HieraLevel, bool, error) {
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return nil, false, err
+	}
+	if doc == nil {
+		return nil, false, nil
+	}
+	seq := mapValue(rootMapping(doc), "hierarchy")
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return nil, false, nil
+	}
+	i := levelIndexByName(seq, name)
+	if i < 0 {
+		return nil, false, nil
+	}
+	lvl, err := levelFromNode(seq.Content[i])
+	if err != nil {
+		return nil, true, nil
+	}
+	return lvl, true, nil
+}
+
 // PutLevel adds or replaces one hierarchy level by editing the YAML node
 // tree directly, so every comment in the input survives into the output.
 // insert=true splices level in at index (clamped to the sequence's
@@ -762,6 +816,58 @@ func PutDataKey(yamlText string, key string, value *hostv1.Json) (string, error)
 	}
 	setMapValue(m, key, valNode)
 	return encodeDoc(doc)
+}
+
+// DataKeyExists reports whether yamlText's top-level mapping holds a key named
+// exactly key. It walks the node tree and never converts a value, so a data file
+// carrying a value ParseDataFile cannot represent (an integer-keyed map, a YAML
+// timestamp) can still be asked about one key. It matches on the raw node key,
+// the same comparison PutDataKey makes when it decides between replacing a value
+// and appending a key, so "does it exist" and "would PutDataKey replace it"
+// always agree. The reserved key lookup_options reports false: it is never a
+// writable data key, and PutDataKey refuses it on its own terms. Empty or
+// whitespace-only text has no key. An error is returned only when yamlText is
+// not a parseable YAML mapping document.
+func DataKeyExists(yamlText, key string) (bool, error) {
+	if key == "lookup_options" {
+		return false, nil
+	}
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return false, err
+	}
+	if doc == nil {
+		return false, nil
+	}
+	return mapValue(rootMapping(doc), key) != nil, nil
+}
+
+// DataKeyValue returns the value stored under key, converted the way
+// ParseDataFile converts it but for that one key only, and whether the key
+// exists. A key that exists but whose value cannot be represented as JSON
+// returns (nil, true, nil): it is present, and it equals no value a caller could
+// compare it to. lookup_options reports absent, as in DataKeyExists. An error is
+// returned only when yamlText is not a parseable YAML mapping document.
+func DataKeyValue(yamlText, key string) (*hostv1.Json, bool, error) {
+	if key == "lookup_options" {
+		return nil, false, nil
+	}
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return nil, false, err
+	}
+	if doc == nil {
+		return nil, false, nil
+	}
+	n := mapValue(rootMapping(doc), key)
+	if n == nil {
+		return nil, false, nil
+	}
+	j, err := nodeToJSON(n)
+	if err != nil {
+		return nil, true, nil
+	}
+	return j, true, nil
 }
 
 // RemoveDataKey drops the named key from a data file's YAML node tree,
