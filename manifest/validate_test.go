@@ -363,6 +363,126 @@ func TestApprovalScopeIsNotAManifestPermission(t *testing.T) {
 	}
 }
 
+// TestCodeApproveScopeIsNotAManifestPermission pins the same orthogonality
+// for the Code facet's overwrite gate (GOV-02) that the test above pins for
+// Inventory onboarding. A facet permission ("code:rw") is a standing
+// install-time grant held for the pack's whole lifetime; the "code:approve"
+// scope is a short-lived per-decision token the pack cannot mint for itself.
+// A fixture that carries both strings validates the moment someone widens
+// rePerm by one alternative, and that is the fastest wrong way to make it
+// pass: it would let a pack that can propose an overwrite hold the authority
+// to approve it permanently. code:rw is the wrong precedent to copy here;
+// inventory:approve is the right one. This test fails loudly if any of the
+// three independently maintained vocabularies ever admits the scope, and it
+// carries a positive control so it cannot pass just because an alternation
+// was deleted.
+//
+// The scope is declared locally on purpose. This test pins the literal string
+// the manifest surfaces must reject, whatever any Go package renames.
+func TestCodeApproveScopeIsNotAManifestPermission(t *testing.T) {
+	const codeApproveScope = "code:approve"
+
+	schemaBytes, err := os.ReadFile("schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("rejected as a manifest permission", func(t *testing.T) {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, codeApproveScope)
+		fs := Validate(m)
+		var found bool
+		for _, f := range fs {
+			if f.Code == "permission_unknown" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("expected a permission_unknown finding for %q in permissions, got %v", codeApproveScope, codes(fs))
+		}
+	})
+
+	t.Run("absent from all three vocabularies", func(t *testing.T) {
+		if rePerm.MatchString(codeApproveScope) {
+			t.Errorf("rePerm must NOT match %q: it is an approval scope, not a facet permission", codeApproveScope)
+		}
+		for _, p := range Permissions {
+			if p == codeApproveScope {
+				t.Errorf("Permissions slice must NOT contain %q: it is an approval scope, not a facet permission", codeApproveScope)
+			}
+		}
+		if strings.Contains(string(schemaBytes), codeApproveScope) {
+			t.Errorf("schema.json must NOT contain %q anywhere in its permission pattern", codeApproveScope)
+		}
+	})
+
+	t.Run("accepted as a route access.scope with no schema change", func(t *testing.T) {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, "tokens:issue")
+		m.Routes = []Route{{Method: "POST", Path: "overwrites/{id}/decide", Access: Access{Scope: codeApproveScope}, OperationID: "decideOverwrite"}}
+		m.OpenAPIPath = "/stagehand/openapi.json"
+		fs := Validate(m)
+		for _, f := range fs {
+			switch f.Code {
+			case "permission_unknown", "route_scope_requires_tokens_issue":
+				t.Errorf("route access.scope %q must not trigger %s; got %v", codeApproveScope, f.Code, codes(fs))
+			}
+			if strings.Contains(f.Code, "scope") {
+				t.Errorf("route access.scope %q must produce no scope finding; got %v", codeApproveScope, codes(fs))
+			}
+		}
+	})
+
+	t.Run("scope route without tokens:issue trips the cross-check", func(t *testing.T) {
+		// Proof the clean case above is live: the same route without
+		// tokens:issue must be flagged, so the validator demonstrably looked at it.
+		m := load(t, "../examples/hello/manifest.json")
+		m.Routes = []Route{{Method: "POST", Path: "overwrites/{id}/decide", Access: Access{Scope: codeApproveScope}, OperationID: "decideOverwrite"}}
+		m.OpenAPIPath = "/stagehand/openapi.json"
+		fs := Validate(m)
+		var saw bool
+		for _, f := range fs {
+			if f.Code == "route_scope_requires_tokens_issue" {
+				saw = true
+				break
+			}
+		}
+		if !saw {
+			t.Fatalf("expected route_scope_requires_tokens_issue without tokens:issue in permissions, got %v", codes(fs))
+		}
+	})
+
+	t.Run("positive control: code:read and code:rw still real permissions", func(t *testing.T) {
+		for _, real := range []string{"code:read", "code:rw"} {
+			if !rePerm.MatchString(real) {
+				t.Errorf("rePerm must still match %q", real)
+			}
+			var inSlice bool
+			for _, p := range Permissions {
+				if p == real {
+					inSlice = true
+					break
+				}
+			}
+			if !inSlice {
+				t.Errorf("Permissions slice must still contain %q", real)
+			}
+			if !strings.Contains(string(schemaBytes), real) {
+				t.Errorf("schema.json must still contain the literal %q", real)
+			}
+
+			m := load(t, "../examples/hello/manifest.json")
+			m.Permissions = append(m.Permissions, real)
+			for _, f := range Validate(m) {
+				if f.Code == "permission_unknown" {
+					t.Errorf("permission %q must validate; got permission_unknown", real)
+				}
+			}
+		}
+	})
+}
+
 func TestPermissionVocabulariesAgree(t *testing.T) {
 	for _, p := range Permissions {
 		if !rePerm.MatchString(p) {
