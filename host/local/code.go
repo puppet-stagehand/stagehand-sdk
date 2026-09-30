@@ -613,11 +613,9 @@ func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.Dupli
 // gatedCode wraps codeServer with the code:rw permission check every
 // forwarded Code RPC requires, including the read-only ones and the Apply*
 // RPCs — there is no narrower per-RPC permission and no read-only exemption.
-// 22 RPCs predate the overwrite gate and the five Apply* RPCs are forwarders
-// 23 to 27, so every Code RPC is reachable only through this gate rather than
-// through the embedded UnimplementedCodeServer. Unlike Documents
-// and Settings, which are always available, Code is a gated facet — the
-// same posture Inventory ships.
+// Every Code RPC is forwarded through this check rather than reaching the
+// embedded UnimplementedCodeServer. Unlike Documents and Settings, which are
+// always available, Code is a gated facet — the same posture Inventory ships.
 type gatedCode struct {
 	hostv1.UnimplementedCodeServer
 	perms  map[string]bool

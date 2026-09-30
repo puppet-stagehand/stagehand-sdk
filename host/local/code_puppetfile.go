@@ -3,7 +3,7 @@ package local
 // This file holds the five Puppetfile RPC bodies (ListPuppetfileModules,
 // PutPuppetfileModule, RemovePuppetfileModule, SetModuledir,
 // RenderPuppetfile) on *codeServer, split out of code.go: codeServer,
-// gatedCode and all 22 forwarders live in code.go so the permission gate
+// gatedCode and all the Code forwarders live in code.go so the permission gate
 // stays reviewable as a unit, while the RPC bodies are split by resource
 // kind so the three plans that write them (this one, and the sibling Hiera
 // plan) can land in the same wave without touching the same file.

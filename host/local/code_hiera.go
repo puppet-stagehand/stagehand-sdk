@@ -4,7 +4,7 @@ package local
 // PutHieraLevel, RemoveHieraLevel, ReorderHieraLevels,
 // ListHieraDataFiles, GetHieraDataFile, PutHieraDataKey,
 // RemoveHieraDataKey, DeleteHieraDataFile) on *codeServer, split out of
-// code.go: codeServer, gatedCode and all 27 forwarders live in code.go so
+// code.go: codeServer, gatedCode and all the Code forwarders live in code.go so
 // the permission gate stays reviewable as a unit, while the RPC bodies are
 // split by resource kind so the plans that write them (this one, and the
 // sibling Puppetfile plan) can land in the same wave without touching the
