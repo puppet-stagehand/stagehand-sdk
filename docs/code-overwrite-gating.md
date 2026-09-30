@@ -164,10 +164,16 @@ permission.
   writes (module, settings, Hiera level, Hiera data key): each one writes the
   content frozen at propose time, and applying the same proposal twice leaves
   the same result and does not rewrite anything the second time.
-- **`ApplyEnvironmentDuplicate` is different.** It freezes no copy of the
-  source. The approver approved the operation "replace the target with a copy
-  of the source", so the source is read when you apply. If the source changed
-  after approval, applying copies the source as it is now.
+- **`ApplyEnvironmentDuplicate` is different, and is single-use.** It freezes
+  no copy of the source. The approver approved the operation "replace the
+  target with a copy of the source", so the source is read when you apply. If
+  the source changed after approval but before the first apply, applying copies
+  the source as it is now. Once the proposal has been applied, applying it
+  again succeeds only if the target already equals a copy of the source (a
+  retry after a lost reply). If the source or the target has changed since,
+  the call is refused with `FailedPrecondition` ("already applied") and you
+  need a new proposal and a new approval. Without this rule one approval would
+  be a standing permission to copy whatever the source later became.
 - **The gate is not advisory and cannot be switched off.** There is no
   option, permission or environment variable that lets an overwrite through
   without an approved proposal.

@@ -15,10 +15,12 @@ package local
 
 import (
 	"context"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/puppet-stagehand/stagehand-sdk/code"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
@@ -39,6 +41,15 @@ const (
 	overwriteStatusKey      = "status"
 	overwriteStatusApproved = "approved"
 )
+
+// overwriteAppliedCollection is the Code facet's own record of which approved
+// proposals have already been materialized, keyed by proposal id. It is not a
+// status change on the proposal, so the "Apply never decides" rule holds: the
+// approval package owns the proposal document and this file only writes a
+// separate marker beside it. A marker is what stops an approval from being a
+// standing permission: once a proposal is applied, an Apply call is only
+// honoured when it would change nothing.
+const overwriteAppliedCollection = "code-overwrite-applied"
 
 // The Apply RPC names the Put-path refusals point a caller at.
 const (
@@ -128,6 +139,41 @@ func overwriteDetailCode(err error) string {
 		}
 	}
 	return ""
+}
+
+// overwriteAppliedLocked reports whether proposalID has already been
+// materialized by an Apply RPC. The caller must already hold s.docs.mu.
+func (s *codeServer) overwriteAppliedLocked(proposalID string) bool {
+	_, ok := s.docs.getLocked(overwriteAppliedCollection, proposalID)
+	return ok
+}
+
+// markOverwriteAppliedLocked records that proposalID has been materialized. It
+// is a no-op when the marker already exists. The caller must already hold
+// s.docs.mu and must call it only after the Apply's write (or its verified
+// no-op) succeeded.
+func (s *codeServer) markOverwriteAppliedLocked(proposalID string) error {
+	if s.overwriteAppliedLocked(proposalID) {
+		return nil
+	}
+	st, err := structpb.NewStruct(map[string]any{"applied_at": time.Now().UTC().Format(time.RFC3339Nano)})
+	if err != nil {
+		return status.Errorf(codes.Internal, "record applied overwrite %q: %v", proposalID, err)
+	}
+	if _, err := s.docs.putLocked(overwriteAppliedCollection, proposalID, &hostv1.Json{Value: st}, true); err != nil {
+		return status.Errorf(codes.Internal, "record applied overwrite %q: %v", proposalID, err)
+	}
+	return nil
+}
+
+// errOverwriteAlreadyApplied is the refusal an Apply RPC returns when its
+// proposal was already applied and the target no longer matches what the
+// proposal describes. Repeating an applied approval is only allowed when it
+// would change nothing; anything else needs a new proposal and a new approval.
+func errOverwriteAlreadyApplied(proposalID string) error {
+	return status.Errorf(codes.FailedPrecondition,
+		"overwrite proposal %q was already applied and the target has changed since; an approval covers one application, so propose the change again and have it approved",
+		proposalID)
 }
 
 // approvedOverwriteProposalLocked returns the id of the first approved
@@ -360,6 +406,13 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 // concurrent reader sees either the complete replacement or the prior state,
 // never a half-copied environment. The call is idempotent: when the target
 // already holds exactly the planned documents it returns without writing.
+//
+// An approval covers one application. The source is read at apply time, so a
+// proposal that stayed usable forever would let one approval stamp whatever the
+// source later became over the target. Once the proposal has been applied, a
+// repeat call succeeds only when the target already equals the planned copy (a
+// retry after a lost response); if the source or target has moved on it is
+// refused and a new proposal is needed.
 func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.ApplyEnvironmentDuplicateRequest) (*hostv1.Environment, error) {
 	_, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceEnvironment)
 	if err != nil {
@@ -386,6 +439,13 @@ func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.
 	existing := s.envOwnedDocsLocked(target.Environment)
 
 	if !s.targetMatchesPlanLocked(existing, writes) {
+		// The source is read at apply time, so an approval that could be
+		// replayed would let the approver's one decision copy whatever the
+		// source has become. An applied proposal is therefore single-use: a
+		// repeat call is honoured only when it would write nothing.
+		if s.overwriteAppliedLocked(req.ProposalId) {
+			return nil, errOverwriteAlreadyApplied(req.ProposalId)
+		}
 		for _, ref := range existing {
 			s.docs.deleteLocked(ref.collection, ref.docID)
 		}
@@ -394,6 +454,9 @@ func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.
 				return nil, status.Errorf(codes.Internal, "apply duplicate: writing %s/%s: %v", w.collection, w.docID, err)
 			}
 		}
+	}
+	if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
+		return nil, err
 	}
 
 	doc, ok := s.docs.getLocked(envCollection, target.Environment)

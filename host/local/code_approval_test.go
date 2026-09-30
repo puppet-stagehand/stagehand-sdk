@@ -900,6 +900,33 @@ func TestCodeOverwriteDuplicate(t *testing.T) {
 		}
 	})
 
+	t.Run("an applied approval cannot be replayed against a changed source (CR-01)", func(t *testing.T) {
+		h := newHosts(t)
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+		if _, err := applyDuplicate(h, "p1"); err != nil {
+			t.Fatalf("first Apply: %v", err)
+		}
+		afterFirst := snapshot(t, h, "staging")
+
+		// The source is rewritten after the approval was used.
+		cur, _ := getDoc(t, h, ctx, "code-puppetfiles", "production")
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: "code-puppetfiles", DocId: "production", IfVersion: cur.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"text": "mod 'evil/module', '6.6.6'\n"})},
+		}); err != nil {
+			t.Fatalf("rewriting the source Puppetfile: %v", err)
+		}
+
+		_, err := applyDuplicate(h, "p1")
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "already applied") {
+			t.Fatalf("replay against a changed source: got %v, want FailedPrecondition naming already applied", err)
+		}
+		if after := snapshot(t, h, "staging"); !equalSnap(afterFirst, after) {
+			t.Fatalf("a refused replay changed the target:\nbefore %v\nafter  %v", afterFirst, after)
+		}
+	})
+
 	t.Run("Apply refusals", func(t *testing.T) {
 		h := newHosts(t)
 		proposeDuplicate(t, h, "pending", "production", "staging")
