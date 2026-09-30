@@ -47,9 +47,11 @@ func Propose(ctx context.Context, h *host.Host, node *hostv1.Node, kind Kind) (*
 // keyed by proposalID, carrying exactly the caller's body entries plus a
 // status this package sets itself. It is the generic create path for a
 // governed action whose subject is not an Inventory node. A body that
-// already carries the status key is refused: the proposal status is set by
-// this package and never by a caller, so no caller can create a proposal
-// that is born approved.
+// already carries any governance-owned key (status, reason, decided_by,
+// decided_at, approved_scope) is refused: those are set by this package when
+// a proposal is created or decided and never by a caller, so no caller can
+// create a proposal that is born approved or that pre-writes an audit trail
+// (a decider, a decision time or a reason) the real approver never wrote.
 func ProposeBody(ctx context.Context, h *host.Host, kind Kind, proposalID string, body map[string]any) (*Proposal, error) {
 	if err := kind.validate(); err != nil {
 		return nil, err
@@ -57,8 +59,10 @@ func ProposeBody(ctx context.Context, h *host.Host, kind Kind, proposalID string
 	if proposalID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "proposal id is required")
 	}
-	if _, present := body[keyStatus]; present {
-		return nil, status.Errorf(codes.InvalidArgument, "proposal body must not carry the %q key: the proposal status is set by the approval package and never by a caller", keyStatus)
+	for _, k := range governanceKeys {
+		if _, present := body[k]; present {
+			return nil, status.Errorf(codes.InvalidArgument, "proposal body must not carry the %q key: it is owned by the approval package and never set by a caller", k)
+		}
 	}
 
 	doc := make(map[string]any, len(body)+1)

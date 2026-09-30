@@ -101,6 +101,11 @@ func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecre
 	next[keyDecidedAt] = decidedAt.Format(time.RFC3339Nano)
 	if reason != "" {
 		next[keyReason] = reason
+	} else {
+		// Never inherit a reason from the body read back: an approval
+		// records no reason, and a stale one would read as though the
+		// approver wrote it.
+		delete(next, keyReason)
 	}
 
 	s, err := structpb.NewStruct(next)

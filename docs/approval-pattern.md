@@ -11,8 +11,10 @@ is the first consumer, not a special case baked into the package.
 - A proposal is created once, through `approval.Propose` (or the generic
   `approval.ProposeBody`). A second call for the same proposal id is
   refused; it cannot overwrite the first. `ProposeBody` sets the pending
-  status itself and refuses a body that carries a `status` key, so no
-  caller can create a proposal that is born approved.
+  status itself and refuses a body that carries any key the package owns
+  (`status`, `reason`, `decided_by`, `decided_at`, `approved_scope`), so no
+  caller can create a proposal that is born approved or that pre-writes an
+  audit trail for the real approver.
 - A decision — `approval.Approve` or `approval.Reject` — requires a token
   the Auth facet issued for the approval scope named by the caller's
   `approval.Kind`, and nothing else will do.

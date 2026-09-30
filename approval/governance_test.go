@@ -487,6 +487,66 @@ func TestProposeBodyRefusesCallerStatus(t *testing.T) {
 	}
 }
 
+// TestProposeBodyRefusesGovernanceKeys proves a proposer cannot pre-seed any
+// key the approval package owns (WR-05): a pre-written reason, decider, decision
+// time or approved scope would otherwise surface as the approver's audit trail.
+func TestProposeBodyRefusesGovernanceKeys(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+
+	for _, key := range []string{"status", "reason", "decided_by", "decided_at", "approved_scope"} {
+		id := "seeded-" + key
+		_, err := approval.ProposeBody(ctx, h, testKind, id, map[string]any{key: "spoofed", "k": "v"})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("key %q: expected InvalidArgument, got %v", key, err)
+		}
+		if _, gerr := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: testKind.Collection, DocId: id}); status.Code(gerr) != codes.NotFound {
+			t.Fatalf("key %q: a refused ProposeBody must create nothing; Documents.Get returned %v", key, gerr)
+		}
+	}
+}
+
+// TestApproveDropsAnInheritedReason proves Approve does not carry a reason
+// already present in the stored body into the approved record (WR-05). Such a
+// body can only arise from a direct Documents.Put, since ProposeBody refuses it.
+func TestApproveDropsAnInheritedReason(t *testing.T) {
+	ctx := context.Background()
+	h := testHost(t, "inventory:rw", "tokens:issue")
+	if _, err := approval.ProposeBody(ctx, h, testKind, "r1", map[string]any{"k": "v"}); err != nil {
+		t.Fatalf("ProposeBody: %v", err)
+	}
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: testKind.Collection, DocId: "r1"})
+	if err != nil {
+		t.Fatalf("Documents.Get: %v", err)
+	}
+	body := doc.Body.Value.AsMap()
+	body["reason"] = "approved by security team"
+	s, err := structpb.NewStruct(body)
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+	if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+		Collection: testKind.Collection, DocId: "r1", Body: &hostv1.Json{Value: s}, IfVersion: doc.Version,
+	}); err != nil {
+		t.Fatalf("Documents.Put: %v", err)
+	}
+
+	prop, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: testKind, ProposalID: "r1", TokenSecret: approverToken(t, h, "auditor")})
+	if err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if prop.Reason != "" {
+		t.Fatalf("Approve returned reason %q, want empty", prop.Reason)
+	}
+	got, err := approval.Get(ctx, h, testKind, "r1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Reason != "" {
+		t.Fatalf("stored approved record carries reason %q, want none", got.Reason)
+	}
+}
+
 // TestProposeBodyCreateOnly proves ProposeBody writes a pending document
 // carrying exactly the caller's entries plus status, and that a second
 // proposal for the same id is refused without touching the first.

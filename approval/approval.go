@@ -78,6 +78,11 @@ const (
 	keyApprovedScope = "approved_scope"
 )
 
+// governanceKeys are the body keys this package owns. A proposer may not
+// supply any of them, because each is either the status or part of the audit
+// trail that only Approve and Reject write.
+var governanceKeys = []string{keyStatus, keyReason, keyDecidedBy, keyDecidedAt, keyApprovedScope}
+
 // Detail codes attached to this package's errors, used by IsAlreadyDecided
 // and by callers inspecting a *status.Status's ErrorDetail directly.
 const (
