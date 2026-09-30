@@ -336,3 +336,125 @@ func OverwriteBodyForEnvironmentDuplicate(sourceName, targetName string) (map[st
 		}),
 	}, nil
 }
+
+// Payload keys inside a Hiera level proposal's payload object.
+const (
+	overwriteKeyLevel  = "level"
+	overwriteKeyIndex  = "index"
+	overwriteKeyInsert = "insert"
+)
+
+// OverwriteBodyForHieraLevel builds the body of a proposal to replace the
+// Hiera level lvl in environment env. The target's Resource is
+// OverwriteResourceHieraLevel and its Name is the level's name. The payload
+// carries protojson's rendering of the level plus the index and the insert
+// flag of the write the proposer attempted, so the Apply RPC reproduces the
+// write the approver saw. A level carrying lookup_options is refused because
+// lookup_options is read-only and no write may carry it. The result carries no
+// status key.
+func OverwriteBodyForHieraLevel(env string, lvl *hostv1.HieraLevel, index int32, insert bool) (map[string]any, error) {
+	if env == "" {
+		return nil, fmt.Errorf("%w: an environment is required", ErrOverwriteBodyInvalid)
+	}
+	if lvl == nil || lvl.GetName() == "" {
+		return nil, fmt.Errorf("%w: a level with a name is required", ErrOverwriteBodyInvalid)
+	}
+	if len(lvl.GetLookupOptions()) > 0 {
+		return nil, fmt.Errorf("%w: lookup_options is read-only and cannot be part of a write", ErrOverwriteBodyInvalid)
+	}
+	rendered, err := protoToMap(lvl)
+	if err != nil {
+		return nil, fmt.Errorf("%w: rendering level payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return overwriteBody(OverwriteTarget{
+		Environment: env,
+		Resource:    OverwriteResourceHieraLevel,
+		Name:        lvl.GetName(),
+	}, map[string]any{
+		overwriteKeyLevel:  rendered,
+		overwriteKeyIndex:  float64(index),
+		overwriteKeyInsert: insert,
+	}), nil
+}
+
+// OverwritePayloadHieraLevel is the exact inverse of OverwriteBodyForHieraLevel:
+// it returns the frozen level, index and insert flag. The index is read as a
+// JSON number and must be integral and in the int32 range.
+func OverwritePayloadHieraLevel(body map[string]any) (*hostv1.HieraLevel, int32, bool, error) {
+	_, obj, err := overwritePayloadObject(body, OverwriteResourceHieraLevel)
+	if err != nil {
+		return nil, 0, false, err
+	}
+	rawLevel, ok := obj[overwriteKeyLevel].(map[string]any)
+	if !ok {
+		return nil, 0, false, fmt.Errorf("%w: payload has no %q object", ErrOverwriteBodyInvalid, overwriteKeyLevel)
+	}
+	lvl := &hostv1.HieraLevel{}
+	if err := mapToProto(rawLevel, lvl); err != nil {
+		return nil, 0, false, fmt.Errorf("%w: decoding level payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	var index int32
+	switch n := obj[overwriteKeyIndex].(type) {
+	case nil:
+	case float64:
+		if n != float64(int32(n)) {
+			return nil, 0, false, fmt.Errorf("%w: payload index %v is not an int32", ErrOverwriteBodyInvalid, n)
+		}
+		index = int32(n)
+	case int32:
+		index = n
+	case int:
+		index = int32(n)
+	default:
+		return nil, 0, false, fmt.Errorf("%w: payload index is not a number", ErrOverwriteBodyInvalid)
+	}
+	insert := false
+	if raw, present := obj[overwriteKeyInsert]; present {
+		b, isBool := raw.(bool)
+		if !isBool {
+			return nil, 0, false, fmt.Errorf("%w: payload insert is not a boolean", ErrOverwriteBodyInvalid)
+		}
+		insert = b
+	}
+	return lvl, index, insert, nil
+}
+
+// OverwriteBodyForHieraDataKey builds the body of a proposal to replace the
+// value of key in the Hiera data file path of environment env. The target's
+// Resource is OverwriteResourceHieraDataKey, its Name is the key and its Path
+// is the file's relative path. Both participate in the five-field equality
+// match, which is what makes an approval for a key in one file not cover the
+// same key in another. The payload is protojson's rendering of the value,
+// frozen at propose time. The result carries no status key.
+func OverwriteBodyForHieraDataKey(env, path, key string, value *hostv1.Json) (map[string]any, error) {
+	if env == "" || path == "" || key == "" {
+		return nil, fmt.Errorf("%w: an environment, a data file path and a key are required", ErrOverwriteBodyInvalid)
+	}
+	if value == nil {
+		value = &hostv1.Json{}
+	}
+	rendered, err := protoToMap(value)
+	if err != nil {
+		return nil, fmt.Errorf("%w: rendering data key payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return overwriteBody(OverwriteTarget{
+		Environment: env,
+		Resource:    OverwriteResourceHieraDataKey,
+		Name:        key,
+		Path:        path,
+	}, rendered), nil
+}
+
+// OverwritePayloadHieraDataKey is the exact inverse of
+// OverwriteBodyForHieraDataKey: it decodes the frozen value.
+func OverwritePayloadHieraDataKey(body map[string]any) (*hostv1.Json, error) {
+	_, obj, err := overwritePayloadObject(body, OverwriteResourceHieraDataKey)
+	if err != nil {
+		return nil, err
+	}
+	v := &hostv1.Json{}
+	if err := mapToProto(obj, v); err != nil {
+		return nil, fmt.Errorf("%w: decoding data key payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return v, nil
+}

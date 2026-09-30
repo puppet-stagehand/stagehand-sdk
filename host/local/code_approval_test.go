@@ -16,6 +16,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/puppet-stagehand/stagehand-sdk/approval"
 	"github.com/puppet-stagehand/stagehand-sdk/code"
@@ -515,20 +516,6 @@ func TestCodeOverwriteApplyPermission(t *testing.T) {
 	}
 }
 
-// TestCodeOverwriteStagedApplyRPCsAreUnreachable pins the staging: the
-// Apply RPCs whose bodies land in a later task resolve through the embedded
-// Unimplemented server, so they are unreachable rather than ungated.
-func TestCodeOverwriteStagedApplyRPCsAreUnreachable(t *testing.T) {
-	h := newOverwriteHost()
-	ctx := context.Background()
-	if _, err := h.Code.ApplyHieraLevelOverwrite(ctx, &hostv1.ApplyHieraLevelOverwriteRequest{ProposalId: "x"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("ApplyHieraLevelOverwrite: got %v, want Unimplemented", err)
-	}
-	if _, err := h.Code.ApplyHieraDataKeyOverwrite(ctx, &hostv1.ApplyHieraDataKeyOverwriteRequest{ProposalId: "x"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("ApplyHieraDataKeyOverwrite: got %v, want Unimplemented", err)
-	}
-}
-
 // --- environment slice: settings and duplicate-over-existing ---
 
 var overwriteSeq atomic.Int64
@@ -1007,4 +994,504 @@ func TestCodeOverwriteDeletesStayUngated(t *testing.T) {
 		t.Fatalf("DeleteEnvironment must stay ungated: %v", err)
 	}
 	assertEnvDocsAbsent(t, h, ctx, "production")
+
+	// The Hiera and Puppetfile deletes need no proposal either.
+	h = newHieraHost(t)
+	mustPutModule(t, h, "prod", forgeModule("puppetlabs/ntp", ""))
+	if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "puppetlabs/ntp"}); err != nil {
+		t.Fatalf("RemovePuppetfileModule must stay ungated: %v", err)
+	}
+	if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: "common.yaml", Key: "port"}); err != nil {
+		t.Fatalf("RemoveHieraDataKey must stay ungated: %v", err)
+	}
+	if _, err := h.Code.RemoveHieraLevel(ctx, &hostv1.RemoveHieraLevelRequest{Environment: "prod", Name: "role"}); err != nil {
+		t.Fatalf("RemoveHieraLevel must stay ungated: %v", err)
+	}
+	if _, err := h.Code.DeleteHieraDataFile(ctx, &hostv1.DeleteHieraDataFileRequest{Environment: "prod", Path: "nodes/web01.yaml"}); err != nil {
+		t.Fatalf("DeleteHieraDataFile must stay ungated: %v", err)
+	}
+	if _, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("DeleteEnvironment (with content) must stay ungated: %v", err)
+	}
+}
+
+// --- Hiera slice: level overwrite and data-key overwrite ---
+
+func proposeHieraLevel(t *testing.T, h *host.Host, proposalID, env string, lvl *hostv1.HieraLevel, index int32, insert bool) {
+	t.Helper()
+	body, err := code.OverwriteBodyForHieraLevel(env, lvl, index, insert)
+	proposeBodyAs(t, h, proposalID, body, err)
+}
+
+func proposeHieraDataKey(t *testing.T, h *host.Host, proposalID, env, path, key string, value *hostv1.Json) {
+	t.Helper()
+	body, err := code.OverwriteBodyForHieraDataKey(env, path, key, value)
+	proposeBodyAs(t, h, proposalID, body, err)
+}
+
+func applyHieraLevel(h *host.Host, proposalID string) (*hostv1.PutHieraLevelResponse, error) {
+	return h.Code.ApplyHieraLevelOverwrite(context.Background(), &hostv1.ApplyHieraLevelOverwriteRequest{ProposalId: proposalID})
+}
+
+func applyHieraDataKey(h *host.Host, proposalID string) (*hostv1.HieraDataFile, error) {
+	return h.Code.ApplyHieraDataKeyOverwrite(context.Background(), &hostv1.ApplyHieraDataKeyOverwriteRequest{ProposalId: proposalID})
+}
+
+// putHieraLevelViaApproval runs propose, approve and ApplyHieraLevelOverwrite
+// for one level, for tests that need to replace a level that already exists.
+func putHieraLevelViaApproval(t *testing.T, h *host.Host, env string, lvl *hostv1.HieraLevel, index int32, insert bool) *hostv1.PutHieraLevelResponse {
+	t.Helper()
+	id := nextProposalID("level-" + lvl.GetName())
+	proposeHieraLevel(t, h, id, env, lvl, index, insert)
+	approveOverwrite(t, h, id)
+	resp, err := applyHieraLevel(h, id)
+	if err != nil {
+		t.Fatalf("ApplyHieraLevelOverwrite(%s): %v", id, err)
+	}
+	return resp
+}
+
+// dataKeyViaApproval runs propose, approve and ApplyHieraDataKeyOverwrite.
+func dataKeyViaApproval(t *testing.T, h *host.Host, env, path, key string, value *hostv1.Json) *hostv1.HieraDataFile {
+	t.Helper()
+	id := nextProposalID("key-" + key)
+	proposeHieraDataKey(t, h, id, env, path, key, value)
+	approveOverwrite(t, h, id)
+	df, err := applyHieraDataKey(h, id)
+	if err != nil {
+		t.Fatalf("ApplyHieraDataKeyOverwrite(%s): %v", id, err)
+	}
+	return df
+}
+
+func putLevelErr(h *host.Host, env string, lvl *hostv1.HieraLevel, index int32, insert bool) error {
+	_, err := h.Code.PutHieraLevel(context.Background(), &hostv1.PutHieraLevelRequest{Environment: env, Level: lvl, Index: index, Insert: insert})
+	return err
+}
+
+func putKeyErr(h *host.Host, env, path, key string, value *hostv1.Json) error {
+	_, err := h.Code.PutHieraDataKey(context.Background(), &hostv1.PutHieraDataKeyRequest{Environment: env, Path: path, Key: key, Value: value})
+	return err
+}
+
+func scalarJSON(t *testing.T, v any) *hostv1.Json {
+	t.Helper()
+	return &hostv1.Json{Value: mustStruct(t, map[string]any{"v": v})}
+}
+
+const seededHierarchy = "# head comment\nversion: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml # role note\n  - name: common\n    path: common.yaml\n"
+
+const seededCommon = "# port comment\nport: 8080\nname: web\n"
+
+func newHieraHost(t *testing.T) *host.Host {
+	t.Helper()
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+	seedDoc(t, h, ctx, "code-hiera-hierarchy", "prod", map[string]any{"yaml": seededHierarchy})
+	seedDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml", map[string]any{"path": "common.yaml", "yaml": seededCommon})
+	seedDoc(t, h, ctx, "code-hiera-data", "prod/nodes/web01.yaml", map[string]any{"path": "nodes/web01.yaml", "yaml": "port: 1\n"})
+	return h
+}
+
+func levelNames(hier *hostv1.HieraHierarchy) []string {
+	var out []string
+	for _, l := range hier.GetLevels() {
+		out = append(out, l.GetName())
+	}
+	return out
+}
+
+func TestCodeOverwriteHieraLevel(t *testing.T) {
+	ctx := context.Background()
+	replacement := &hostv1.HieraLevel{Name: "common", Path: "common.yaml", DataHash: "yaml_data"}
+
+	t.Run("adding a new level stays ungated and warnings travel with the write", func(t *testing.T) {
+		h := newHieraHost(t)
+		resp, err := h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{
+			Environment: "prod",
+			Level:       &hostv1.HieraLevel{Name: "env", Path: "env/%{environment}/x.yaml"},
+			Index:       1, Insert: true,
+		})
+		if err != nil {
+			t.Fatalf("PutHieraLevel(new level): %v", err)
+		}
+		if got := levelNames(resp.Hierarchy); len(got) != 3 || got[1] != "env" {
+			t.Fatalf("levels = %v", got)
+		}
+		if len(resp.Warnings) == 0 {
+			t.Fatal("the lint warning must still travel on the applied write")
+		}
+	})
+
+	t.Run("a new level in an environment with no hierarchy stays ungated", func(t *testing.T) {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "fresh")
+		if err := putLevelErr(h, "fresh", &hostv1.HieraLevel{Name: "common", Path: "common.yaml"}, 0, true); err != nil {
+			t.Fatalf("PutHieraLevel on an unauthored hierarchy: %v", err)
+		}
+	})
+
+	t.Run("an existing level is refused and the yaml is untouched", func(t *testing.T) {
+		h := newHieraHost(t)
+		err := putLevelErr(h, "prod", replacement, 0, false)
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("got %v, want FailedPrecondition requires-approval", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); got != seededHierarchy {
+			t.Fatalf("stored yaml changed by a refused write:\n%q", got)
+		}
+		// insert=true of an existing name is equally an overwrite.
+		if err := putLevelErr(h, "prod", replacement, 0, true); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("insert of an existing name: got %v, want requires-approval", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); got != seededHierarchy {
+			t.Fatalf("stored yaml changed by a refused insert:\n%q", got)
+		}
+	})
+
+	t.Run("a prefix or case variant of an approved name is not covered", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraLevel(t, h, "p1", "prod", &hostv1.HieraLevel{Name: "common_extra", Path: "x.yaml"}, 0, false)
+		approveOverwrite(t, h, "p1")
+		if err := putLevelErr(h, "prod", replacement, 0, false); !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want requires-approval", err)
+		}
+	})
+
+	t.Run("an approved proposal still refuses the Put with apply-pending", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraLevel(t, h, "p1", "prod", replacement, 0, false)
+		approveOverwrite(t, h, "p1")
+		err := putLevelErr(h, "prod", replacement, 0, false)
+		if !local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want apply-pending", err)
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "p1") || !strings.Contains(ed.Fix, "ApplyHieraLevelOverwrite") {
+			t.Fatalf("Fix should name the proposal and the Apply RPC, got %+v", ed)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); got != seededHierarchy {
+			t.Fatalf("stored yaml changed:\n%q", got)
+		}
+	})
+
+	t.Run("read-only lookup_options is refused before the gate", func(t *testing.T) {
+		h := newHieraHost(t)
+		err := putLevelErr(h, "prod", &hostv1.HieraLevel{Name: "common", LookupOptions: map[string]string{"k": "deep"}}, 0, false)
+		if status.Code(err) != codes.InvalidArgument || local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("got %v, want InvalidArgument from the read-only check", err)
+		}
+	})
+
+	t.Run("an absent environment is NotFound before the gate", func(t *testing.T) {
+		h := newHieraHost(t)
+		if err := putLevelErr(h, "ghost", replacement, 0, false); status.Code(err) != codes.NotFound {
+			t.Fatalf("got %v, want NotFound", err)
+		}
+	})
+
+	t.Run("Apply replaces in place, preserves order and comments, returns lint warnings", func(t *testing.T) {
+		h := newHieraHost(t)
+		lvl := &hostv1.HieraLevel{Name: "common", Path: "env/%{environment}/common.yaml", DataHash: "yaml_data"}
+		resp := putHieraLevelViaApproval(t, h, "prod", lvl, 0, false)
+		if got := levelNames(resp.Hierarchy); len(got) != 2 || got[0] != "role" || got[1] != "common" {
+			t.Fatalf("hierarchy order = %v, want [role common]", got)
+		}
+		if resp.Hierarchy.Levels[1].DataHash != "yaml_data" {
+			t.Fatalf("level not replaced: %+v", resp.Hierarchy.Levels[1])
+		}
+		if len(resp.Warnings) == 0 {
+			t.Fatal("Apply must compute lint warnings for the approved level")
+		}
+		text := hieraHierarchyTextRaw(t, h, ctx, "prod")
+		if !strings.Contains(text, "# head comment") || !strings.Contains(text, "# role note") {
+			t.Fatalf("comments lost:\n%s", text)
+		}
+	})
+
+	t.Run("Apply mirrors lookup_options for display", func(t *testing.T) {
+		h := newHieraHost(t)
+		cur, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml")
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: "code-hiera-data", DocId: "prod/common.yaml", IfVersion: cur.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"path": "common.yaml", "yaml": "lookup_options:\n  port:\n    merge: deep\nport: 1\n"})},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		resp := putHieraLevelViaApproval(t, h, "prod", replacement, 0, false)
+		if got := resp.Hierarchy.Levels[1].LookupOptions["port"]; got != "deep" {
+			t.Fatalf("lookup_options not mirrored: %v", resp.Hierarchy.Levels[1].LookupOptions)
+		}
+	})
+
+	t.Run("Apply is idempotent", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraLevel(t, h, "p1", "prod", replacement, 0, false)
+		approveOverwrite(t, h, "p1")
+		first, err := applyHieraLevel(h, "p1")
+		if err != nil {
+			t.Fatalf("first Apply: %v", err)
+		}
+		textAfterFirst := hieraHierarchyTextRaw(t, h, ctx, "prod")
+		second, err := applyHieraLevel(h, "p1")
+		if err != nil {
+			t.Fatalf("second Apply must succeed: %v", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); got != textAfterFirst {
+			t.Fatalf("second Apply changed the yaml:\n%q\n%q", textAfterFirst, got)
+		}
+		if !proto.Equal(first.Hierarchy, second.Hierarchy) {
+			t.Fatalf("results differ: %v vs %v", first.Hierarchy, second.Hierarchy)
+		}
+	})
+
+	t.Run("an approved insert never duplicates a name that exists", func(t *testing.T) {
+		h := newHieraHost(t)
+		resp := putHieraLevelViaApproval(t, h, "prod", replacement, 0, true)
+		if got := levelNames(resp.Hierarchy); len(got) != 2 || got[0] != "role" || got[1] != "common" {
+			t.Fatalf("hierarchy = %v, want the level replaced in place, not duplicated", got)
+		}
+	})
+
+	t.Run("Apply refusals", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraLevel(t, h, "pending", "prod", replacement, 0, false)
+		if _, err := applyHieraLevel(h, "pending"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("pending: got %v", err)
+		}
+		proposeSettings(t, h, "wrong", &hostv1.EnvironmentSettings{Environment: "prod", Modulepath: strPtr("x")})
+		approveOverwrite(t, h, "wrong")
+		if _, err := applyHieraLevel(h, "wrong"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("wrong resource: got %v", err)
+		}
+		body, _ := code.OverwriteBodyForHieraLevel("prod", replacement, 0, false)
+		body["target"].(map[string]any)["name"] = "role"
+		if _, err := approval.ProposeBody(ctx, h, overwriteKind, "mixed", body); err != nil {
+			t.Fatal(err)
+		}
+		approveOverwrite(t, h, "mixed")
+		if _, err := applyHieraLevel(h, "mixed"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("target/payload mismatch: got %v", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); got != seededHierarchy {
+			t.Fatalf("a refused Apply wrote:\n%q", got)
+		}
+		proposeHieraLevel(t, h, "gone", "ghost", replacement, 0, false)
+		approveOverwrite(t, h, "gone")
+		if _, err := applyHieraLevel(h, "gone"); status.Code(err) != codes.NotFound {
+			t.Fatalf("absent environment: got %v, want NotFound", err)
+		}
+	})
+}
+
+func TestCodeOverwriteHieraDataKey(t *testing.T) {
+	ctx := context.Background()
+	newValue := func() *hostv1.Json { return scalarJSON(t, float64(9090)) }
+
+	t.Run("a new key in an existing file stays ungated", func(t *testing.T) {
+		h := newHieraHost(t)
+		if err := putKeyErr(h, "prod", "common.yaml", "fresh_key", scalarJSON(t, "x")); err != nil {
+			t.Fatalf("PutHieraDataKey(new key): %v", err)
+		}
+	})
+
+	t.Run("a key in an absent file stays ungated", func(t *testing.T) {
+		h := newHieraHost(t)
+		if err := putKeyErr(h, "prod", "brand-new.yaml", "port", scalarJSON(t, "x")); err != nil {
+			t.Fatalf("PutHieraDataKey(absent file): %v", err)
+		}
+	})
+
+	t.Run("an existing key is refused and the yaml is untouched", func(t *testing.T) {
+		h := newHieraHost(t)
+		err := putKeyErr(h, "prod", "common.yaml", "port", newValue())
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("got %v, want FailedPrecondition requires-approval", err)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml"); got != seededCommon {
+			t.Fatalf("stored yaml changed by a refused write:\n%q", got)
+		}
+	})
+
+	t.Run("an approved proposal still refuses the Put with apply-pending", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "p1", "prod", "common.yaml", "port", newValue())
+		approveOverwrite(t, h, "p1")
+		err := putKeyErr(h, "prod", "common.yaml", "port", newValue())
+		if !local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want apply-pending", err)
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "p1") || !strings.Contains(ed.Fix, "ApplyHieraDataKeyOverwrite") {
+			t.Fatalf("Fix should name the proposal and the Apply RPC, got %+v", ed)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml"); got != seededCommon {
+			t.Fatalf("stored yaml changed:\n%q", got)
+		}
+	})
+
+	t.Run("an approval is specific to the data file", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "p1", "prod", "common.yaml", "port", newValue())
+		approveOverwrite(t, h, "p1")
+		err := putKeyErr(h, "prod", "nodes/web01.yaml", "port", newValue())
+		if !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want requires-approval for the other file", err)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "nodes/web01.yaml"); got != "port: 1\n" {
+			t.Fatalf("other file changed: %q", got)
+		}
+	})
+
+	t.Run("an approval is specific to the key", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "p1", "prod", "common.yaml", "name", newValue())
+		approveOverwrite(t, h, "p1")
+		if err := putKeyErr(h, "prod", "common.yaml", "port", newValue()); !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want requires-approval for the other key", err)
+		}
+	})
+
+	t.Run("the reserved lookup_options key is refused by its own path, not the gate", func(t *testing.T) {
+		h := newHieraHost(t)
+		err := putKeyErr(h, "prod", "common.yaml", "lookup_options", scalarJSON(t, "x"))
+		if status.Code(err) != codes.InvalidArgument || local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("got %v, want InvalidArgument from the reserved-key refusal", err)
+		}
+	})
+
+	t.Run("an absent environment is NotFound before the gate", func(t *testing.T) {
+		h := newHieraHost(t)
+		if err := putKeyErr(h, "ghost", "common.yaml", "port", newValue()); status.Code(err) != codes.NotFound {
+			t.Fatalf("got %v, want NotFound", err)
+		}
+	})
+
+	t.Run("Apply replaces the value and keeps comments and key order", func(t *testing.T) {
+		h := newHieraHost(t)
+		df := dataKeyViaApproval(t, h, "prod", "common.yaml", "port", newValue())
+		if df.Environment != "prod" || df.Path != "common.yaml" {
+			t.Fatalf("response identity: %+v", df)
+		}
+		if got := df.Values["port"].Value.AsMap()["v"]; got != float64(9090) {
+			t.Fatalf("port = %v, want 9090", got)
+		}
+		text := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+		if !strings.Contains(text, "# port comment") {
+			t.Fatalf("comment lost:\n%s", text)
+		}
+		if strings.Index(text, "port:") > strings.Index(text, "name:") {
+			t.Fatalf("key order changed:\n%s", text)
+		}
+		if !strings.Contains(text, "9090") || strings.Contains(text, "8080") {
+			t.Fatalf("value not replaced:\n%s", text)
+		}
+	})
+
+	t.Run("Apply is idempotent", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "p1", "prod", "common.yaml", "port", newValue())
+		approveOverwrite(t, h, "p1")
+		first, err := applyHieraDataKey(h, "p1")
+		if err != nil {
+			t.Fatalf("first Apply: %v", err)
+		}
+		textAfterFirst := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
+		doc1, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml")
+		second, err := applyHieraDataKey(h, "p1")
+		if err != nil {
+			t.Fatalf("second Apply must succeed: %v", err)
+		}
+		doc2, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml")
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml"); got != textAfterFirst {
+			t.Fatalf("second Apply changed the yaml:\n%q\n%q", textAfterFirst, got)
+		}
+		if doc1.Version != doc2.Version {
+			t.Fatalf("second Apply rewrote the document")
+		}
+		if !proto.Equal(first, second) {
+			t.Fatalf("results differ: %v vs %v", first, second)
+		}
+	})
+
+	t.Run("Apply supports an object-valued key", func(t *testing.T) {
+		h := newHieraHost(t)
+		obj := &hostv1.Json{Value: mustStruct(t, map[string]any{"a": "b", "n": float64(2)})}
+		df := dataKeyViaApproval(t, h, "prod", "common.yaml", "name", obj)
+		got := df.Values["name"].Value.AsMap()
+		if got["a"] != "b" || got["n"] != float64(2) {
+			t.Fatalf("object value = %v", got)
+		}
+	})
+
+	t.Run("Apply refusals", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "pending", "prod", "common.yaml", "port", newValue())
+		if _, err := applyHieraDataKey(h, "pending"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("pending: got %v", err)
+		}
+		proposeSettings(t, h, "wrong", &hostv1.EnvironmentSettings{Environment: "prod", Modulepath: strPtr("x")})
+		approveOverwrite(t, h, "wrong")
+		if _, err := applyHieraDataKey(h, "wrong"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("wrong resource: got %v", err)
+		}
+		body, _ := code.OverwriteBodyForHieraDataKey("prod", "common.yaml", "lookup_options", scalarJSON(t, "x"))
+		if _, err := approval.ProposeBody(ctx, h, overwriteKind, "reserved", body); err != nil {
+			t.Fatal(err)
+		}
+		approveOverwrite(t, h, "reserved")
+		if _, err := applyHieraDataKey(h, "reserved"); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("reserved key: got %v, want InvalidArgument", err)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml"); got != seededCommon {
+			t.Fatalf("a refused Apply wrote:\n%q", got)
+		}
+		proposeHieraDataKey(t, h, "gone", "ghost", "common.yaml", "port", newValue())
+		approveOverwrite(t, h, "gone")
+		if _, err := applyHieraDataKey(h, "gone"); status.Code(err) != codes.NotFound {
+			t.Fatalf("absent environment: got %v, want NotFound", err)
+		}
+	})
+}
+
+// TestCodeOverwriteAllApplyRPCsRequireCodeRW proves each of the five Apply
+// RPCs is reachable only through the gate and needs code:rw and nothing
+// narrower: a host with no code:rw is denied before any proposal is read, and
+// a host with it reaches a real body (an unknown proposal is NotFound, not
+// Unimplemented).
+func TestCodeOverwriteAllApplyRPCsRequireCodeRW(t *testing.T) {
+	ctx := context.Background()
+	calls := map[string]func(h *host.Host) error{
+		"ApplyEnvironmentSettings": func(h *host.Host) error {
+			_, err := h.Code.ApplyEnvironmentSettings(ctx, &hostv1.ApplyEnvironmentSettingsRequest{ProposalId: "x"})
+			return err
+		},
+		"ApplyEnvironmentDuplicate": func(h *host.Host) error {
+			_, err := h.Code.ApplyEnvironmentDuplicate(ctx, &hostv1.ApplyEnvironmentDuplicateRequest{ProposalId: "x"})
+			return err
+		},
+		"ApplyPuppetfileModuleOverwrite": func(h *host.Host) error {
+			_, err := h.Code.ApplyPuppetfileModuleOverwrite(ctx, &hostv1.ApplyPuppetfileModuleOverwriteRequest{ProposalId: "x"})
+			return err
+		},
+		"ApplyHieraLevelOverwrite": func(h *host.Host) error {
+			_, err := h.Code.ApplyHieraLevelOverwrite(ctx, &hostv1.ApplyHieraLevelOverwriteRequest{ProposalId: "x"})
+			return err
+		},
+		"ApplyHieraDataKeyOverwrite": func(h *host.Host) error {
+			_, err := h.Code.ApplyHieraDataKeyOverwrite(ctx, &hostv1.ApplyHieraDataKeyOverwriteRequest{ProposalId: "x"})
+			return err
+		},
+	}
+	denied := local.New([]string{"tokens:issue"}, "controlrepo")
+	allowed := newOverwriteHost()
+	for name, call := range calls {
+		t.Run(name, func(t *testing.T) {
+			if err := call(denied); status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("without code:rw: got %v, want PermissionDenied", err)
+			}
+			if err := call(allowed); status.Code(err) != codes.NotFound {
+				t.Fatalf("with code:rw and an unknown proposal: got %v, want the store's NotFound", err)
+			}
+		})
+	}
 }

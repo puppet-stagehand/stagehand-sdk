@@ -432,3 +432,145 @@ func (s *codeServer) targetMatchesPlanLocked(existing []docRef, writes []planned
 	}
 	return true
 }
+
+// ApplyHieraLevelOverwrite materializes an approved hiera_level overwrite
+// proposal. It takes a proposal id and nothing else: the level, index and
+// insert flag it writes are the ones frozen in the proposal at propose time.
+// Like every Apply RPC it only reads the decision, never records one.
+//
+// Phase one resolves and validates the proposal with no lock held. Phase two
+// takes s.docs.mu once, re-reads the stored hierarchy under that lock and uses
+// only *Locked helpers. When a level of the approved name exists it is
+// replaced in place so the hierarchy order is preserved; the frozen insert
+// flag is only honoured when no such level exists, since inserting a second
+// level of the same name would corrupt the hierarchy. The call is idempotent:
+// when the stored level already equals the approved one nothing is written.
+func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.ApplyHieraLevelOverwriteRequest) (*hostv1.PutHieraLevelResponse, error) {
+	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceHieraLevel)
+	if err != nil {
+		return nil, err
+	}
+	lvl, index, insert, err := code.OverwritePayloadHieraLevel(body)
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
+	}
+	if lvl.GetName() != target.Name {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"overwrite proposal %q names level %q in its target but carries a payload for %q",
+			req.ProposalId, target.Name, lvl.GetName())
+	}
+	if len(lvl.GetLookupOptions()) > 0 {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"overwrite proposal %q carries lookup_options, which is read-only and cannot be written", req.ProposalId)
+	}
+	warnings := code.LintLevelPaths(lvl)
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, target.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
+	}
+
+	text, _ := s.hierarchyTextLocked(target.Environment)
+	current, err := code.ParseHierarchy(text)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	idx := -1
+	for i, existing := range current.GetLevels() {
+		if existing.GetName() == lvl.GetName() {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 && !insert {
+		return nil, status.Errorf(codes.FailedPrecondition,
+			"overwrite proposal %q replaces level %q in place but the hierarchy no longer has it", req.ProposalId, lvl.GetName())
+	}
+
+	if idx < 0 || !proto.Equal(current.GetLevels()[idx], lvl) {
+		newText, err := code.PutLevel(text, lvl, index, insert && idx < 0)
+		if err != nil {
+			return nil, mapHieraErr(err)
+		}
+		if err := s.storeHierarchyLocked(target.Environment, newText); err != nil {
+			return nil, err
+		}
+	}
+
+	stored, _ := s.hierarchyTextLocked(target.Environment)
+	h, err := code.ParseHierarchy(stored)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	h.Environment = target.Environment
+	s.mirrorLookupOptionsLocked(target.Environment, h)
+	return &hostv1.PutHieraLevelResponse{
+		Hierarchy: proto.Clone(h).(*hostv1.HieraHierarchy),
+		Warnings:  warnings,
+	}, nil
+}
+
+// ApplyHieraDataKeyOverwrite materializes an approved hiera_data_key overwrite
+// proposal: the value frozen in the proposal replaces the key's value in the
+// named data file, through code.PutDataKey so comments and key order survive.
+// Like every Apply RPC it only reads the decision, never records one.
+//
+// Phase one resolves and validates the proposal with no lock held. Phase two
+// takes s.docs.mu once and uses only *Locked helpers. The call is idempotent:
+// when the file already holds the approved value under that key nothing is
+// written.
+func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1.ApplyHieraDataKeyOverwriteRequest) (*hostv1.HieraDataFile, error) {
+	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceHieraDataKey)
+	if err != nil {
+		return nil, err
+	}
+	if target.Name == "" {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q names no data key", req.ProposalId)
+	}
+	if err := code.ValidateDataPath(target.Path); err != nil {
+		return nil, mapHieraErr(err)
+	}
+	value, err := code.OverwritePayloadHieraDataKey(body)
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, target.Environment); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
+	}
+
+	text, present := s.dataFileTextLocked(target.Environment, target.Path)
+	unchanged := false
+	if present {
+		df, err := code.ParseDataFile(text)
+		if err != nil {
+			return nil, mapHieraErr(err)
+		}
+		if have, exists := df.Values[target.Name]; exists && proto.Equal(have, value) {
+			unchanged = true
+		}
+	}
+	if !unchanged {
+		newText, err := code.PutDataKey(text, target.Name, value)
+		if err != nil {
+			return nil, mapHieraErr(err)
+		}
+		if err := s.storeDataFileLocked(target.Environment, target.Path, newText); err != nil {
+			return nil, err
+		}
+	}
+
+	stored, _ := s.dataFileTextLocked(target.Environment, target.Path)
+	df, err := code.ParseDataFile(stored)
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	df.Environment = target.Environment
+	df.Path = target.Path
+	return proto.Clone(df).(*hostv1.HieraDataFile), nil
+}

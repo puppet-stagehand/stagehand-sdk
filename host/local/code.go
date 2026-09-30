@@ -653,11 +653,8 @@ func (g *gatedCode) ListEnvironments(ctx context.Context, req *hostv1.ListEnviro
 	return g.inner.ListEnvironments(ctx, req)
 }
 
-// The remaining nineteen forwarders resolve through codeServer's embedded
-// hostv1.UnimplementedCodeServer until later plans in this phase implement
-// their bodies (codes.Unimplemented in the meantime) — the gate below runs
-// first regardless, so the denial behavior is complete now even though the
-// inner behavior is not.
+// The forwarders below cover the remaining Code RPCs. Each runs the code:rw
+// gate first and then delegates to the matching codeServer method.
 
 func (g *gatedCode) RenameEnvironment(ctx context.Context, req *hostv1.RenameEnvironmentRequest) (*hostv1.Environment, error) {
 	if err := g.check(); err != nil {
@@ -770,6 +767,15 @@ func (g *gatedCode) PutHieraLevel(ctx context.Context, req *hostv1.PutHieraLevel
 	return g.inner.PutHieraLevel(ctx, req)
 }
 
+// ApplyHieraLevelOverwrite needs code:rw and nothing narrower, like every other
+// Apply RPC.
+func (g *gatedCode) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.ApplyHieraLevelOverwriteRequest) (*hostv1.PutHieraLevelResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyHieraLevelOverwrite(ctx, req)
+}
+
 func (g *gatedCode) RemoveHieraLevel(ctx context.Context, req *hostv1.RemoveHieraLevelRequest) (*hostv1.HieraHierarchy, error) {
 	if err := g.check(); err != nil {
 		return nil, err
@@ -803,6 +809,15 @@ func (g *gatedCode) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDat
 		return nil, err
 	}
 	return g.inner.PutHieraDataKey(ctx, req)
+}
+
+// ApplyHieraDataKeyOverwrite needs code:rw and nothing narrower, like every
+// other Apply RPC.
+func (g *gatedCode) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1.ApplyHieraDataKeyOverwriteRequest) (*hostv1.HieraDataFile, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyHieraDataKeyOverwrite(ctx, req)
 }
 
 func (g *gatedCode) RemoveHieraDataKey(ctx context.Context, req *hostv1.RemoveHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
