@@ -55,6 +55,11 @@ import (
 // scope required to decide its own proposals (GOV-01, D-06/D-07).
 // OnboardNode keeps its name, request/response shape and wire contract;
 // only the internal approval call sites carry this value (D-08).
+//
+// The Collection literal must match host/local's unexported
+// proposalCollection (host/local/inventory.go): OnboardNode resolves a
+// proposal_id through that collection, so drift between the two would leave
+// every approval invisible to it.
 var OnboardingKind = approval.Kind{Collection: "inventory-proposals", ApproveScope: "inventory:approve"}
 
 // ProposerBackend models the pack worker's persona: it discovers

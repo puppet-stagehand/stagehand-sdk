@@ -17,7 +17,10 @@ import (
 
 // proposalCollection is the D-08 Documents collection name OnboardNode
 // resolves a proposal_id through — the single definition Phase 4's
-// approval package and Phase 5's example both bind to.
+// approval package and Phase 5's example both bind to. The literal is
+// duplicated as OnboardingKind.Collection in
+// examples/inventory-onboarding/inventory_onboarding.go; keep the two in
+// step, because OnboardNode only sees approvals written to this collection.
 const proposalCollection = "inventory-proposals"
 
 // inventoryServer is the real in-memory Inventory facet implementation: an
