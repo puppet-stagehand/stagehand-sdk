@@ -110,8 +110,8 @@ func ErrAlreadyProposed(proposalID string) error {
 	st := status.New(codes.AlreadyExists, "proposal "+proposalID+" already exists")
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailAlreadyProposed,
-		Message: "a proposal for node " + proposalID + " already exists and cannot be overwritten",
-		Fix:     "propose a different node id, or wait for the existing proposal to be decided",
+		Message: "proposal " + proposalID + " already exists and cannot be overwritten",
+		Fix:     "propose under a different proposal id, or wait for the existing proposal to be decided",
 	})
 	if err != nil {
 		return st.Err() // details are best-effort; the status itself must never fail to construct
@@ -133,7 +133,7 @@ func ErrAlreadyDecided(proposalID, currentStatus string) error {
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailAlreadyDecided,
 		Message: msg,
-		Fix:     "propose a new node id to retry — a decided proposal cannot transition back to pending",
+		Fix:     "propose a new proposal id to retry — a decided proposal cannot transition back to pending",
 	})
 	if err != nil {
 		return st.Err()
@@ -148,7 +148,7 @@ func ErrReasonRequired(proposalID string) error {
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailReasonRequired,
 		Message: "rejecting proposal " + proposalID + " requires a human-readable reason",
-		Fix:     "supply a non-empty Reason describing why the node onboarding was denied",
+		Fix:     "supply a non-empty Reason describing why the proposal was denied",
 	})
 	if err != nil {
 		return st.Err() // details are best-effort; the status itself must never fail to construct
