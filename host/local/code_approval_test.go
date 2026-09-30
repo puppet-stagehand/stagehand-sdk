@@ -8,8 +8,10 @@ package local_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -514,16 +516,495 @@ func TestCodeOverwriteApplyPermission(t *testing.T) {
 }
 
 // TestCodeOverwriteStagedApplyRPCsAreUnreachable pins the staging: the
-// four Apply RPCs whose bodies land in a later plan resolve through the
-// embedded Unimplemented server, so they are unreachable rather than
-// ungated.
+// Apply RPCs whose bodies land in a later task resolve through the embedded
+// Unimplemented server, so they are unreachable rather than ungated.
 func TestCodeOverwriteStagedApplyRPCsAreUnreachable(t *testing.T) {
 	h := newOverwriteHost()
 	ctx := context.Background()
-	if _, err := h.Code.ApplyEnvironmentSettings(ctx, &hostv1.ApplyEnvironmentSettingsRequest{ProposalId: "x"}); status.Code(err) != codes.Unimplemented {
-		t.Fatalf("ApplyEnvironmentSettings: got %v, want Unimplemented", err)
-	}
 	if _, err := h.Code.ApplyHieraLevelOverwrite(ctx, &hostv1.ApplyHieraLevelOverwriteRequest{ProposalId: "x"}); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("ApplyHieraLevelOverwrite: got %v, want Unimplemented", err)
 	}
+	if _, err := h.Code.ApplyHieraDataKeyOverwrite(ctx, &hostv1.ApplyHieraDataKeyOverwriteRequest{ProposalId: "x"}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("ApplyHieraDataKeyOverwrite: got %v, want Unimplemented", err)
+	}
+}
+
+// --- environment slice: settings and duplicate-over-existing ---
+
+var overwriteSeq atomic.Int64
+
+func nextProposalID(prefix string) string {
+	return fmt.Sprintf("%s-%d", prefix, overwriteSeq.Add(1))
+}
+
+func proposeBodyAs(t *testing.T, h *host.Host, proposalID string, body map[string]any, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("building proposal body %s: %v", proposalID, err)
+	}
+	if _, err := approval.ProposeBody(context.Background(), h, overwriteKind, proposalID, body); err != nil {
+		t.Fatalf("ProposeBody(%s): %v", proposalID, err)
+	}
+}
+
+func proposeSettings(t *testing.T, h *host.Host, proposalID string, settings *hostv1.EnvironmentSettings) {
+	t.Helper()
+	body, err := code.OverwriteBodyForSettings(settings)
+	proposeBodyAs(t, h, proposalID, body, err)
+}
+
+func proposeDuplicate(t *testing.T, h *host.Host, proposalID, source, target string) {
+	t.Helper()
+	body, err := code.OverwriteBodyForEnvironmentDuplicate(source, target)
+	proposeBodyAs(t, h, proposalID, body, err)
+}
+
+func applySettings(h *host.Host, proposalID string) (*hostv1.EnvironmentSettings, error) {
+	return h.Code.ApplyEnvironmentSettings(context.Background(), &hostv1.ApplyEnvironmentSettingsRequest{ProposalId: proposalID})
+}
+
+func applyDuplicate(h *host.Host, proposalID string) (*hostv1.Environment, error) {
+	return h.Code.ApplyEnvironmentDuplicate(context.Background(), &hostv1.ApplyEnvironmentDuplicateRequest{ProposalId: proposalID})
+}
+
+// putSettingsViaApproval runs the whole sanctioned path for one settings
+// write: propose, approve, ApplyEnvironmentSettings. Settings writes are gated
+// on every call (D-03), so tests that need settings on an environment use it.
+func putSettingsViaApproval(t *testing.T, h *host.Host, settings *hostv1.EnvironmentSettings) *hostv1.EnvironmentSettings {
+	t.Helper()
+	id := nextProposalID("settings-" + settings.GetEnvironment())
+	proposeSettings(t, h, id, settings)
+	approveOverwrite(t, h, id)
+	got, err := applySettings(h, id)
+	if err != nil {
+		t.Fatalf("ApplyEnvironmentSettings(%s): %v", id, err)
+	}
+	return got
+}
+
+func putSettingsErr(h *host.Host, settings *hostv1.EnvironmentSettings) error {
+	_, err := h.Code.PutEnvironmentSettings(context.Background(), &hostv1.PutEnvironmentSettingsRequest{Settings: settings})
+	return err
+}
+
+func duplicateErr(h *host.Host, source, target string) error {
+	_, err := h.Code.DuplicateEnvironment(context.Background(), &hostv1.DuplicateEnvironmentRequest{SourceName: source, TargetName: target})
+	return err
+}
+
+func mustGetSettings(t *testing.T, h *host.Host, env string) *hostv1.EnvironmentSettings {
+	t.Helper()
+	got, err := h.Code.GetEnvironmentSettings(context.Background(), &hostv1.GetEnvironmentSettingsRequest{Environment: env})
+	if err != nil {
+		t.Fatalf("GetEnvironmentSettings(%s): %v", env, err)
+	}
+	return got
+}
+
+func assertAllSettingsAbsent(t *testing.T, got *hostv1.EnvironmentSettings) {
+	t.Helper()
+	if got.Modulepath != nil || got.Manifest != nil || got.ConfigVersion != nil || got.EnvironmentTimeout != nil ||
+		got.DisablePerEnvironmentManifest != nil || got.StaticCatalogs != nil || got.RichData != nil {
+		t.Fatalf("settings not all absent: %+v", got)
+	}
+}
+
+func TestCodeOverwriteSettings(t *testing.T) {
+	newHost := func(t *testing.T) *host.Host {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "production")
+		return h
+	}
+	approved := &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr("site:modules"), RichData: boolPtr(true)}
+
+	t.Run("first write to a fresh environment is refused", func(t *testing.T) {
+		h := newHost(t)
+		err := putSettingsErr(h, approved)
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("got %v, want FailedPrecondition requires-approval", err)
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "ApplyEnvironmentSettings") {
+			t.Fatalf("Fix should name ApplyEnvironmentSettings, got %+v", ed)
+		}
+		assertAllSettingsAbsent(t, mustGetSettings(t, h, "production"))
+	})
+
+	t.Run("creating the environment stays ungated", func(t *testing.T) {
+		h := newOverwriteHost()
+		if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: "fresh"}); err != nil {
+			t.Fatalf("CreateEnvironment: %v", err)
+		}
+		assertAllSettingsAbsent(t, mustGetSettings(t, h, "fresh"))
+	})
+
+	t.Run("a pending proposal does not authorize the write", func(t *testing.T) {
+		h := newHost(t)
+		proposeSettings(t, h, "s1", approved)
+		if err := putSettingsErr(h, approved); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("got %v, want requires-approval", err)
+		}
+	})
+
+	t.Run("an approved proposal still refuses the Put with apply-pending", func(t *testing.T) {
+		h := newHost(t)
+		proposeSettings(t, h, "s1", approved)
+		approveOverwrite(t, h, "s1")
+		err := putSettingsErr(h, approved)
+		if !local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want apply-pending", err)
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "s1") || !strings.Contains(ed.Fix, "ApplyEnvironmentSettings") {
+			t.Fatalf("Fix should name the proposal and the Apply RPC, got %+v", ed)
+		}
+		assertAllSettingsAbsent(t, mustGetSettings(t, h, "production"))
+	})
+
+	t.Run("a malformed record is refused as malformed, before the gate", func(t *testing.T) {
+		h := newHost(t)
+		err := putSettingsErr(h, &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr("a\nb")})
+		if status.Code(err) != codes.InvalidArgument || local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("got %v, want InvalidArgument from the render check, not the gate", err)
+		}
+	})
+
+	t.Run("an unknown environment is NotFound before the gate", func(t *testing.T) {
+		h := newHost(t)
+		err := putSettingsErr(h, &hostv1.EnvironmentSettings{Environment: "nope", Modulepath: strPtr("x")})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("got %v, want NotFound", err)
+		}
+	})
+
+	t.Run("Apply stores exactly the approved fields", func(t *testing.T) {
+		h := newHost(t)
+		got := putSettingsViaApproval(t, h, approved)
+		if got.Environment != "production" || got.GetModulepath() != "site:modules" || !got.GetRichData() {
+			t.Fatalf("Apply returned %+v", got)
+		}
+		read := mustGetSettings(t, h, "production")
+		if read.Modulepath == nil || *read.Modulepath != "site:modules" || read.RichData == nil || !*read.RichData {
+			t.Fatalf("stored settings %+v", read)
+		}
+		if read.Manifest != nil || read.ConfigVersion != nil || read.EnvironmentTimeout != nil ||
+			read.DisablePerEnvironmentManifest != nil || read.StaticCatalogs != nil {
+			t.Fatalf("fields the approver left unset must stay absent, got %+v", read)
+		}
+	})
+
+	t.Run("Apply is idempotent", func(t *testing.T) {
+		h := newHost(t)
+		proposeSettings(t, h, "s1", approved)
+		approveOverwrite(t, h, "s1")
+		first, err := applySettings(h, "s1")
+		if err != nil {
+			t.Fatalf("first Apply: %v", err)
+		}
+		v1, _ := getDoc(t, h, context.Background(), "code-environments", "production")
+		second, err := applySettings(h, "s1")
+		if err != nil {
+			t.Fatalf("second Apply must succeed: %v", err)
+		}
+		v2, _ := getDoc(t, h, context.Background(), "code-environments", "production")
+		if first.GetModulepath() != second.GetModulepath() || first.GetRichData() != second.GetRichData() {
+			t.Fatalf("Apply not idempotent: %+v vs %+v", first, second)
+		}
+		if v1.Version != v2.Version {
+			t.Fatalf("second Apply rewrote the document: version %d -> %d", v1.Version, v2.Version)
+		}
+	})
+
+	t.Run("Apply refuses pending and wrong-resource proposals", func(t *testing.T) {
+		h := newHost(t)
+		proposeSettings(t, h, "pending", approved)
+		if _, err := applySettings(h, "pending"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("pending: got %v, want FailedPrecondition", err)
+		}
+		proposeDuplicate(t, h, "dup", "production", "staging")
+		approveOverwrite(t, h, "dup")
+		if _, err := applySettings(h, "dup"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("wrong resource: got %v, want FailedPrecondition", err)
+		}
+		assertAllSettingsAbsent(t, mustGetSettings(t, h, "production"))
+	})
+
+	t.Run("Apply replaces the whole record and preserves identity", func(t *testing.T) {
+		h := newHost(t)
+		putSettingsViaApproval(t, h, approved)
+		got := putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "production", Manifest: strPtr("site.pp")})
+		if got.Modulepath != nil || got.RichData != nil || got.GetManifest() != "site.pp" {
+			t.Fatalf("second Apply must replace, not merge: %+v", got)
+		}
+		env, err := h.Code.GetEnvironment(context.Background(), &hostv1.GetEnvironmentRequest{Name: "production"})
+		if err != nil || env.Name != "production" {
+			t.Fatalf("identity lost after Apply: %v %+v", err, env)
+		}
+	})
+}
+
+func TestCodeOverwriteDuplicate(t *testing.T) {
+	ctx := context.Background()
+	// newHosts builds production (full), and staging holding one stale hiera
+	// data file and a stale Puppetfile that a replacement must remove.
+	newHosts := func(t *testing.T) *host.Host {
+		h := newOverwriteHost()
+		seedFullEnvironment(t, h, ctx, "production")
+		mustCreateEnv(t, h, "staging")
+		seedDoc(t, h, ctx, "code-hiera-data", "staging/old.yaml", map[string]any{"path": "old.yaml", "yaml": "stale: true\n"})
+		seedDoc(t, h, ctx, "code-puppetfiles", "staging", map[string]any{"text": "mod 'stale/module', '1.0.0'\n"})
+		return h
+	}
+	snapshot := func(t *testing.T, h *host.Host, env string) map[string]string {
+		t.Helper()
+		out := map[string]string{}
+		for _, c := range []string{"code-environments", "code-puppetfiles", "code-hiera-hierarchy"} {
+			if d, ok := getDoc(t, h, ctx, c, env); ok {
+				out[c+"/"+env] = fmt.Sprintf("v%d %v", d.Version, d.Body.Value.AsMap())
+			}
+		}
+		resp, err := h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: "code-hiera-data"})
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, d := range resp.Documents {
+			if strings.HasPrefix(d.DocId, env+"/") {
+				out["code-hiera-data/"+d.DocId] = fmt.Sprintf("v%d %v", d.Version, d.Body.Value.AsMap())
+			}
+		}
+		return out
+	}
+	equalSnap := func(a, b map[string]string) bool {
+		if len(a) != len(b) {
+			return false
+		}
+		for k, v := range a {
+			if b[k] != v {
+				return false
+			}
+		}
+		return true
+	}
+
+	t.Run("an unused target name stays ungated", func(t *testing.T) {
+		h := newOverwriteHost()
+		seedFullEnvironment(t, h, ctx, "production")
+		if err := duplicateErr(h, "production", "qa"); err != nil {
+			t.Fatalf("DuplicateEnvironment onto an unused name: %v", err)
+		}
+		assertEnvDocsPresent(t, h, ctx, "qa")
+	})
+
+	t.Run("a target in use is refused with the structured error and left untouched", func(t *testing.T) {
+		h := newHosts(t)
+		before := snapshot(t, h, "staging")
+		err := duplicateErr(h, "production", "staging")
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("got %v, want FailedPrecondition requires-approval", err)
+		}
+		if status.Code(err) == codes.AlreadyExists {
+			t.Fatalf("must no longer be a bare AlreadyExists")
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "ApplyEnvironmentDuplicate") {
+			t.Fatalf("Fix should name ApplyEnvironmentDuplicate, got %+v", ed)
+		}
+		if after := snapshot(t, h, "staging"); !equalSnap(before, after) {
+			t.Fatalf("target changed by a refused duplicate:\nbefore %v\nafter  %v", before, after)
+		}
+	})
+
+	t.Run("an approval is source-specific", func(t *testing.T) {
+		h := newHosts(t)
+		mustCreateEnv(t, h, "dev")
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+		// Approved for production over staging, not for dev over staging.
+		err := duplicateErr(h, "dev", "staging")
+		if !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want requires-approval for the other source", err)
+		}
+	})
+
+	t.Run("an approved proposal refuses the DuplicateEnvironment with apply-pending", func(t *testing.T) {
+		h := newHosts(t)
+		before := snapshot(t, h, "staging")
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+		err := duplicateErr(h, "production", "staging")
+		if !local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("got %v, want apply-pending", err)
+		}
+		if ed := errorDetail(err); ed == nil || !strings.Contains(ed.Fix, "p1") || !strings.Contains(ed.Fix, "ApplyEnvironmentDuplicate") {
+			t.Fatalf("Fix should name the proposal and the Apply RPC, got %+v", ed)
+		}
+		if after := snapshot(t, h, "staging"); !equalSnap(before, after) {
+			t.Fatalf("target changed by a refused duplicate")
+		}
+	})
+
+	t.Run("Apply replaces the target's owned documents with the source's copies", func(t *testing.T) {
+		h := newHosts(t)
+		srcBefore := snapshot(t, h, "production")
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+
+		env, err := applyDuplicate(h, "p1")
+		if err != nil {
+			t.Fatalf("ApplyEnvironmentDuplicate: %v", err)
+		}
+		if env.Name != "staging" {
+			t.Fatalf("Apply returned %+v", env)
+		}
+		assertEnvDocsPresent(t, h, ctx, "staging")
+		if _, ok := getDoc(t, h, ctx, "code-hiera-data", "staging/old.yaml"); ok {
+			t.Fatal("the target's prior hiera data file survived the replacement")
+		}
+		pf, _ := getDoc(t, h, ctx, "code-puppetfiles", "staging")
+		if got := pf.Body.Value.AsMap()["text"]; got != "mod 'puppetlabs/apache', '5.0.0'\n" {
+			t.Fatalf("target Puppetfile not replaced by source's: %v", got)
+		}
+		id, _ := getDoc(t, h, ctx, "code-environments", "staging")
+		if id.Body.Value.AsMap()["name"] != "staging" {
+			t.Fatalf("identity document name not rekeyed: %v", id.Body.Value.AsMap())
+		}
+		if srcAfter := snapshot(t, h, "production"); !equalSnap(srcBefore, srcAfter) {
+			t.Fatalf("the source changed by Apply")
+		}
+
+		// The copies share no value with the source: editing the target's
+		// settings afterwards leaves the source's unchanged.
+		putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "staging", Modulepath: strPtr("changed")})
+		if got := mustGetSettings(t, h, "production").GetModulepath(); got != testSettingsModulepath {
+			t.Fatalf("source settings changed through the copy: %q", got)
+		}
+	})
+
+	t.Run("Apply is idempotent", func(t *testing.T) {
+		h := newHosts(t)
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+		if _, err := applyDuplicate(h, "p1"); err != nil {
+			t.Fatalf("first Apply: %v", err)
+		}
+		first := snapshot(t, h, "staging")
+		if _, err := applyDuplicate(h, "p1"); err != nil {
+			t.Fatalf("second Apply must succeed: %v", err)
+		}
+		if second := snapshot(t, h, "staging"); !equalSnap(first, second) {
+			t.Fatalf("second Apply changed the document set:\nfirst  %v\nsecond %v", first, second)
+		}
+	})
+
+	t.Run("Apply reads the source at apply time", func(t *testing.T) {
+		h := newHosts(t)
+		proposeDuplicate(t, h, "p1", "production", "staging")
+		approveOverwrite(t, h, "p1")
+		cur, _ := getDoc(t, h, ctx, "code-puppetfiles", "production")
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: "code-puppetfiles", DocId: "production", IfVersion: cur.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"text": "mod 'puppetlabs/ntp', '9.0.0'\n"})},
+		}); err != nil {
+			t.Fatalf("updating the source Puppetfile: %v", err)
+		}
+		if _, err := applyDuplicate(h, "p1"); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		pf, _ := getDoc(t, h, ctx, "code-puppetfiles", "staging")
+		if got := pf.Body.Value.AsMap()["text"]; got != "mod 'puppetlabs/ntp', '9.0.0'\n" {
+			t.Fatalf("Apply used a stale source: %v", got)
+		}
+	})
+
+	t.Run("Apply refusals", func(t *testing.T) {
+		h := newHosts(t)
+		proposeDuplicate(t, h, "pending", "production", "staging")
+		if _, err := applyDuplicate(h, "pending"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("pending: got %v", err)
+		}
+		proposeDuplicate(t, h, "self", "staging", "staging")
+		approveOverwrite(t, h, "self")
+		if _, err := applyDuplicate(h, "self"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("source == target: got %v", err)
+		}
+		proposeDuplicate(t, h, "gone", "ghost", "staging")
+		approveOverwrite(t, h, "gone")
+		if _, err := applyDuplicate(h, "gone"); status.Code(err) != codes.NotFound {
+			t.Fatalf("missing source: got %v, want NotFound", err)
+		}
+		proposeSettings(t, h, "wrong", &hostv1.EnvironmentSettings{Environment: "staging", Modulepath: strPtr("x")})
+		approveOverwrite(t, h, "wrong")
+		if _, err := applyDuplicate(h, "wrong"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("wrong resource: got %v", err)
+		}
+	})
+}
+
+// TestCodeOverwriteDuplicateApplyIsAtomic runs concurrent readers against
+// ApplyEnvironmentDuplicate. The target starts with one hiera data file and
+// ends with two, so a reader listing that collection through one RPC must see
+// exactly one or exactly two, never zero (deleted, not yet rewritten) or three.
+func TestCodeOverwriteDuplicateApplyIsAtomic(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	seedFullEnvironment(t, h, ctx, "production")
+	mustCreateEnv(t, h, "staging")
+	seedDoc(t, h, ctx, "code-hiera-data", "staging/old.yaml", map[string]any{"path": "old.yaml", "yaml": "stale: true\n"})
+	proposeDuplicate(t, h, "p1", "production", "staging")
+	approveOverwrite(t, h, "p1")
+
+	stop := make(chan struct{})
+	var readers sync.WaitGroup
+	for r := 0; r < 4; r++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				resp, err := h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: "code-hiera-data"})
+				if err != nil {
+					t.Errorf("List: %v", err)
+					return
+				}
+				n := 0
+				for _, d := range resp.Documents {
+					if strings.HasPrefix(d.DocId, "staging/") {
+						n++
+					}
+				}
+				if n != 1 && n != 2 {
+					t.Errorf("torn state observed: %d staging hiera data documents", n)
+					return
+				}
+			}
+		}()
+	}
+
+	var appliers sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		appliers.Add(1)
+		go func() {
+			defer appliers.Done()
+			if _, err := applyDuplicate(h, "p1"); err != nil {
+				t.Errorf("Apply: %v", err)
+			}
+		}()
+	}
+	appliers.Wait()
+	close(stop)
+	readers.Wait()
+	assertEnvDocsPresent(t, h, ctx, "staging")
+}
+
+// TestCodeOverwriteDeletesStayUngated pins D-01: no delete RPC consults a
+// proposal, so each still succeeds with no proposal anywhere.
+func TestCodeOverwriteDeletesStayUngated(t *testing.T) {
+	ctx := context.Background()
+	h := newOverwriteHost()
+	seedFullEnvironment(t, h, ctx, "production")
+	if _, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatalf("DeleteEnvironment must stay ungated: %v", err)
+	}
+	assertEnvDocsAbsent(t, h, ctx, "production")
 }

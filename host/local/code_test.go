@@ -741,23 +741,20 @@ func TestCode_SettingsUnwrittenFieldsAreAbsent(t *testing.T) {
 // reads back present-and-empty (distinct from absent), and a field set by
 // an earlier put and absent from a later one reads back absent.
 func TestCode_SettingsRoundTrip(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
 
-	first, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
-		Settings: &hostv1.EnvironmentSettings{
-			Environment: "production",
-			Modulepath:  strPtr("modules:$basemodulepath"),
-			RichData:    boolPtr(true),
-		},
+	// Settings writes are gated on every call (D-03), so each one goes
+	// through propose, approve and ApplyEnvironmentSettings.
+	first := putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{
+		Environment: "production",
+		Modulepath:  strPtr("modules:$basemodulepath"),
+		RichData:    boolPtr(true),
 	})
-	if err != nil {
-		t.Fatalf("PutEnvironmentSettings(first): %v", err)
-	}
 	if first.Modulepath == nil || *first.Modulepath != "modules:$basemodulepath" {
 		t.Fatalf("first.Modulepath = %v, want %q", first.Modulepath, "modules:$basemodulepath")
 	}
@@ -781,15 +778,10 @@ func TestCode_SettingsRoundTrip(t *testing.T) {
 
 	// manifest stored as the empty string reads back present-and-empty,
 	// distinguishable from absent.
-	second, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
-		Settings: &hostv1.EnvironmentSettings{
-			Environment: "production",
-			Manifest:    strPtr(""),
-		},
+	second := putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{
+		Environment: "production",
+		Manifest:    strPtr(""),
 	})
-	if err != nil {
-		t.Fatalf("PutEnvironmentSettings(second): %v", err)
-	}
 	if second.Manifest == nil || *second.Manifest != "" {
 		t.Fatalf("second.Manifest = %v, want present-and-empty", second.Manifest)
 	}
@@ -871,16 +863,12 @@ func TestCode_SettingsRefusesNewlineValue(t *testing.T) {
 func TestCode_SettingsTimeoutIsOpaqueText(t *testing.T) {
 	for _, value := range []string{"0", "unlimited", "5m"} {
 		t.Run(value, func(t *testing.T) {
-			h := local.New([]string{"code:rw"}, "controlrepo")
+			h := newOverwriteHost()
 			ctx := context.Background()
 			if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
 				t.Fatalf("CreateEnvironment: %v", err)
 			}
-			if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
-				Settings: &hostv1.EnvironmentSettings{Environment: "production", EnvironmentTimeout: strPtr(value)},
-			}); err != nil {
-				t.Fatalf("PutEnvironmentSettings(%q): %v", value, err)
-			}
+			putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "production", EnvironmentTimeout: strPtr(value)})
 			got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
 			if err != nil {
 				t.Fatalf("GetEnvironmentSettings: %v", err)
@@ -893,17 +881,13 @@ func TestCode_SettingsTimeoutIsOpaqueText(t *testing.T) {
 
 	// A very long modulepath value survives storage and retrieval without
 	// truncation.
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
 	long := strings.Repeat("modules/path-segment:", 500)
-	if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
-		Settings: &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr(long)},
-	}); err != nil {
-		t.Fatalf("PutEnvironmentSettings(long modulepath): %v", err)
-	}
+	putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr(long)})
 	got, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
 	if err != nil {
 		t.Fatalf("GetEnvironmentSettings: %v", err)
@@ -927,7 +911,7 @@ func strDeref(s *string) string {
 // including after the target is separately edited (T-06-25: no shared
 // *hostv1.Json value).
 func TestCode_DuplicateEnvironmentCopiesEverything(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 	seedFullEnvironment(t, h, ctx, "production")
 
@@ -956,11 +940,7 @@ func TestCode_DuplicateEnvironmentCopiesEverything(t *testing.T) {
 
 	// Editing the target's settings after the copy must not change the
 	// source's — proves the two environments share no *hostv1.Json value.
-	if _, err := h.Code.PutEnvironmentSettings(ctx, &hostv1.PutEnvironmentSettingsRequest{
-		Settings: &hostv1.EnvironmentSettings{Environment: "staging", Modulepath: strPtr("changed-after-copy")},
-	}); err != nil {
-		t.Fatalf("PutEnvironmentSettings(staging): %v", err)
-	}
+	putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "staging", Modulepath: strPtr("changed-after-copy")})
 	srcSettings, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
 	if err != nil {
 		t.Fatalf("GetEnvironmentSettings(production): %v", err)
@@ -970,12 +950,13 @@ func TestCode_DuplicateEnvironmentCopiesEverything(t *testing.T) {
 	}
 }
 
-// TestCode_DuplicateOntoExistingNameIsAlreadyExists proves an in-use target
-// refuses with codes.AlreadyExists having written nothing, an unknown
+// TestCode_DuplicateOntoExistingNameIsRefused proves an in-use target
+// refuses with the structured requires-approval error (it was a bare
+// codes.AlreadyExists before the overwrite gate) having written nothing, an unknown
 // source refuses with codes.NotFound, an invalid name refuses with
 // codes.InvalidArgument, and a second duplicate of the same pair still
 // refuses with the first copy left byte-identical.
-func TestCode_DuplicateOntoExistingNameIsAlreadyExists(t *testing.T) {
+func TestCode_DuplicateOntoExistingNameIsRefused(t *testing.T) {
 	t.Run("target_in_use", func(t *testing.T) {
 		h := local.New([]string{"code:rw"}, "controlrepo")
 		ctx := context.Background()
@@ -985,8 +966,8 @@ func TestCode_DuplicateOntoExistingNameIsAlreadyExists(t *testing.T) {
 		}
 
 		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
-		if status.Code(err) != codes.AlreadyExists {
-			t.Fatalf("DuplicateEnvironment(target in use) = %v, want codes.AlreadyExists", err)
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("DuplicateEnvironment(target in use) = %v, want FailedPrecondition requires-approval", err)
 		}
 		// Nothing beyond the pre-existing bare "staging" identity document
 		// was written.
@@ -1026,8 +1007,8 @@ func TestCode_DuplicateOntoExistingNameIsAlreadyExists(t *testing.T) {
 		}
 
 		_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
-		if status.Code(err) != codes.AlreadyExists {
-			t.Fatalf("second DuplicateEnvironment = %v, want codes.AlreadyExists", err)
+		if !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("second DuplicateEnvironment = %v, want requires-approval", err)
 		}
 		secondDoc, ok := getDoc(t, h, ctx, "code-puppetfiles", "staging")
 		if !ok {
@@ -1083,7 +1064,7 @@ func TestCode_DuplicateOfEmptyEnvironment(t *testing.T) {
 
 // TestCode_DuplicateConcurrentIsExactlyOnce launches eight goroutines
 // duplicating the same source onto the same target concurrently and
-// asserts exactly one succeeds and seven return codes.AlreadyExists, with
+// asserts exactly one succeeds and seven return the requires-approval refusal, with
 // the target's document count equal to the source's — proving the
 // operation is genuinely atomic under concurrency, not merely correct in
 // the single-threaded case. A second set of goroutines reads the target
@@ -1091,7 +1072,7 @@ func TestCode_DuplicateOfEmptyEnvironment(t *testing.T) {
 // every read returns either a complete result or codes.NotFound — never a
 // partial one.
 func TestCode_DuplicateConcurrentIsExactlyOnce(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 	seedFullEnvironment(t, h, ctx, "production")
 
@@ -1147,10 +1128,10 @@ func TestCode_DuplicateConcurrentIsExactlyOnce(t *testing.T) {
 			_, err := h.Code.DuplicateEnvironment(ctx, &hostv1.DuplicateEnvironmentRequest{SourceName: "production", TargetName: "staging"})
 			mu.Lock()
 			defer mu.Unlock()
-			switch status.Code(err) {
-			case codes.OK:
+			switch {
+			case err == nil:
 				successes++
-			case codes.AlreadyExists:
+			case local.IsCodeOverwriteRequiresApproval(err):
 				alreadyExists++
 			default:
 				other++
@@ -1165,7 +1146,7 @@ func TestCode_DuplicateConcurrentIsExactlyOnce(t *testing.T) {
 		t.Fatalf("successes = %d, want 1", successes)
 	}
 	if alreadyExists != n-1 {
-		t.Fatalf("alreadyExists = %d, want %d", alreadyExists, n-1)
+		t.Fatalf("requires-approval refusals = %d, want %d", alreadyExists, n-1)
 	}
 	if other != 0 {
 		t.Fatalf("other errors = %d, want 0", other)

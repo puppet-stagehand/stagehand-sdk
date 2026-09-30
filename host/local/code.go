@@ -475,6 +475,32 @@ func (s *codeServer) GetEnvironmentSettings(ctx context.Context, req *hostv1.Get
 	return proto.Clone(settings).(*hostv1.EnvironmentSettings), nil
 }
 
+// checkSettingsRoundTrip renders settings to environment.conf text, re-parses
+// it, and refuses with codes.InvalidArgument unless the two are proto.Equal
+// with Environment cleared on both sides. PutEnvironmentSettings and
+// ApplyEnvironmentSettings share it, so a record that could not be written
+// directly cannot be written through an approval either.
+func checkSettingsRoundTrip(settings *hostv1.EnvironmentSettings) error {
+	rendered, err := code.RenderEnvConf(settings)
+	if err != nil {
+		if errors.Is(err, code.ErrEnvConfInvalid) {
+			return status.Errorf(codes.InvalidArgument, "settings cannot be written to environment.conf: %v", err)
+		}
+		return status.Errorf(codes.Internal, "rendering settings: %v", err)
+	}
+	reparsed, err := code.ParseEnvConf(rendered)
+	if err != nil {
+		return status.Errorf(codes.Internal, "re-parsing rendered settings: %v", err)
+	}
+	want := proto.Clone(settings).(*hostv1.EnvironmentSettings)
+	want.Environment = ""
+	reparsed.Environment = ""
+	if !proto.Equal(want, reparsed) {
+		return status.Error(codes.InvalidArgument, "settings do not survive an environment.conf render/re-parse cycle unchanged")
+	}
+	return nil
+}
+
 // PutEnvironmentSettings replaces an environment's whole settings record.
 // Before storing anything it renders req.Settings to environment.conf text
 // via code.RenderEnvConf, re-parses that text via code.ParseEnvConf, and
@@ -484,6 +510,14 @@ func (s *codeServer) GetEnvironmentSettings(ctx context.Context, req *hostv1.Get
 // would, the moment it reached a real environment.conf, forge an additional
 // unauthored setting line (T-06-02). This also keeps environment_timeout
 // opaque text: nothing in this path parses it as a number.
+//
+// Every call is then gated on an approved overwrite proposal (D-03): settings
+// carries no per-field identity that would let a first write count as still
+// creating, so once the environment exists this RPC never writes settings
+// itself. It refuses with a structured error and the write happens only
+// through ApplyEnvironmentSettings. The gate sits after the environment
+// NotFound check and after the render/re-parse check above, so a malformed
+// record is refused for being malformed, not for being ungated.
 func (s *codeServer) PutEnvironmentSettings(ctx context.Context, req *hostv1.PutEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
 	if req.Settings == nil {
 		return nil, status.Error(codes.InvalidArgument, "settings is required")
@@ -492,47 +526,22 @@ func (s *codeServer) PutEnvironmentSettings(ctx context.Context, req *hostv1.Put
 		return nil, err
 	}
 
-	rendered, err := code.RenderEnvConf(req.Settings)
-	if err != nil {
-		if errors.Is(err, code.ErrEnvConfInvalid) {
-			return nil, status.Errorf(codes.InvalidArgument, "settings cannot be written to environment.conf: %v", err)
-		}
-		return nil, status.Errorf(codes.Internal, "rendering settings: %v", err)
-	}
-	reparsed, err := code.ParseEnvConf(rendered)
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "re-parsing rendered settings: %v", err)
-	}
-	want := proto.Clone(req.Settings).(*hostv1.EnvironmentSettings)
-	want.Environment = ""
-	reparsed.Environment = ""
-	if !proto.Equal(want, reparsed) {
-		return nil, status.Error(codes.InvalidArgument, "settings do not survive an environment.conf render/re-parse cycle unchanged")
+	if err := checkSettingsRoundTrip(req.Settings); err != nil {
+		return nil, err
 	}
 
 	s.docs.mu.Lock()
 	defer s.docs.mu.Unlock()
 
-	doc, ok := s.docs.getLocked(envCollection, req.Settings.Environment)
-	if !ok {
+	if _, ok := s.docs.getLocked(envCollection, req.Settings.Environment); !ok {
 		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Settings.Environment)
 	}
-	body, err := settingsIntoBody(doc.Body, req.Settings)
-	if err != nil {
-		return nil, err
+
+	target := code.OverwriteTarget{Environment: req.Settings.Environment, Resource: code.OverwriteResourceSettings}
+	if id, approved := s.approvedOverwriteProposalLocked(target); approved {
+		return nil, ErrCodeOverwriteApplyPending(id, applyEnvironmentSettingsRPC)
 	}
-	if _, err := s.docs.putLocked(envCollection, req.Settings.Environment, body, false); err != nil {
-		return nil, err
-	}
-	stored, ok := s.docs.getLocked(envCollection, req.Settings.Environment)
-	if !ok {
-		return nil, status.Errorf(codes.Internal, "environment %q vanished immediately after settings write", req.Settings.Environment)
-	}
-	result, err := settingsFromDoc(stored, req.Settings.Environment)
-	if err != nil {
-		return nil, err
-	}
-	return proto.Clone(result).(*hostv1.EnvironmentSettings), nil
+	return nil, ErrCodeOverwriteRequiresApproval(target, applyEnvironmentSettingsRPC)
 }
 
 // DuplicateEnvironment validates both names against D-04 before taking any
@@ -544,6 +553,11 @@ func (s *codeServer) PutEnvironmentSettings(ctx context.Context, req *hostv1.Put
 // never released between the two passes — nothing can appear at the target
 // in between, so a concurrent reader observes either the complete copy or
 // nothing (T-06-05).
+//
+// A target name already in use is not a bare AlreadyExists: it is an
+// overwrite, refused with the structured FailedPrecondition error unless an
+// approved proposal for this source and target exists, and materialized only
+// by ApplyEnvironmentDuplicate. An unused target stays ungated create.
 func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.DuplicateEnvironmentRequest) (*hostv1.Environment, error) {
 	if err := validateEnvName(req.SourceName); err != nil {
 		return nil, err
@@ -559,7 +573,18 @@ func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.Dupli
 		return nil, status.Errorf(codes.NotFound, "no environment %q", req.SourceName)
 	}
 	if s.targetInUseLocked(req.TargetName) {
-		return nil, status.Errorf(codes.AlreadyExists, "environment %q already exists", req.TargetName)
+		// Duplicating over a name already in use would replace whatever that
+		// environment owns, so it is an overwrite: refused unless an approved
+		// proposal covers this exact source-and-target pair (D-02, D-04).
+		target := code.OverwriteTarget{
+			Environment: req.TargetName,
+			Resource:    code.OverwriteResourceEnvironment,
+			Source:      req.SourceName,
+		}
+		if id, approved := s.approvedOverwriteProposalLocked(target); approved {
+			return nil, ErrCodeOverwriteApplyPending(id, applyEnvironmentDuplicateRPC)
+		}
+		return nil, ErrCodeOverwriteRequiresApproval(target, applyEnvironmentDuplicateRPC)
 	}
 
 	refs := s.envOwnedDocsLocked(req.SourceName)
@@ -588,9 +613,9 @@ func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.Dupli
 // gatedCode wraps codeServer with the code:rw permission check every
 // forwarded Code RPC requires, including the read-only ones and the Apply*
 // RPCs — there is no narrower per-RPC permission and no read-only exemption.
-// 22 RPCs predate the overwrite gate; ApplyPuppetfileModuleOverwrite is the
-// 23rd forwarder, and the other four Apply* RPCs resolve through the embedded
-// UnimplementedCodeServer until their bodies land. Unlike Documents
+// 22 RPCs predate the overwrite gate and the five Apply* RPCs are forwarders
+// 23 to 27, so every Code RPC is reachable only through this gate rather than
+// through the embedded UnimplementedCodeServer. Unlike Documents
 // and Settings, which are always available, Code is a gated facet — the
 // same posture Inventory ships.
 type gatedCode struct {
@@ -692,6 +717,22 @@ func (g *gatedCode) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *hos
 		return nil, err
 	}
 	return g.inner.ApplyPuppetfileModuleOverwrite(ctx, req)
+}
+
+// ApplyEnvironmentSettings and ApplyEnvironmentDuplicate need code:rw and
+// nothing narrower, like every other Apply RPC.
+func (g *gatedCode) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.ApplyEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyEnvironmentSettings(ctx, req)
+}
+
+func (g *gatedCode) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.ApplyEnvironmentDuplicateRequest) (*hostv1.Environment, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyEnvironmentDuplicate(ctx, req)
 }
 
 func (g *gatedCode) RemovePuppetfileModule(ctx context.Context, req *hostv1.RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {

@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
@@ -224,4 +225,114 @@ func OverwritePayloadPuppetfileModule(body map[string]any) (*hostv1.PuppetfileMo
 		return nil, fmt.Errorf("%w: decoding module payload: %v", ErrOverwriteBodyInvalid, err)
 	}
 	return m, nil
+}
+
+// overwritePayloadObject returns the payload object of body after checking
+// that the body's target names the wanted resource kind, so a payload can
+// never be decoded as the wrong resource type.
+func overwritePayloadObject(body map[string]any, wantResource string) (OverwriteTarget, map[string]any, error) {
+	t, err := ParseOverwriteTarget(body)
+	if err != nil {
+		return OverwriteTarget{}, nil, err
+	}
+	if t.Resource != wantResource {
+		return OverwriteTarget{}, nil, fmt.Errorf("%w: target resource is %q, not %q", ErrOverwriteBodyInvalid, t.Resource, wantResource)
+	}
+	raw, ok := body[overwriteKeyPayload]
+	if !ok {
+		return OverwriteTarget{}, nil, fmt.Errorf("%w: no %q key", ErrOverwriteBodyInvalid, overwriteKeyPayload)
+	}
+	obj, isObj := raw.(map[string]any)
+	if !isObj {
+		return OverwriteTarget{}, nil, fmt.Errorf("%w: %q is not an object", ErrOverwriteBodyInvalid, overwriteKeyPayload)
+	}
+	return t, obj, nil
+}
+
+// protoToMap renders m through protojson into a plain map, the shape a
+// proposal body stores.
+func protoToMap(m proto.Message) (map[string]any, error) {
+	data, err := protojson.Marshal(m)
+	if err != nil {
+		return nil, err
+	}
+	var out map[string]any
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// mapToProto is protoToMap's inverse: it decodes a plain map through
+// protojson into dst.
+func mapToProto(obj map[string]any, dst proto.Message) error {
+	data, err := json.Marshal(obj)
+	if err != nil {
+		return err
+	}
+	return protojson.Unmarshal(data, dst)
+}
+
+// OverwriteBodyForSettings builds the body of a proposal to replace an
+// environment's whole settings record. The target's Environment is the record's
+// own Environment and its Resource is OverwriteResourceSettings; Name, Path and
+// Source are empty because settings has no per-item identity, which is exactly
+// why the gate covers every settings write (D-03). The payload is protojson's
+// rendering of a clone with Environment cleared, so the environment name is not
+// stored twice, and protojson keeps an unset optional field unset. The result
+// carries no status key.
+func OverwriteBodyForSettings(s *hostv1.EnvironmentSettings) (map[string]any, error) {
+	if s == nil || s.GetEnvironment() == "" {
+		return nil, fmt.Errorf("%w: settings with an environment are required", ErrOverwriteBodyInvalid)
+	}
+	clone := proto.Clone(s).(*hostv1.EnvironmentSettings)
+	clone.Environment = ""
+	payload, err := protoToMap(clone)
+	if err != nil {
+		return nil, fmt.Errorf("%w: rendering settings payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return overwriteBody(OverwriteTarget{
+		Environment: s.GetEnvironment(),
+		Resource:    OverwriteResourceSettings,
+	}, payload), nil
+}
+
+// OverwritePayloadSettings is the exact inverse of OverwriteBodyForSettings.
+// It decodes through protojson so an unset optional field stays unset rather
+// than becoming an empty string. The returned record's Environment is the
+// target's Environment.
+func OverwritePayloadSettings(body map[string]any) (*hostv1.EnvironmentSettings, error) {
+	t, obj, err := overwritePayloadObject(body, OverwriteResourceSettings)
+	if err != nil {
+		return nil, err
+	}
+	s := &hostv1.EnvironmentSettings{}
+	if err := mapToProto(obj, s); err != nil {
+		return nil, fmt.Errorf("%w: decoding settings payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	s.Environment = t.Environment
+	return s, nil
+}
+
+// OverwriteBodyForEnvironmentDuplicate builds the body of a proposal to
+// duplicate environment sourceName over the existing environment targetName.
+// The target's Environment is targetName (the environment whose content is
+// overwritten), its Resource is OverwriteResourceEnvironment and its Source is
+// sourceName; Name and Path are empty.
+//
+// Unlike every other builder here it writes no payload key. What the approver
+// authorizes is the operation, replace the target with a copy of the source, not
+// a frozen document set, so the source is read again when the proposal is
+// applied. That asymmetry is deliberate. The result carries no status key.
+func OverwriteBodyForEnvironmentDuplicate(sourceName, targetName string) (map[string]any, error) {
+	if sourceName == "" || targetName == "" {
+		return nil, fmt.Errorf("%w: a source and a target environment are required", ErrOverwriteBodyInvalid)
+	}
+	return map[string]any{
+		overwriteKeyTarget: overwriteTargetMap(OverwriteTarget{
+			Environment: targetName,
+			Resource:    OverwriteResourceEnvironment,
+			Source:      sourceName,
+		}),
+	}, nil
 }

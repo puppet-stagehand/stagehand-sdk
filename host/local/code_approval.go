@@ -40,9 +40,29 @@ const (
 	overwriteStatusApproved = "approved"
 )
 
-// applyPuppetfileModuleRPC is the RPC name the Put-path refusals point a
-// caller at.
-const applyPuppetfileModuleRPC = "ApplyPuppetfileModuleOverwrite"
+// The Apply RPC names the Put-path refusals point a caller at.
+const (
+	applyPuppetfileModuleRPC     = "ApplyPuppetfileModuleOverwrite"
+	applyEnvironmentSettingsRPC  = "ApplyEnvironmentSettings"
+	applyEnvironmentDuplicateRPC = "ApplyEnvironmentDuplicate"
+	applyHieraLevelRPC           = "ApplyHieraLevelOverwrite"
+	applyHieraDataKeyRPC         = "ApplyHieraDataKeyOverwrite"
+)
+
+// describeOverwriteTarget words what the refused write would replace, per
+// resource kind, for the refusal message.
+func describeOverwriteTarget(t code.OverwriteTarget) string {
+	switch t.Resource {
+	case code.OverwriteResourceSettings:
+		return "environment " + t.Environment + " already has a settings record"
+	case code.OverwriteResourceEnvironment:
+		return "environment " + t.Environment + " already exists and would be replaced by a copy of " + t.Source
+	case code.OverwriteResourceHieraDataKey:
+		return "environment " + t.Environment + " already has hiera data key " + t.Name + " in " + t.Path
+	default:
+		return "environment " + t.Environment + " already has " + t.Resource + " " + t.Name
+	}
+}
 
 // ErrCodeOverwriteRequiresApproval builds the refusal a Put* RPC returns when
 // it would replace existing content and no approved proposal covers the
@@ -51,8 +71,7 @@ const applyPuppetfileModuleRPC = "ApplyPuppetfileModuleOverwrite"
 // the caller can proceed once a proposal exists and is approved, so this is a
 // precondition not yet met, not a permanent conflict.
 func ErrCodeOverwriteRequiresApproval(t code.OverwriteTarget, applyRPC string) error {
-	msg := "environment " + t.Environment + " already has " + t.Resource + " " + t.Name +
-		"; replacing it requires an approved overwrite proposal"
+	msg := describeOverwriteTarget(t) + "; replacing it requires an approved overwrite proposal"
 	st := status.New(codes.FailedPrecondition, msg)
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailCodeOverwriteRequiresApproval,
@@ -162,6 +181,30 @@ func (s *codeServer) approvedOverwriteBody(ctx context.Context, proposalID strin
 	return body, nil
 }
 
+// resolveApplyProposal is phase one of every Apply RPC: with no lock held it
+// resolves proposalID, requires the status string "approved", parses the
+// target and refuses a resource other than wantResource. It reads a decision
+// someone else recorded and never changes it.
+func (s *codeServer) resolveApplyProposal(ctx context.Context, proposalID, wantResource string) (map[string]any, code.OverwriteTarget, error) {
+	body, err := s.approvedOverwriteBody(ctx, proposalID)
+	if err != nil {
+		return nil, code.OverwriteTarget{}, err
+	}
+	target, err := code.ParseOverwriteTarget(body)
+	if err != nil {
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", proposalID, err)
+	}
+	if target.Resource != wantResource {
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition,
+			"overwrite proposal %q targets a %q, not a %q; use the matching Apply RPC",
+			proposalID, target.Resource, wantResource)
+	}
+	if err := validateEnvName(target.Environment); err != nil {
+		return nil, code.OverwriteTarget{}, err
+	}
+	return body, target, nil
+}
+
 // ApplyPuppetfileModuleOverwrite materializes an approved puppetfile_module
 // overwrite proposal. It takes a proposal id and nothing else: the module it
 // writes is the payload frozen in the proposal at propose time, so an
@@ -241,4 +284,151 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 		return nil, err
 	}
 	return clonePuppetfileModule(written), nil
+}
+
+// ApplyEnvironmentSettings materializes an approved settings overwrite
+// proposal. It takes a proposal id and nothing else: the record it writes is
+// the payload frozen in the proposal at propose time, so an approved proposal
+// can never write settings its approver did not see. Like every Apply RPC it
+// only reads the decision, never records one.
+//
+// Phase one resolves and validates the proposal with no lock held. Phase two
+// takes s.docs.mu once, re-reads the environment under that lock and uses only
+// *Locked helpers. The call is idempotent: when the stored settings already
+// equal the frozen record it returns them without writing.
+func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.ApplyEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
+	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceSettings)
+	if err != nil {
+		return nil, err
+	}
+	frozen, err := code.OverwritePayloadSettings(body)
+	if err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
+	}
+	if err := checkSettingsRoundTrip(frozen); err != nil {
+		return nil, err
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	doc, ok := s.docs.getLocked(envCollection, target.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
+	}
+	current, err := settingsFromDoc(doc, target.Environment)
+	if err != nil {
+		return nil, err
+	}
+	if proto.Equal(current, frozen) {
+		return proto.Clone(current).(*hostv1.EnvironmentSettings), nil
+	}
+
+	newBody, err := settingsIntoBody(doc.Body, frozen)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := s.docs.putLocked(envCollection, target.Environment, newBody, false); err != nil {
+		return nil, err
+	}
+	stored, ok := s.docs.getLocked(envCollection, target.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "environment %q vanished immediately after settings write", target.Environment)
+	}
+	result, err := settingsFromDoc(stored, target.Environment)
+	if err != nil {
+		return nil, err
+	}
+	return proto.Clone(result).(*hostv1.EnvironmentSettings), nil
+}
+
+// ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+// proposal: the target environment's whole owned document set is replaced with
+// a copy of the source environment's.
+//
+// This differs from the four content-write Apply RPCs on purpose. Those
+// materialize the exact payload frozen in the proposal at propose time. Here
+// what the approver approved is the operation, replace the target with a copy
+// of the source, so the source is read at apply time and no document set is
+// frozen in the proposal. That is deliberate, not an oversight.
+//
+// Phase one resolves and validates the proposal with no lock held. Phase two
+// takes s.docs.mu once for the whole materialize step: it plans the rekeyed
+// copies with the same two helpers DuplicateEnvironment uses, so ownership is
+// decided in exactly one place, deletes everything the target owns, then writes
+// every planned copy. No documentsServer gRPC method runs in between, so a
+// concurrent reader sees either the complete replacement or the prior state,
+// never a half-copied environment. The call is idempotent: when the target
+// already holds exactly the planned documents it returns without writing.
+func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.ApplyEnvironmentDuplicateRequest) (*hostv1.Environment, error) {
+	_, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceEnvironment)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateEnvName(target.Source); err != nil {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q has no usable source environment: %v", req.ProposalId, err)
+	}
+	if target.Source == target.Environment {
+		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q names %q as both source and target", req.ProposalId, target.Source)
+	}
+
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	if _, ok := s.docs.getLocked(envCollection, target.Source); !ok {
+		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Source)
+	}
+
+	writes, err := s.planRekeyedWritesLocked(s.envOwnedDocsLocked(target.Source), target.Environment)
+	if err != nil {
+		return nil, err
+	}
+	existing := s.envOwnedDocsLocked(target.Environment)
+
+	if !s.targetMatchesPlanLocked(existing, writes) {
+		for _, ref := range existing {
+			s.docs.deleteLocked(ref.collection, ref.docID)
+		}
+		for _, w := range writes {
+			if _, err := s.docs.putLocked(w.collection, w.docID, w.body, true); err != nil {
+				return nil, status.Errorf(codes.Internal, "apply duplicate: writing %s/%s: %v", w.collection, w.docID, err)
+			}
+		}
+	}
+
+	doc, ok := s.docs.getLocked(envCollection, target.Environment)
+	if !ok {
+		return nil, status.Errorf(codes.Internal, "duplicated environment %q vanished immediately", target.Environment)
+	}
+	env, err := environmentFromDoc(doc)
+	if err != nil {
+		return nil, err
+	}
+	return cloneEnvironment(env), nil
+}
+
+// targetMatchesPlanLocked reports whether the documents existing already
+// hold exactly what writes plans: the same set of collection and doc id pairs,
+// each with a proto.Equal body. It is what makes ApplyEnvironmentDuplicate
+// idempotent without churning document versions. The caller must already hold
+// s.docs.mu.
+func (s *codeServer) targetMatchesPlanLocked(existing []docRef, writes []plannedDocWrite) bool {
+	if len(existing) != len(writes) {
+		return false
+	}
+	have := make(map[docRef]*hostv1.Json, len(existing))
+	for _, ref := range existing {
+		doc, ok := s.docs.getLocked(ref.collection, ref.docID)
+		if !ok {
+			return false
+		}
+		have[ref] = doc.Body
+	}
+	for _, w := range writes {
+		body, ok := have[docRef{collection: w.collection, docID: w.docID}]
+		if !ok || !proto.Equal(body, w.body) {
+			return false
+		}
+	}
+	return true
 }
