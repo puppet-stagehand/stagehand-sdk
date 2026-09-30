@@ -1,0 +1,227 @@
+package code
+
+// This file defines the shared vocabulary of the Code facet's overwrite
+// approval gate: the one Documents collection and the one approval scope that
+// cover every kind of overwrite, the target a proposal names, and the
+// write/read pair that puts a resource payload into a proposal body and gets
+// it back out.
+//
+// It deliberately imports only the generated wire types, protojson and the
+// standard library. It must not import the approval package or the host
+// package: this package is the format/model layer, and dragging governance or
+// host code into everything that imports it would invert that layering. A
+// pack composes approval.Kind{Collection: code.OverwriteCollection,
+// ApproveScope: code.OverwriteApproveScope} at its own call site.
+//
+// Nothing here reads or writes a proposal's "status" key. The proposal
+// status belongs to the approval package alone (approval.ProposeBody sets it
+// to pending and approval.Approve/Reject change it); a payload helper that
+// touched it could hand a caller a proposal that is born approved.
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"google.golang.org/protobuf/encoding/protojson"
+
+	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+)
+
+// OverwriteCollection is the single Documents collection holding every
+// overwrite proposal, whatever resource type it targets (D-06). The type is
+// carried inside the proposal body's target, never by a separate collection.
+const OverwriteCollection = "code-overwrites"
+
+// OverwriteApproveScope is the single approval scope required to decide any
+// overwrite proposal (D-06, D-07). It is a route access scope handed to
+// approval.Approve through an approval.Kind; it is not a manifest permission
+// and no manifest vocabulary mentions it.
+const OverwriteApproveScope = "code:approve"
+
+// The five overwrite resource kinds an OverwriteTarget can name.
+const (
+	OverwriteResourceEnvironment      = "environment"
+	OverwriteResourceSettings         = "settings"
+	OverwriteResourcePuppetfileModule = "puppetfile_module"
+	OverwriteResourceHieraLevel       = "hiera_level"
+	OverwriteResourceHieraDataKey     = "hiera_data_key"
+)
+
+// ErrOverwriteBodyInvalid is returned (wrapped) when a proposal body cannot
+// be read as an overwrite proposal: the target is absent or malformed, names
+// an unknown resource kind, or the payload is absent or does not decode.
+var ErrOverwriteBodyInvalid = errors.New("code: overwrite proposal body is invalid")
+
+// OverwriteTarget names exactly which piece of existing content an overwrite
+// proposal covers. Two targets are the same target only when all five fields
+// are equal; the gate compares them by plain struct equality with no prefix,
+// substring or case-insensitive matching anywhere.
+//
+// Environment is always the environment whose content is overwritten. Resource
+// is one of the OverwriteResource* constants. Name carries the module name,
+// the Hiera level name or the Hiera data key, depending on Resource, and is
+// empty for a whole-environment or settings overwrite. Path carries the Hiera
+// data file's relative path and is empty otherwise. Source carries the
+// source environment for an environment duplicate and is empty otherwise.
+type OverwriteTarget struct {
+	Environment string
+	Resource    string
+	Name        string
+	Path        string
+	Source      string
+}
+
+// Body keys. They are unexported and referenced by name, never repeated as
+// literals, so the write side and the read side cannot drift apart.
+const (
+	overwriteKeyTarget      = "target"
+	overwriteKeyPayload     = "payload"
+	overwriteKeyEnvironment = "environment"
+	overwriteKeyResource    = "resource"
+	overwriteKeyName        = "name"
+	overwriteKeyPath        = "path"
+	overwriteKeySource      = "source"
+)
+
+func validOverwriteResource(r string) bool {
+	switch r {
+	case OverwriteResourceEnvironment,
+		OverwriteResourceSettings,
+		OverwriteResourcePuppetfileModule,
+		OverwriteResourceHieraLevel,
+		OverwriteResourceHieraDataKey:
+		return true
+	}
+	return false
+}
+
+// overwriteTargetMap renders t as the plain map stored under the body's
+// target key. Every field is written, including empty ones, so the stored
+// shape is the same for every resource kind.
+func overwriteTargetMap(t OverwriteTarget) map[string]any {
+	return map[string]any{
+		overwriteKeyEnvironment: t.Environment,
+		overwriteKeyResource:    t.Resource,
+		overwriteKeyName:        t.Name,
+		overwriteKeyPath:        t.Path,
+		overwriteKeySource:      t.Source,
+	}
+}
+
+// ParseOverwriteTarget reads the target object out of a decoded proposal
+// body. It returns an error wrapping ErrOverwriteBodyInvalid when the target
+// key is absent, is not an object, has a field that is not a string, has an
+// empty environment, or carries a resource outside the five constants. It
+// never guesses: a target it cannot read exactly is a target that covers
+// nothing.
+func ParseOverwriteTarget(body map[string]any) (OverwriteTarget, error) {
+	raw, ok := body[overwriteKeyTarget]
+	if !ok {
+		return OverwriteTarget{}, fmt.Errorf("%w: no %q key", ErrOverwriteBodyInvalid, overwriteKeyTarget)
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return OverwriteTarget{}, fmt.Errorf("%w: %q is not an object", ErrOverwriteBodyInvalid, overwriteKeyTarget)
+	}
+
+	field := func(key string) (string, error) {
+		v, present := m[key]
+		if !present {
+			return "", nil
+		}
+		s, isStr := v.(string)
+		if !isStr {
+			return "", fmt.Errorf("%w: target %q is not a string", ErrOverwriteBodyInvalid, key)
+		}
+		return s, nil
+	}
+
+	var t OverwriteTarget
+	var err error
+	if t.Environment, err = field(overwriteKeyEnvironment); err != nil {
+		return OverwriteTarget{}, err
+	}
+	if t.Resource, err = field(overwriteKeyResource); err != nil {
+		return OverwriteTarget{}, err
+	}
+	if t.Name, err = field(overwriteKeyName); err != nil {
+		return OverwriteTarget{}, err
+	}
+	if t.Path, err = field(overwriteKeyPath); err != nil {
+		return OverwriteTarget{}, err
+	}
+	if t.Source, err = field(overwriteKeySource); err != nil {
+		return OverwriteTarget{}, err
+	}
+	if t.Environment == "" {
+		return OverwriteTarget{}, fmt.Errorf("%w: target has no environment", ErrOverwriteBodyInvalid)
+	}
+	if !validOverwriteResource(t.Resource) {
+		return OverwriteTarget{}, fmt.Errorf("%w: target resource %q is not one of the five overwrite resource kinds", ErrOverwriteBodyInvalid, t.Resource)
+	}
+	return t, nil
+}
+
+// overwriteBody assembles the proposal body for a target and an already
+// rendered payload map.
+func overwriteBody(t OverwriteTarget, payload map[string]any) map[string]any {
+	return map[string]any{
+		overwriteKeyTarget:  overwriteTargetMap(t),
+		overwriteKeyPayload: payload,
+	}
+}
+
+// OverwriteBodyForPuppetfileModule builds the body of a proposal to replace
+// the Puppetfile module m in environment env. The target's Resource is
+// OverwriteResourcePuppetfileModule and its Name is the module's name; the
+// payload is protojson's rendering of m, frozen at propose time. The result
+// carries no status key.
+func OverwriteBodyForPuppetfileModule(env string, m *hostv1.PuppetfileModule) (map[string]any, error) {
+	if m == nil || m.GetName() == "" {
+		return nil, fmt.Errorf("%w: a module with a name is required", ErrOverwriteBodyInvalid)
+	}
+	data, err := protojson.Marshal(m)
+	if err != nil {
+		return nil, fmt.Errorf("%w: rendering module payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return nil, fmt.Errorf("%w: decoding rendered module payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return overwriteBody(OverwriteTarget{
+		Environment: env,
+		Resource:    OverwriteResourcePuppetfileModule,
+		Name:        m.GetName(),
+	}, payload), nil
+}
+
+// OverwritePayloadPuppetfileModule is the exact inverse of
+// OverwriteBodyForPuppetfileModule: it decodes the frozen module out of a
+// proposal body. It refuses a body whose target is not a puppetfile_module
+// target, so a payload can never be decoded as the wrong resource type.
+func OverwritePayloadPuppetfileModule(body map[string]any) (*hostv1.PuppetfileModule, error) {
+	t, err := ParseOverwriteTarget(body)
+	if err != nil {
+		return nil, err
+	}
+	if t.Resource != OverwriteResourcePuppetfileModule {
+		return nil, fmt.Errorf("%w: target resource is %q, not %q", ErrOverwriteBodyInvalid, t.Resource, OverwriteResourcePuppetfileModule)
+	}
+	raw, ok := body[overwriteKeyPayload]
+	if !ok {
+		return nil, fmt.Errorf("%w: no %q key", ErrOverwriteBodyInvalid, overwriteKeyPayload)
+	}
+	if _, isObj := raw.(map[string]any); !isObj {
+		return nil, fmt.Errorf("%w: %q is not an object", ErrOverwriteBodyInvalid, overwriteKeyPayload)
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%w: re-encoding module payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	m := &hostv1.PuppetfileModule{}
+	if err := protojson.Unmarshal(data, m); err != nil {
+		return nil, fmt.Errorf("%w: decoding module payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return m, nil
+}

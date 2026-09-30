@@ -2083,6 +2083,230 @@ func (x *OnboardNodeRequest) GetProposalId() string {
 	return ""
 }
 
+// ------------------------------------------------------- Overwrite approval
+// Every Apply* request carries only the proposal id. The resource payload was
+// frozen into the proposal body at propose time and is never taken from the
+// caller of Apply.
+type ApplyEnvironmentDuplicateRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyEnvironmentDuplicateRequest) Reset() {
+	*x = ApplyEnvironmentDuplicateRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[35]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyEnvironmentDuplicateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyEnvironmentDuplicateRequest) ProtoMessage() {}
+
+func (x *ApplyEnvironmentDuplicateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[35]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyEnvironmentDuplicateRequest.ProtoReflect.Descriptor instead.
+func (*ApplyEnvironmentDuplicateRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{35}
+}
+
+func (x *ApplyEnvironmentDuplicateRequest) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
+}
+
+type ApplyEnvironmentSettingsRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyEnvironmentSettingsRequest) Reset() {
+	*x = ApplyEnvironmentSettingsRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[36]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyEnvironmentSettingsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyEnvironmentSettingsRequest) ProtoMessage() {}
+
+func (x *ApplyEnvironmentSettingsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[36]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyEnvironmentSettingsRequest.ProtoReflect.Descriptor instead.
+func (*ApplyEnvironmentSettingsRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{36}
+}
+
+func (x *ApplyEnvironmentSettingsRequest) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
+}
+
+type ApplyPuppetfileModuleOverwriteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyPuppetfileModuleOverwriteRequest) Reset() {
+	*x = ApplyPuppetfileModuleOverwriteRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[37]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyPuppetfileModuleOverwriteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyPuppetfileModuleOverwriteRequest) ProtoMessage() {}
+
+func (x *ApplyPuppetfileModuleOverwriteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[37]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyPuppetfileModuleOverwriteRequest.ProtoReflect.Descriptor instead.
+func (*ApplyPuppetfileModuleOverwriteRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{37}
+}
+
+func (x *ApplyPuppetfileModuleOverwriteRequest) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
+}
+
+type ApplyHieraLevelOverwriteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyHieraLevelOverwriteRequest) Reset() {
+	*x = ApplyHieraLevelOverwriteRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyHieraLevelOverwriteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyHieraLevelOverwriteRequest) ProtoMessage() {}
+
+func (x *ApplyHieraLevelOverwriteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyHieraLevelOverwriteRequest.ProtoReflect.Descriptor instead.
+func (*ApplyHieraLevelOverwriteRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *ApplyHieraLevelOverwriteRequest) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
+}
+
+type ApplyHieraDataKeyOverwriteRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ProposalId    string                 `protobuf:"bytes,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApplyHieraDataKeyOverwriteRequest) Reset() {
+	*x = ApplyHieraDataKeyOverwriteRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApplyHieraDataKeyOverwriteRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApplyHieraDataKeyOverwriteRequest) ProtoMessage() {}
+
+func (x *ApplyHieraDataKeyOverwriteRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApplyHieraDataKeyOverwriteRequest.ProtoReflect.Descriptor instead.
+func (*ApplyHieraDataKeyOverwriteRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *ApplyHieraDataKeyOverwriteRequest) GetProposalId() string {
+	if x != nil {
+		return x.ProposalId
+	}
+	return ""
+}
+
 type Environment struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// name is both the git branch name and the on-disk directory name a
@@ -2098,7 +2322,7 @@ type Environment struct {
 
 func (x *Environment) Reset() {
 	*x = Environment{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[35]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2110,7 +2334,7 @@ func (x *Environment) String() string {
 func (*Environment) ProtoMessage() {}
 
 func (x *Environment) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[35]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2123,7 +2347,7 @@ func (x *Environment) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Environment.ProtoReflect.Descriptor instead.
 func (*Environment) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{35}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *Environment) GetName() string {
@@ -2156,7 +2380,7 @@ type ListEnvironmentsRequest struct {
 
 func (x *ListEnvironmentsRequest) Reset() {
 	*x = ListEnvironmentsRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[36]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2168,7 +2392,7 @@ func (x *ListEnvironmentsRequest) String() string {
 func (*ListEnvironmentsRequest) ProtoMessage() {}
 
 func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[36]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2181,7 +2405,7 @@ func (x *ListEnvironmentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsRequest.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{36}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *ListEnvironmentsRequest) GetPage() *Page {
@@ -2201,7 +2425,7 @@ type ListEnvironmentsResponse struct {
 
 func (x *ListEnvironmentsResponse) Reset() {
 	*x = ListEnvironmentsResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[37]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2213,7 +2437,7 @@ func (x *ListEnvironmentsResponse) String() string {
 func (*ListEnvironmentsResponse) ProtoMessage() {}
 
 func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[37]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2226,7 +2450,7 @@ func (x *ListEnvironmentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListEnvironmentsResponse.ProtoReflect.Descriptor instead.
 func (*ListEnvironmentsResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{37}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *ListEnvironmentsResponse) GetEnvironments() []*Environment {
@@ -2252,7 +2476,7 @@ type GetEnvironmentRequest struct {
 
 func (x *GetEnvironmentRequest) Reset() {
 	*x = GetEnvironmentRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[38]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2264,7 +2488,7 @@ func (x *GetEnvironmentRequest) String() string {
 func (*GetEnvironmentRequest) ProtoMessage() {}
 
 func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[38]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2277,7 +2501,7 @@ func (x *GetEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{38}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GetEnvironmentRequest) GetName() string {
@@ -2296,7 +2520,7 @@ type CreateEnvironmentRequest struct {
 
 func (x *CreateEnvironmentRequest) Reset() {
 	*x = CreateEnvironmentRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[39]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2308,7 +2532,7 @@ func (x *CreateEnvironmentRequest) String() string {
 func (*CreateEnvironmentRequest) ProtoMessage() {}
 
 func (x *CreateEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[39]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2321,7 +2545,7 @@ func (x *CreateEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*CreateEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{39}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *CreateEnvironmentRequest) GetName() string {
@@ -2341,7 +2565,7 @@ type RenameEnvironmentRequest struct {
 
 func (x *RenameEnvironmentRequest) Reset() {
 	*x = RenameEnvironmentRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[40]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2353,7 +2577,7 @@ func (x *RenameEnvironmentRequest) String() string {
 func (*RenameEnvironmentRequest) ProtoMessage() {}
 
 func (x *RenameEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[40]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2366,7 +2590,7 @@ func (x *RenameEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenameEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*RenameEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{40}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *RenameEnvironmentRequest) GetName() string {
@@ -2392,7 +2616,7 @@ type DeleteEnvironmentRequest struct {
 
 func (x *DeleteEnvironmentRequest) Reset() {
 	*x = DeleteEnvironmentRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[41]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2404,7 +2628,7 @@ func (x *DeleteEnvironmentRequest) String() string {
 func (*DeleteEnvironmentRequest) ProtoMessage() {}
 
 func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[41]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2417,7 +2641,7 @@ func (x *DeleteEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*DeleteEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{41}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *DeleteEnvironmentRequest) GetName() string {
@@ -2437,7 +2661,7 @@ type DuplicateEnvironmentRequest struct {
 
 func (x *DuplicateEnvironmentRequest) Reset() {
 	*x = DuplicateEnvironmentRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[42]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2449,7 +2673,7 @@ func (x *DuplicateEnvironmentRequest) String() string {
 func (*DuplicateEnvironmentRequest) ProtoMessage() {}
 
 func (x *DuplicateEnvironmentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[42]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2462,7 +2686,7 @@ func (x *DuplicateEnvironmentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DuplicateEnvironmentRequest.ProtoReflect.Descriptor instead.
 func (*DuplicateEnvironmentRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{42}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *DuplicateEnvironmentRequest) GetSourceName() string {
@@ -2502,7 +2726,7 @@ type EnvironmentSettings struct {
 
 func (x *EnvironmentSettings) Reset() {
 	*x = EnvironmentSettings{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[43]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2514,7 +2738,7 @@ func (x *EnvironmentSettings) String() string {
 func (*EnvironmentSettings) ProtoMessage() {}
 
 func (x *EnvironmentSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[43]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2527,7 +2751,7 @@ func (x *EnvironmentSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EnvironmentSettings.ProtoReflect.Descriptor instead.
 func (*EnvironmentSettings) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{43}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *EnvironmentSettings) GetEnvironment() string {
@@ -2595,7 +2819,7 @@ type GetEnvironmentSettingsRequest struct {
 
 func (x *GetEnvironmentSettingsRequest) Reset() {
 	*x = GetEnvironmentSettingsRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[44]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2607,7 +2831,7 @@ func (x *GetEnvironmentSettingsRequest) String() string {
 func (*GetEnvironmentSettingsRequest) ProtoMessage() {}
 
 func (x *GetEnvironmentSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[44]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2620,7 +2844,7 @@ func (x *GetEnvironmentSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetEnvironmentSettingsRequest.ProtoReflect.Descriptor instead.
 func (*GetEnvironmentSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{44}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *GetEnvironmentSettingsRequest) GetEnvironment() string {
@@ -2639,7 +2863,7 @@ type PutEnvironmentSettingsRequest struct {
 
 func (x *PutEnvironmentSettingsRequest) Reset() {
 	*x = PutEnvironmentSettingsRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[45]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2651,7 +2875,7 @@ func (x *PutEnvironmentSettingsRequest) String() string {
 func (*PutEnvironmentSettingsRequest) ProtoMessage() {}
 
 func (x *PutEnvironmentSettingsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[45]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2664,7 +2888,7 @@ func (x *PutEnvironmentSettingsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutEnvironmentSettingsRequest.ProtoReflect.Descriptor instead.
 func (*PutEnvironmentSettingsRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{45}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *PutEnvironmentSettingsRequest) GetSettings() *EnvironmentSettings {
@@ -2690,7 +2914,7 @@ type PuppetfileModule struct {
 
 func (x *PuppetfileModule) Reset() {
 	*x = PuppetfileModule{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[46]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2702,7 +2926,7 @@ func (x *PuppetfileModule) String() string {
 func (*PuppetfileModule) ProtoMessage() {}
 
 func (x *PuppetfileModule) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[46]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2715,7 +2939,7 @@ func (x *PuppetfileModule) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PuppetfileModule.ProtoReflect.Descriptor instead.
 func (*PuppetfileModule) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{46}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *PuppetfileModule) GetName() string {
@@ -2779,7 +3003,7 @@ type ForgeSource struct {
 
 func (x *ForgeSource) Reset() {
 	*x = ForgeSource{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[47]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2791,7 +3015,7 @@ func (x *ForgeSource) String() string {
 func (*ForgeSource) ProtoMessage() {}
 
 func (x *ForgeSource) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[47]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2804,7 +3028,7 @@ func (x *ForgeSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeSource.ProtoReflect.Descriptor instead.
 func (*ForgeSource) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{47}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ForgeSource) GetVersion() string {
@@ -2844,7 +3068,7 @@ type GitSource struct {
 
 func (x *GitSource) Reset() {
 	*x = GitSource{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[48]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2856,7 +3080,7 @@ func (x *GitSource) String() string {
 func (*GitSource) ProtoMessage() {}
 
 func (x *GitSource) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[48]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2869,7 +3093,7 @@ func (x *GitSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GitSource.ProtoReflect.Descriptor instead.
 func (*GitSource) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{48}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *GitSource) GetUrl() string {
@@ -2983,7 +3207,7 @@ type ControlBranch struct {
 
 func (x *ControlBranch) Reset() {
 	*x = ControlBranch{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[49]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2995,7 +3219,7 @@ func (x *ControlBranch) String() string {
 func (*ControlBranch) ProtoMessage() {}
 
 func (x *ControlBranch) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[49]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3008,7 +3232,7 @@ func (x *ControlBranch) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ControlBranch.ProtoReflect.Descriptor instead.
 func (*ControlBranch) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{49}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{54}
 }
 
 type Puppetfile struct {
@@ -3025,7 +3249,7 @@ type Puppetfile struct {
 
 func (x *Puppetfile) Reset() {
 	*x = Puppetfile{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[50]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3037,7 +3261,7 @@ func (x *Puppetfile) String() string {
 func (*Puppetfile) ProtoMessage() {}
 
 func (x *Puppetfile) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[50]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3050,7 +3274,7 @@ func (x *Puppetfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Puppetfile.ProtoReflect.Descriptor instead.
 func (*Puppetfile) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{50}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *Puppetfile) GetEnvironment() string {
@@ -3084,7 +3308,7 @@ type ListPuppetfileModulesRequest struct {
 
 func (x *ListPuppetfileModulesRequest) Reset() {
 	*x = ListPuppetfileModulesRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[51]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3096,7 +3320,7 @@ func (x *ListPuppetfileModulesRequest) String() string {
 func (*ListPuppetfileModulesRequest) ProtoMessage() {}
 
 func (x *ListPuppetfileModulesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[51]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3109,7 +3333,7 @@ func (x *ListPuppetfileModulesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPuppetfileModulesRequest.ProtoReflect.Descriptor instead.
 func (*ListPuppetfileModulesRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{51}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *ListPuppetfileModulesRequest) GetEnvironment() string {
@@ -3137,7 +3361,7 @@ type ListPuppetfileModulesResponse struct {
 
 func (x *ListPuppetfileModulesResponse) Reset() {
 	*x = ListPuppetfileModulesResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[52]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3149,7 +3373,7 @@ func (x *ListPuppetfileModulesResponse) String() string {
 func (*ListPuppetfileModulesResponse) ProtoMessage() {}
 
 func (x *ListPuppetfileModulesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[52]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3162,7 +3386,7 @@ func (x *ListPuppetfileModulesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListPuppetfileModulesResponse.ProtoReflect.Descriptor instead.
 func (*ListPuppetfileModulesResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{52}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ListPuppetfileModulesResponse) GetModules() []*PuppetfileModule {
@@ -3196,7 +3420,7 @@ type PutPuppetfileModuleRequest struct {
 
 func (x *PutPuppetfileModuleRequest) Reset() {
 	*x = PutPuppetfileModuleRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[53]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3208,7 +3432,7 @@ func (x *PutPuppetfileModuleRequest) String() string {
 func (*PutPuppetfileModuleRequest) ProtoMessage() {}
 
 func (x *PutPuppetfileModuleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[53]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3221,7 +3445,7 @@ func (x *PutPuppetfileModuleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutPuppetfileModuleRequest.ProtoReflect.Descriptor instead.
 func (*PutPuppetfileModuleRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{53}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *PutPuppetfileModuleRequest) GetEnvironment() string {
@@ -3248,7 +3472,7 @@ type RemovePuppetfileModuleRequest struct {
 
 func (x *RemovePuppetfileModuleRequest) Reset() {
 	*x = RemovePuppetfileModuleRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[54]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3260,7 +3484,7 @@ func (x *RemovePuppetfileModuleRequest) String() string {
 func (*RemovePuppetfileModuleRequest) ProtoMessage() {}
 
 func (x *RemovePuppetfileModuleRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[54]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3273,7 +3497,7 @@ func (x *RemovePuppetfileModuleRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePuppetfileModuleRequest.ProtoReflect.Descriptor instead.
 func (*RemovePuppetfileModuleRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{54}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *RemovePuppetfileModuleRequest) GetEnvironment() string {
@@ -3300,7 +3524,7 @@ type SetModuledirRequest struct {
 
 func (x *SetModuledirRequest) Reset() {
 	*x = SetModuledirRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[55]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3312,7 +3536,7 @@ func (x *SetModuledirRequest) String() string {
 func (*SetModuledirRequest) ProtoMessage() {}
 
 func (x *SetModuledirRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[55]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3325,7 +3549,7 @@ func (x *SetModuledirRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetModuledirRequest.ProtoReflect.Descriptor instead.
 func (*SetModuledirRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{55}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *SetModuledirRequest) GetEnvironment() string {
@@ -3351,7 +3575,7 @@ type RenderPuppetfileRequest struct {
 
 func (x *RenderPuppetfileRequest) Reset() {
 	*x = RenderPuppetfileRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[56]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3363,7 +3587,7 @@ func (x *RenderPuppetfileRequest) String() string {
 func (*RenderPuppetfileRequest) ProtoMessage() {}
 
 func (x *RenderPuppetfileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[56]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3376,7 +3600,7 @@ func (x *RenderPuppetfileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderPuppetfileRequest.ProtoReflect.Descriptor instead.
 func (*RenderPuppetfileRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{56}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *RenderPuppetfileRequest) GetEnvironment() string {
@@ -3395,7 +3619,7 @@ type RenderedPuppetfile struct {
 
 func (x *RenderedPuppetfile) Reset() {
 	*x = RenderedPuppetfile{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[57]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3407,7 +3631,7 @@ func (x *RenderedPuppetfile) String() string {
 func (*RenderedPuppetfile) ProtoMessage() {}
 
 func (x *RenderedPuppetfile) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[57]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3420,7 +3644,7 @@ func (x *RenderedPuppetfile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderedPuppetfile.ProtoReflect.Descriptor instead.
 func (*RenderedPuppetfile) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{57}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *RenderedPuppetfile) GetText() string {
@@ -3454,7 +3678,7 @@ type HieraLevel struct {
 
 func (x *HieraLevel) Reset() {
 	*x = HieraLevel{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[58]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3466,7 +3690,7 @@ func (x *HieraLevel) String() string {
 func (*HieraLevel) ProtoMessage() {}
 
 func (x *HieraLevel) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[58]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3479,7 +3703,7 @@ func (x *HieraLevel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HieraLevel.ProtoReflect.Descriptor instead.
 func (*HieraLevel) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{58}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *HieraLevel) GetName() string {
@@ -3553,7 +3777,7 @@ type HieraHierarchy struct {
 
 func (x *HieraHierarchy) Reset() {
 	*x = HieraHierarchy{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[59]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3565,7 +3789,7 @@ func (x *HieraHierarchy) String() string {
 func (*HieraHierarchy) ProtoMessage() {}
 
 func (x *HieraHierarchy) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[59]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3578,7 +3802,7 @@ func (x *HieraHierarchy) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HieraHierarchy.ProtoReflect.Descriptor instead.
 func (*HieraHierarchy) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{59}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *HieraHierarchy) GetEnvironment() string {
@@ -3629,7 +3853,7 @@ type LintWarning struct {
 
 func (x *LintWarning) Reset() {
 	*x = LintWarning{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[60]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3641,7 +3865,7 @@ func (x *LintWarning) String() string {
 func (*LintWarning) ProtoMessage() {}
 
 func (x *LintWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[60]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3654,7 +3878,7 @@ func (x *LintWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LintWarning.ProtoReflect.Descriptor instead.
 func (*LintWarning) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{60}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *LintWarning) GetCode() string {
@@ -3687,7 +3911,7 @@ type GetHieraHierarchyRequest struct {
 
 func (x *GetHieraHierarchyRequest) Reset() {
 	*x = GetHieraHierarchyRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[61]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3699,7 +3923,7 @@ func (x *GetHieraHierarchyRequest) String() string {
 func (*GetHieraHierarchyRequest) ProtoMessage() {}
 
 func (x *GetHieraHierarchyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[61]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3712,7 +3936,7 @@ func (x *GetHieraHierarchyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHieraHierarchyRequest.ProtoReflect.Descriptor instead.
 func (*GetHieraHierarchyRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{61}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *GetHieraHierarchyRequest) GetEnvironment() string {
@@ -3737,7 +3961,7 @@ type PutHieraLevelRequest struct {
 
 func (x *PutHieraLevelRequest) Reset() {
 	*x = PutHieraLevelRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[62]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3749,7 +3973,7 @@ func (x *PutHieraLevelRequest) String() string {
 func (*PutHieraLevelRequest) ProtoMessage() {}
 
 func (x *PutHieraLevelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[62]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3762,7 +3986,7 @@ func (x *PutHieraLevelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutHieraLevelRequest.ProtoReflect.Descriptor instead.
 func (*PutHieraLevelRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{62}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *PutHieraLevelRequest) GetEnvironment() string {
@@ -3803,7 +4027,7 @@ type PutHieraLevelResponse struct {
 
 func (x *PutHieraLevelResponse) Reset() {
 	*x = PutHieraLevelResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[63]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3815,7 +4039,7 @@ func (x *PutHieraLevelResponse) String() string {
 func (*PutHieraLevelResponse) ProtoMessage() {}
 
 func (x *PutHieraLevelResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[63]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3828,7 +4052,7 @@ func (x *PutHieraLevelResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutHieraLevelResponse.ProtoReflect.Descriptor instead.
 func (*PutHieraLevelResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{63}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *PutHieraLevelResponse) GetHierarchy() *HieraHierarchy {
@@ -3855,7 +4079,7 @@ type RemoveHieraLevelRequest struct {
 
 func (x *RemoveHieraLevelRequest) Reset() {
 	*x = RemoveHieraLevelRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[64]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3867,7 +4091,7 @@ func (x *RemoveHieraLevelRequest) String() string {
 func (*RemoveHieraLevelRequest) ProtoMessage() {}
 
 func (x *RemoveHieraLevelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[64]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3880,7 +4104,7 @@ func (x *RemoveHieraLevelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveHieraLevelRequest.ProtoReflect.Descriptor instead.
 func (*RemoveHieraLevelRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{64}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *RemoveHieraLevelRequest) GetEnvironment() string {
@@ -3909,7 +4133,7 @@ type ReorderHieraLevelsRequest struct {
 
 func (x *ReorderHieraLevelsRequest) Reset() {
 	*x = ReorderHieraLevelsRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[65]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3921,7 +4145,7 @@ func (x *ReorderHieraLevelsRequest) String() string {
 func (*ReorderHieraLevelsRequest) ProtoMessage() {}
 
 func (x *ReorderHieraLevelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[65]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3934,7 +4158,7 @@ func (x *ReorderHieraLevelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderHieraLevelsRequest.ProtoReflect.Descriptor instead.
 func (*ReorderHieraLevelsRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{65}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *ReorderHieraLevelsRequest) GetEnvironment() string {
@@ -3967,7 +4191,7 @@ type HieraDataFile struct {
 
 func (x *HieraDataFile) Reset() {
 	*x = HieraDataFile{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[66]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3979,7 +4203,7 @@ func (x *HieraDataFile) String() string {
 func (*HieraDataFile) ProtoMessage() {}
 
 func (x *HieraDataFile) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[66]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3992,7 +4216,7 @@ func (x *HieraDataFile) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HieraDataFile.ProtoReflect.Descriptor instead.
 func (*HieraDataFile) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{66}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *HieraDataFile) GetEnvironment() string {
@@ -4033,7 +4257,7 @@ type ListHieraDataFilesRequest struct {
 
 func (x *ListHieraDataFilesRequest) Reset() {
 	*x = ListHieraDataFilesRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[67]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4045,7 +4269,7 @@ func (x *ListHieraDataFilesRequest) String() string {
 func (*ListHieraDataFilesRequest) ProtoMessage() {}
 
 func (x *ListHieraDataFilesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[67]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4058,7 +4282,7 @@ func (x *ListHieraDataFilesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHieraDataFilesRequest.ProtoReflect.Descriptor instead.
 func (*ListHieraDataFilesRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{67}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *ListHieraDataFilesRequest) GetEnvironment() string {
@@ -4085,7 +4309,7 @@ type ListHieraDataFilesResponse struct {
 
 func (x *ListHieraDataFilesResponse) Reset() {
 	*x = ListHieraDataFilesResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[68]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4097,7 +4321,7 @@ func (x *ListHieraDataFilesResponse) String() string {
 func (*ListHieraDataFilesResponse) ProtoMessage() {}
 
 func (x *ListHieraDataFilesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[68]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4110,7 +4334,7 @@ func (x *ListHieraDataFilesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListHieraDataFilesResponse.ProtoReflect.Descriptor instead.
 func (*ListHieraDataFilesResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{68}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *ListHieraDataFilesResponse) GetPaths() []string {
@@ -4137,7 +4361,7 @@ type GetHieraDataFileRequest struct {
 
 func (x *GetHieraDataFileRequest) Reset() {
 	*x = GetHieraDataFileRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[69]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4149,7 +4373,7 @@ func (x *GetHieraDataFileRequest) String() string {
 func (*GetHieraDataFileRequest) ProtoMessage() {}
 
 func (x *GetHieraDataFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[69]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4162,7 +4386,7 @@ func (x *GetHieraDataFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetHieraDataFileRequest.ProtoReflect.Descriptor instead.
 func (*GetHieraDataFileRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{69}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *GetHieraDataFileRequest) GetEnvironment() string {
@@ -4191,7 +4415,7 @@ type PutHieraDataKeyRequest struct {
 
 func (x *PutHieraDataKeyRequest) Reset() {
 	*x = PutHieraDataKeyRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[70]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4203,7 +4427,7 @@ func (x *PutHieraDataKeyRequest) String() string {
 func (*PutHieraDataKeyRequest) ProtoMessage() {}
 
 func (x *PutHieraDataKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[70]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4216,7 +4440,7 @@ func (x *PutHieraDataKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutHieraDataKeyRequest.ProtoReflect.Descriptor instead.
 func (*PutHieraDataKeyRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{70}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *PutHieraDataKeyRequest) GetEnvironment() string {
@@ -4258,7 +4482,7 @@ type RemoveHieraDataKeyRequest struct {
 
 func (x *RemoveHieraDataKeyRequest) Reset() {
 	*x = RemoveHieraDataKeyRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[71]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4270,7 +4494,7 @@ func (x *RemoveHieraDataKeyRequest) String() string {
 func (*RemoveHieraDataKeyRequest) ProtoMessage() {}
 
 func (x *RemoveHieraDataKeyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[71]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4283,7 +4507,7 @@ func (x *RemoveHieraDataKeyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveHieraDataKeyRequest.ProtoReflect.Descriptor instead.
 func (*RemoveHieraDataKeyRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{71}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *RemoveHieraDataKeyRequest) GetEnvironment() string {
@@ -4317,7 +4541,7 @@ type DeleteHieraDataFileRequest struct {
 
 func (x *DeleteHieraDataFileRequest) Reset() {
 	*x = DeleteHieraDataFileRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[72]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4329,7 +4553,7 @@ func (x *DeleteHieraDataFileRequest) String() string {
 func (*DeleteHieraDataFileRequest) ProtoMessage() {}
 
 func (x *DeleteHieraDataFileRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[72]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4342,7 +4566,7 @@ func (x *DeleteHieraDataFileRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteHieraDataFileRequest.ProtoReflect.Descriptor instead.
 func (*DeleteHieraDataFileRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{72}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *DeleteHieraDataFileRequest) GetEnvironment() string {
@@ -4371,7 +4595,7 @@ type ForgeSourceSelection struct {
 
 func (x *ForgeSourceSelection) Reset() {
 	*x = ForgeSourceSelection{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[73]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4383,7 +4607,7 @@ func (x *ForgeSourceSelection) String() string {
 func (*ForgeSourceSelection) ProtoMessage() {}
 
 func (x *ForgeSourceSelection) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[73]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4396,7 +4620,7 @@ func (x *ForgeSourceSelection) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeSourceSelection.ProtoReflect.Descriptor instead.
 func (*ForgeSourceSelection) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{73}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *ForgeSourceSelection) GetName() string {
@@ -4417,7 +4641,7 @@ type ForgeSourceConfig struct {
 
 func (x *ForgeSourceConfig) Reset() {
 	*x = ForgeSourceConfig{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[74]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4429,7 +4653,7 @@ func (x *ForgeSourceConfig) String() string {
 func (*ForgeSourceConfig) ProtoMessage() {}
 
 func (x *ForgeSourceConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[74]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4442,7 +4666,7 @@ func (x *ForgeSourceConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeSourceConfig.ProtoReflect.Descriptor instead.
 func (*ForgeSourceConfig) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{74}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *ForgeSourceConfig) GetName() string {
@@ -4477,7 +4701,7 @@ type SearchRequest struct {
 
 func (x *SearchRequest) Reset() {
 	*x = SearchRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[75]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4489,7 +4713,7 @@ func (x *SearchRequest) String() string {
 func (*SearchRequest) ProtoMessage() {}
 
 func (x *SearchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[75]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4502,7 +4726,7 @@ func (x *SearchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchRequest.ProtoReflect.Descriptor instead.
 func (*SearchRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{75}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *SearchRequest) GetQuery() string {
@@ -4536,7 +4760,7 @@ type SearchResponse struct {
 
 func (x *SearchResponse) Reset() {
 	*x = SearchResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[76]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4548,7 +4772,7 @@ func (x *SearchResponse) String() string {
 func (*SearchResponse) ProtoMessage() {}
 
 func (x *SearchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[76]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4561,7 +4785,7 @@ func (x *SearchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SearchResponse.ProtoReflect.Descriptor instead.
 func (*SearchResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{76}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *SearchResponse) GetResults() []*ForgeSearchResult {
@@ -4594,7 +4818,7 @@ type ForgeSearchResult struct {
 
 func (x *ForgeSearchResult) Reset() {
 	*x = ForgeSearchResult{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[77]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[82]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4606,7 +4830,7 @@ func (x *ForgeSearchResult) String() string {
 func (*ForgeSearchResult) ProtoMessage() {}
 
 func (x *ForgeSearchResult) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[77]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[82]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4619,7 +4843,7 @@ func (x *ForgeSearchResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeSearchResult.ProtoReflect.Descriptor instead.
 func (*ForgeSearchResult) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{77}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{82}
 }
 
 func (x *ForgeSearchResult) GetName() string {
@@ -4690,7 +4914,7 @@ type ResolveRequest struct {
 
 func (x *ResolveRequest) Reset() {
 	*x = ResolveRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[78]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4702,7 +4926,7 @@ func (x *ResolveRequest) String() string {
 func (*ResolveRequest) ProtoMessage() {}
 
 func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[78]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4715,7 +4939,7 @@ func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveRequest.ProtoReflect.Descriptor instead.
 func (*ResolveRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{78}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{83}
 }
 
 func (x *ResolveRequest) GetName() string {
@@ -4758,7 +4982,7 @@ type ResolveResponse struct {
 
 func (x *ResolveResponse) Reset() {
 	*x = ResolveResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[79]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4770,7 +4994,7 @@ func (x *ResolveResponse) String() string {
 func (*ResolveResponse) ProtoMessage() {}
 
 func (x *ResolveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[79]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4783,7 +5007,7 @@ func (x *ResolveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveResponse.ProtoReflect.Descriptor instead.
 func (*ResolveResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{79}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{84}
 }
 
 func (x *ResolveResponse) GetRoot() *DependencyNode {
@@ -4832,7 +5056,7 @@ type DependencyNode struct {
 
 func (x *DependencyNode) Reset() {
 	*x = DependencyNode{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[80]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4844,7 +5068,7 @@ func (x *DependencyNode) String() string {
 func (*DependencyNode) ProtoMessage() {}
 
 func (x *DependencyNode) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[80]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4857,7 +5081,7 @@ func (x *DependencyNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DependencyNode.ProtoReflect.Descriptor instead.
 func (*DependencyNode) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{80}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{85}
 }
 
 func (x *DependencyNode) GetName() string {
@@ -4943,7 +5167,7 @@ type ForgeAdvisoryWarning struct {
 
 func (x *ForgeAdvisoryWarning) Reset() {
 	*x = ForgeAdvisoryWarning{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[81]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4955,7 +5179,7 @@ func (x *ForgeAdvisoryWarning) String() string {
 func (*ForgeAdvisoryWarning) ProtoMessage() {}
 
 func (x *ForgeAdvisoryWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[81]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4968,7 +5192,7 @@ func (x *ForgeAdvisoryWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeAdvisoryWarning.ProtoReflect.Descriptor instead.
 func (*ForgeAdvisoryWarning) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{81}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ForgeAdvisoryWarning) GetCode() string {
@@ -5177,6 +5401,21 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\tClassList\x122\n" +
 	"\aclasses\x18\x01 \x03(\v2\x18.stagehand.host.v1.ClassR\aclasses\"5\n" +
 	"\x12OnboardNodeRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\tR\n" +
+	"proposalId\"C\n" +
+	" ApplyEnvironmentDuplicateRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\tR\n" +
+	"proposalId\"B\n" +
+	"\x1fApplyEnvironmentSettingsRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\tR\n" +
+	"proposalId\"H\n" +
+	"%ApplyPuppetfileModuleOverwriteRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\tR\n" +
+	"proposalId\"B\n" +
+	"\x1fApplyHieraLevelOverwriteRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\tR\n" +
+	"proposalId\"D\n" +
+	"!ApplyHieraDataKeyOverwriteRequest\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\tR\n" +
 	"proposalId\"\x97\x01\n" +
 	"\vEnvironment\x12\x12\n" +
@@ -5430,28 +5669,33 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\x0eListNodeGroups\x12(.stagehand.host.v1.ListNodeGroupsRequest\x1a\x1c.stagehand.host.v1.GroupList\x12S\n" +
 	"\x0eAddNodeToGroup\x12).stagehand.host.v1.GroupMembershipRequest\x1a\x16.google.protobuf.Empty\x12H\n" +
 	"\vListClasses\x12\x1b.stagehand.host.v1.GroupRef\x1a\x1c.stagehand.host.v1.ClassList\x12M\n" +
-	"\vOnboardNode\x12%.stagehand.host.v1.OnboardNodeRequest\x1a\x17.stagehand.host.v1.Node2\xd2\x11\n" +
+	"\vOnboardNode\x12%.stagehand.host.v1.OnboardNodeRequest\x1a\x17.stagehand.host.v1.Node2\xad\x16\n" +
 	"\x04Code\x12k\n" +
 	"\x10ListEnvironments\x12*.stagehand.host.v1.ListEnvironmentsRequest\x1a+.stagehand.host.v1.ListEnvironmentsResponse\x12Z\n" +
 	"\x0eGetEnvironment\x12(.stagehand.host.v1.GetEnvironmentRequest\x1a\x1e.stagehand.host.v1.Environment\x12`\n" +
 	"\x11CreateEnvironment\x12+.stagehand.host.v1.CreateEnvironmentRequest\x1a\x1e.stagehand.host.v1.Environment\x12`\n" +
 	"\x11RenameEnvironment\x12+.stagehand.host.v1.RenameEnvironmentRequest\x1a\x1e.stagehand.host.v1.Environment\x12X\n" +
 	"\x11DeleteEnvironment\x12+.stagehand.host.v1.DeleteEnvironmentRequest\x1a\x16.google.protobuf.Empty\x12f\n" +
-	"\x14DuplicateEnvironment\x12..stagehand.host.v1.DuplicateEnvironmentRequest\x1a\x1e.stagehand.host.v1.Environment\x12r\n" +
+	"\x14DuplicateEnvironment\x12..stagehand.host.v1.DuplicateEnvironmentRequest\x1a\x1e.stagehand.host.v1.Environment\x12p\n" +
+	"\x19ApplyEnvironmentDuplicate\x123.stagehand.host.v1.ApplyEnvironmentDuplicateRequest\x1a\x1e.stagehand.host.v1.Environment\x12r\n" +
 	"\x16GetEnvironmentSettings\x120.stagehand.host.v1.GetEnvironmentSettingsRequest\x1a&.stagehand.host.v1.EnvironmentSettings\x12r\n" +
-	"\x16PutEnvironmentSettings\x120.stagehand.host.v1.PutEnvironmentSettingsRequest\x1a&.stagehand.host.v1.EnvironmentSettings\x12z\n" +
+	"\x16PutEnvironmentSettings\x120.stagehand.host.v1.PutEnvironmentSettingsRequest\x1a&.stagehand.host.v1.EnvironmentSettings\x12v\n" +
+	"\x18ApplyEnvironmentSettings\x122.stagehand.host.v1.ApplyEnvironmentSettingsRequest\x1a&.stagehand.host.v1.EnvironmentSettings\x12z\n" +
 	"\x15ListPuppetfileModules\x12/.stagehand.host.v1.ListPuppetfileModulesRequest\x1a0.stagehand.host.v1.ListPuppetfileModulesResponse\x12i\n" +
-	"\x13PutPuppetfileModule\x12-.stagehand.host.v1.PutPuppetfileModuleRequest\x1a#.stagehand.host.v1.PuppetfileModule\x12b\n" +
+	"\x13PutPuppetfileModule\x12-.stagehand.host.v1.PutPuppetfileModuleRequest\x1a#.stagehand.host.v1.PuppetfileModule\x12\x7f\n" +
+	"\x1eApplyPuppetfileModuleOverwrite\x128.stagehand.host.v1.ApplyPuppetfileModuleOverwriteRequest\x1a#.stagehand.host.v1.PuppetfileModule\x12b\n" +
 	"\x16RemovePuppetfileModule\x120.stagehand.host.v1.RemovePuppetfileModuleRequest\x1a\x16.google.protobuf.Empty\x12U\n" +
 	"\fSetModuledir\x12&.stagehand.host.v1.SetModuledirRequest\x1a\x1d.stagehand.host.v1.Puppetfile\x12e\n" +
 	"\x10RenderPuppetfile\x12*.stagehand.host.v1.RenderPuppetfileRequest\x1a%.stagehand.host.v1.RenderedPuppetfile\x12c\n" +
 	"\x11GetHieraHierarchy\x12+.stagehand.host.v1.GetHieraHierarchyRequest\x1a!.stagehand.host.v1.HieraHierarchy\x12b\n" +
-	"\rPutHieraLevel\x12'.stagehand.host.v1.PutHieraLevelRequest\x1a(.stagehand.host.v1.PutHieraLevelResponse\x12a\n" +
+	"\rPutHieraLevel\x12'.stagehand.host.v1.PutHieraLevelRequest\x1a(.stagehand.host.v1.PutHieraLevelResponse\x12x\n" +
+	"\x18ApplyHieraLevelOverwrite\x122.stagehand.host.v1.ApplyHieraLevelOverwriteRequest\x1a(.stagehand.host.v1.PutHieraLevelResponse\x12a\n" +
 	"\x10RemoveHieraLevel\x12*.stagehand.host.v1.RemoveHieraLevelRequest\x1a!.stagehand.host.v1.HieraHierarchy\x12e\n" +
 	"\x12ReorderHieraLevels\x12,.stagehand.host.v1.ReorderHieraLevelsRequest\x1a!.stagehand.host.v1.HieraHierarchy\x12q\n" +
 	"\x12ListHieraDataFiles\x12,.stagehand.host.v1.ListHieraDataFilesRequest\x1a-.stagehand.host.v1.ListHieraDataFilesResponse\x12`\n" +
 	"\x10GetHieraDataFile\x12*.stagehand.host.v1.GetHieraDataFileRequest\x1a .stagehand.host.v1.HieraDataFile\x12^\n" +
-	"\x0fPutHieraDataKey\x12).stagehand.host.v1.PutHieraDataKeyRequest\x1a .stagehand.host.v1.HieraDataFile\x12d\n" +
+	"\x0fPutHieraDataKey\x12).stagehand.host.v1.PutHieraDataKeyRequest\x1a .stagehand.host.v1.HieraDataFile\x12t\n" +
+	"\x1aApplyHieraDataKeyOverwrite\x124.stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest\x1a .stagehand.host.v1.HieraDataFile\x12d\n" +
 	"\x12RemoveHieraDataKey\x12,.stagehand.host.v1.RemoveHieraDataKeyRequest\x1a .stagehand.host.v1.HieraDataFile\x12\\\n" +
 	"\x13DeleteHieraDataFile\x12-.stagehand.host.v1.DeleteHieraDataFileRequest\x1a\x16.google.protobuf.Empty2\xa8\x01\n" +
 	"\x05Forge\x12M\n" +
@@ -5471,176 +5715,181 @@ func file_stagehand_host_v1_host_proto_rawDescGZIP() []byte {
 }
 
 var file_stagehand_host_v1_host_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 87)
+var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 92)
 var file_stagehand_host_v1_host_proto_goTypes = []any{
-	(QueryDocumentsRequest_Op)(0),         // 0: stagehand.host.v1.QueryDocumentsRequest.Op
-	(Node_Status)(0),                      // 1: stagehand.host.v1.Node.Status
-	(QueryNodesRequest_Op)(0),             // 2: stagehand.host.v1.QueryNodesRequest.Op
-	(*Document)(nil),                      // 3: stagehand.host.v1.Document
-	(*GetDocumentRequest)(nil),            // 4: stagehand.host.v1.GetDocumentRequest
-	(*PutDocumentRequest)(nil),            // 5: stagehand.host.v1.PutDocumentRequest
-	(*PutDocumentResponse)(nil),           // 6: stagehand.host.v1.PutDocumentResponse
-	(*ListDocumentsRequest)(nil),          // 7: stagehand.host.v1.ListDocumentsRequest
-	(*ListDocumentsResponse)(nil),         // 8: stagehand.host.v1.ListDocumentsResponse
-	(*QueryDocumentsRequest)(nil),         // 9: stagehand.host.v1.QueryDocumentsRequest
-	(*DeleteDocumentRequest)(nil),         // 10: stagehand.host.v1.DeleteDocumentRequest
-	(*SettingsDocument)(nil),              // 11: stagehand.host.v1.SettingsDocument
-	(*SettingsChange)(nil),                // 12: stagehand.host.v1.SettingsChange
-	(*StoreSecretRequest)(nil),            // 13: stagehand.host.v1.StoreSecretRequest
-	(*SecretRef)(nil),                     // 14: stagehand.host.v1.SecretRef
-	(*SecretValue)(nil),                   // 15: stagehand.host.v1.SecretValue
-	(*Sealed)(nil),                        // 16: stagehand.host.v1.Sealed
-	(*IssueTokenRequest)(nil),             // 17: stagehand.host.v1.IssueTokenRequest
-	(*IssuedToken)(nil),                   // 18: stagehand.host.v1.IssuedToken
-	(*VerifyTokenRequest)(nil),            // 19: stagehand.host.v1.VerifyTokenRequest
-	(*Principal)(nil),                     // 20: stagehand.host.v1.Principal
-	(*TokenRef)(nil),                      // 21: stagehand.host.v1.TokenRef
-	(*Node)(nil),                          // 22: stagehand.host.v1.Node
-	(*GetNodeRequest)(nil),                // 23: stagehand.host.v1.GetNodeRequest
-	(*DiscoverResponse)(nil),              // 24: stagehand.host.v1.DiscoverResponse
-	(*ListNodesRequest)(nil),              // 25: stagehand.host.v1.ListNodesRequest
-	(*ListNodesResponse)(nil),             // 26: stagehand.host.v1.ListNodesResponse
-	(*QueryNodesRequest)(nil),             // 27: stagehand.host.v1.QueryNodesRequest
-	(*PutFactsRequest)(nil),               // 28: stagehand.host.v1.PutFactsRequest
-	(*Group)(nil),                         // 29: stagehand.host.v1.Group
-	(*GroupRef)(nil),                      // 30: stagehand.host.v1.GroupRef
-	(*GroupList)(nil),                     // 31: stagehand.host.v1.GroupList
-	(*ListGroupNodesRequest)(nil),         // 32: stagehand.host.v1.ListGroupNodesRequest
-	(*ListNodeGroupsRequest)(nil),         // 33: stagehand.host.v1.ListNodeGroupsRequest
-	(*GroupMembershipRequest)(nil),        // 34: stagehand.host.v1.GroupMembershipRequest
-	(*Class)(nil),                         // 35: stagehand.host.v1.Class
-	(*ClassList)(nil),                     // 36: stagehand.host.v1.ClassList
-	(*OnboardNodeRequest)(nil),            // 37: stagehand.host.v1.OnboardNodeRequest
-	(*Environment)(nil),                   // 38: stagehand.host.v1.Environment
-	(*ListEnvironmentsRequest)(nil),       // 39: stagehand.host.v1.ListEnvironmentsRequest
-	(*ListEnvironmentsResponse)(nil),      // 40: stagehand.host.v1.ListEnvironmentsResponse
-	(*GetEnvironmentRequest)(nil),         // 41: stagehand.host.v1.GetEnvironmentRequest
-	(*CreateEnvironmentRequest)(nil),      // 42: stagehand.host.v1.CreateEnvironmentRequest
-	(*RenameEnvironmentRequest)(nil),      // 43: stagehand.host.v1.RenameEnvironmentRequest
-	(*DeleteEnvironmentRequest)(nil),      // 44: stagehand.host.v1.DeleteEnvironmentRequest
-	(*DuplicateEnvironmentRequest)(nil),   // 45: stagehand.host.v1.DuplicateEnvironmentRequest
-	(*EnvironmentSettings)(nil),           // 46: stagehand.host.v1.EnvironmentSettings
-	(*GetEnvironmentSettingsRequest)(nil), // 47: stagehand.host.v1.GetEnvironmentSettingsRequest
-	(*PutEnvironmentSettingsRequest)(nil), // 48: stagehand.host.v1.PutEnvironmentSettingsRequest
-	(*PuppetfileModule)(nil),              // 49: stagehand.host.v1.PuppetfileModule
-	(*ForgeSource)(nil),                   // 50: stagehand.host.v1.ForgeSource
-	(*GitSource)(nil),                     // 51: stagehand.host.v1.GitSource
-	(*ControlBranch)(nil),                 // 52: stagehand.host.v1.ControlBranch
-	(*Puppetfile)(nil),                    // 53: stagehand.host.v1.Puppetfile
-	(*ListPuppetfileModulesRequest)(nil),  // 54: stagehand.host.v1.ListPuppetfileModulesRequest
-	(*ListPuppetfileModulesResponse)(nil), // 55: stagehand.host.v1.ListPuppetfileModulesResponse
-	(*PutPuppetfileModuleRequest)(nil),    // 56: stagehand.host.v1.PutPuppetfileModuleRequest
-	(*RemovePuppetfileModuleRequest)(nil), // 57: stagehand.host.v1.RemovePuppetfileModuleRequest
-	(*SetModuledirRequest)(nil),           // 58: stagehand.host.v1.SetModuledirRequest
-	(*RenderPuppetfileRequest)(nil),       // 59: stagehand.host.v1.RenderPuppetfileRequest
-	(*RenderedPuppetfile)(nil),            // 60: stagehand.host.v1.RenderedPuppetfile
-	(*HieraLevel)(nil),                    // 61: stagehand.host.v1.HieraLevel
-	(*HieraHierarchy)(nil),                // 62: stagehand.host.v1.HieraHierarchy
-	(*LintWarning)(nil),                   // 63: stagehand.host.v1.LintWarning
-	(*GetHieraHierarchyRequest)(nil),      // 64: stagehand.host.v1.GetHieraHierarchyRequest
-	(*PutHieraLevelRequest)(nil),          // 65: stagehand.host.v1.PutHieraLevelRequest
-	(*PutHieraLevelResponse)(nil),         // 66: stagehand.host.v1.PutHieraLevelResponse
-	(*RemoveHieraLevelRequest)(nil),       // 67: stagehand.host.v1.RemoveHieraLevelRequest
-	(*ReorderHieraLevelsRequest)(nil),     // 68: stagehand.host.v1.ReorderHieraLevelsRequest
-	(*HieraDataFile)(nil),                 // 69: stagehand.host.v1.HieraDataFile
-	(*ListHieraDataFilesRequest)(nil),     // 70: stagehand.host.v1.ListHieraDataFilesRequest
-	(*ListHieraDataFilesResponse)(nil),    // 71: stagehand.host.v1.ListHieraDataFilesResponse
-	(*GetHieraDataFileRequest)(nil),       // 72: stagehand.host.v1.GetHieraDataFileRequest
-	(*PutHieraDataKeyRequest)(nil),        // 73: stagehand.host.v1.PutHieraDataKeyRequest
-	(*RemoveHieraDataKeyRequest)(nil),     // 74: stagehand.host.v1.RemoveHieraDataKeyRequest
-	(*DeleteHieraDataFileRequest)(nil),    // 75: stagehand.host.v1.DeleteHieraDataFileRequest
-	(*ForgeSourceSelection)(nil),          // 76: stagehand.host.v1.ForgeSourceSelection
-	(*ForgeSourceConfig)(nil),             // 77: stagehand.host.v1.ForgeSourceConfig
-	(*SearchRequest)(nil),                 // 78: stagehand.host.v1.SearchRequest
-	(*SearchResponse)(nil),                // 79: stagehand.host.v1.SearchResponse
-	(*ForgeSearchResult)(nil),             // 80: stagehand.host.v1.ForgeSearchResult
-	(*ResolveRequest)(nil),                // 81: stagehand.host.v1.ResolveRequest
-	(*ResolveResponse)(nil),               // 82: stagehand.host.v1.ResolveResponse
-	(*DependencyNode)(nil),                // 83: stagehand.host.v1.DependencyNode
-	(*ForgeAdvisoryWarning)(nil),          // 84: stagehand.host.v1.ForgeAdvisoryWarning
-	nil,                                   // 85: stagehand.host.v1.Node.FactsEntry
-	nil,                                   // 86: stagehand.host.v1.PutFactsRequest.FactsEntry
-	nil,                                   // 87: stagehand.host.v1.HieraLevel.LookupOptionsEntry
-	nil,                                   // 88: stagehand.host.v1.HieraDataFile.ValuesEntry
-	nil,                                   // 89: stagehand.host.v1.HieraDataFile.LookupOptionsEntry
-	(*Json)(nil),                          // 90: stagehand.host.v1.Json
-	(*timestamppb.Timestamp)(nil),         // 91: google.protobuf.Timestamp
-	(*Page)(nil),                          // 92: stagehand.host.v1.Page
-	(*PageInfo)(nil),                      // 93: stagehand.host.v1.PageInfo
-	(*emptypb.Empty)(nil),                 // 94: google.protobuf.Empty
+	(QueryDocumentsRequest_Op)(0),                 // 0: stagehand.host.v1.QueryDocumentsRequest.Op
+	(Node_Status)(0),                              // 1: stagehand.host.v1.Node.Status
+	(QueryNodesRequest_Op)(0),                     // 2: stagehand.host.v1.QueryNodesRequest.Op
+	(*Document)(nil),                              // 3: stagehand.host.v1.Document
+	(*GetDocumentRequest)(nil),                    // 4: stagehand.host.v1.GetDocumentRequest
+	(*PutDocumentRequest)(nil),                    // 5: stagehand.host.v1.PutDocumentRequest
+	(*PutDocumentResponse)(nil),                   // 6: stagehand.host.v1.PutDocumentResponse
+	(*ListDocumentsRequest)(nil),                  // 7: stagehand.host.v1.ListDocumentsRequest
+	(*ListDocumentsResponse)(nil),                 // 8: stagehand.host.v1.ListDocumentsResponse
+	(*QueryDocumentsRequest)(nil),                 // 9: stagehand.host.v1.QueryDocumentsRequest
+	(*DeleteDocumentRequest)(nil),                 // 10: stagehand.host.v1.DeleteDocumentRequest
+	(*SettingsDocument)(nil),                      // 11: stagehand.host.v1.SettingsDocument
+	(*SettingsChange)(nil),                        // 12: stagehand.host.v1.SettingsChange
+	(*StoreSecretRequest)(nil),                    // 13: stagehand.host.v1.StoreSecretRequest
+	(*SecretRef)(nil),                             // 14: stagehand.host.v1.SecretRef
+	(*SecretValue)(nil),                           // 15: stagehand.host.v1.SecretValue
+	(*Sealed)(nil),                                // 16: stagehand.host.v1.Sealed
+	(*IssueTokenRequest)(nil),                     // 17: stagehand.host.v1.IssueTokenRequest
+	(*IssuedToken)(nil),                           // 18: stagehand.host.v1.IssuedToken
+	(*VerifyTokenRequest)(nil),                    // 19: stagehand.host.v1.VerifyTokenRequest
+	(*Principal)(nil),                             // 20: stagehand.host.v1.Principal
+	(*TokenRef)(nil),                              // 21: stagehand.host.v1.TokenRef
+	(*Node)(nil),                                  // 22: stagehand.host.v1.Node
+	(*GetNodeRequest)(nil),                        // 23: stagehand.host.v1.GetNodeRequest
+	(*DiscoverResponse)(nil),                      // 24: stagehand.host.v1.DiscoverResponse
+	(*ListNodesRequest)(nil),                      // 25: stagehand.host.v1.ListNodesRequest
+	(*ListNodesResponse)(nil),                     // 26: stagehand.host.v1.ListNodesResponse
+	(*QueryNodesRequest)(nil),                     // 27: stagehand.host.v1.QueryNodesRequest
+	(*PutFactsRequest)(nil),                       // 28: stagehand.host.v1.PutFactsRequest
+	(*Group)(nil),                                 // 29: stagehand.host.v1.Group
+	(*GroupRef)(nil),                              // 30: stagehand.host.v1.GroupRef
+	(*GroupList)(nil),                             // 31: stagehand.host.v1.GroupList
+	(*ListGroupNodesRequest)(nil),                 // 32: stagehand.host.v1.ListGroupNodesRequest
+	(*ListNodeGroupsRequest)(nil),                 // 33: stagehand.host.v1.ListNodeGroupsRequest
+	(*GroupMembershipRequest)(nil),                // 34: stagehand.host.v1.GroupMembershipRequest
+	(*Class)(nil),                                 // 35: stagehand.host.v1.Class
+	(*ClassList)(nil),                             // 36: stagehand.host.v1.ClassList
+	(*OnboardNodeRequest)(nil),                    // 37: stagehand.host.v1.OnboardNodeRequest
+	(*ApplyEnvironmentDuplicateRequest)(nil),      // 38: stagehand.host.v1.ApplyEnvironmentDuplicateRequest
+	(*ApplyEnvironmentSettingsRequest)(nil),       // 39: stagehand.host.v1.ApplyEnvironmentSettingsRequest
+	(*ApplyPuppetfileModuleOverwriteRequest)(nil), // 40: stagehand.host.v1.ApplyPuppetfileModuleOverwriteRequest
+	(*ApplyHieraLevelOverwriteRequest)(nil),       // 41: stagehand.host.v1.ApplyHieraLevelOverwriteRequest
+	(*ApplyHieraDataKeyOverwriteRequest)(nil),     // 42: stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest
+	(*Environment)(nil),                           // 43: stagehand.host.v1.Environment
+	(*ListEnvironmentsRequest)(nil),               // 44: stagehand.host.v1.ListEnvironmentsRequest
+	(*ListEnvironmentsResponse)(nil),              // 45: stagehand.host.v1.ListEnvironmentsResponse
+	(*GetEnvironmentRequest)(nil),                 // 46: stagehand.host.v1.GetEnvironmentRequest
+	(*CreateEnvironmentRequest)(nil),              // 47: stagehand.host.v1.CreateEnvironmentRequest
+	(*RenameEnvironmentRequest)(nil),              // 48: stagehand.host.v1.RenameEnvironmentRequest
+	(*DeleteEnvironmentRequest)(nil),              // 49: stagehand.host.v1.DeleteEnvironmentRequest
+	(*DuplicateEnvironmentRequest)(nil),           // 50: stagehand.host.v1.DuplicateEnvironmentRequest
+	(*EnvironmentSettings)(nil),                   // 51: stagehand.host.v1.EnvironmentSettings
+	(*GetEnvironmentSettingsRequest)(nil),         // 52: stagehand.host.v1.GetEnvironmentSettingsRequest
+	(*PutEnvironmentSettingsRequest)(nil),         // 53: stagehand.host.v1.PutEnvironmentSettingsRequest
+	(*PuppetfileModule)(nil),                      // 54: stagehand.host.v1.PuppetfileModule
+	(*ForgeSource)(nil),                           // 55: stagehand.host.v1.ForgeSource
+	(*GitSource)(nil),                             // 56: stagehand.host.v1.GitSource
+	(*ControlBranch)(nil),                         // 57: stagehand.host.v1.ControlBranch
+	(*Puppetfile)(nil),                            // 58: stagehand.host.v1.Puppetfile
+	(*ListPuppetfileModulesRequest)(nil),          // 59: stagehand.host.v1.ListPuppetfileModulesRequest
+	(*ListPuppetfileModulesResponse)(nil),         // 60: stagehand.host.v1.ListPuppetfileModulesResponse
+	(*PutPuppetfileModuleRequest)(nil),            // 61: stagehand.host.v1.PutPuppetfileModuleRequest
+	(*RemovePuppetfileModuleRequest)(nil),         // 62: stagehand.host.v1.RemovePuppetfileModuleRequest
+	(*SetModuledirRequest)(nil),                   // 63: stagehand.host.v1.SetModuledirRequest
+	(*RenderPuppetfileRequest)(nil),               // 64: stagehand.host.v1.RenderPuppetfileRequest
+	(*RenderedPuppetfile)(nil),                    // 65: stagehand.host.v1.RenderedPuppetfile
+	(*HieraLevel)(nil),                            // 66: stagehand.host.v1.HieraLevel
+	(*HieraHierarchy)(nil),                        // 67: stagehand.host.v1.HieraHierarchy
+	(*LintWarning)(nil),                           // 68: stagehand.host.v1.LintWarning
+	(*GetHieraHierarchyRequest)(nil),              // 69: stagehand.host.v1.GetHieraHierarchyRequest
+	(*PutHieraLevelRequest)(nil),                  // 70: stagehand.host.v1.PutHieraLevelRequest
+	(*PutHieraLevelResponse)(nil),                 // 71: stagehand.host.v1.PutHieraLevelResponse
+	(*RemoveHieraLevelRequest)(nil),               // 72: stagehand.host.v1.RemoveHieraLevelRequest
+	(*ReorderHieraLevelsRequest)(nil),             // 73: stagehand.host.v1.ReorderHieraLevelsRequest
+	(*HieraDataFile)(nil),                         // 74: stagehand.host.v1.HieraDataFile
+	(*ListHieraDataFilesRequest)(nil),             // 75: stagehand.host.v1.ListHieraDataFilesRequest
+	(*ListHieraDataFilesResponse)(nil),            // 76: stagehand.host.v1.ListHieraDataFilesResponse
+	(*GetHieraDataFileRequest)(nil),               // 77: stagehand.host.v1.GetHieraDataFileRequest
+	(*PutHieraDataKeyRequest)(nil),                // 78: stagehand.host.v1.PutHieraDataKeyRequest
+	(*RemoveHieraDataKeyRequest)(nil),             // 79: stagehand.host.v1.RemoveHieraDataKeyRequest
+	(*DeleteHieraDataFileRequest)(nil),            // 80: stagehand.host.v1.DeleteHieraDataFileRequest
+	(*ForgeSourceSelection)(nil),                  // 81: stagehand.host.v1.ForgeSourceSelection
+	(*ForgeSourceConfig)(nil),                     // 82: stagehand.host.v1.ForgeSourceConfig
+	(*SearchRequest)(nil),                         // 83: stagehand.host.v1.SearchRequest
+	(*SearchResponse)(nil),                        // 84: stagehand.host.v1.SearchResponse
+	(*ForgeSearchResult)(nil),                     // 85: stagehand.host.v1.ForgeSearchResult
+	(*ResolveRequest)(nil),                        // 86: stagehand.host.v1.ResolveRequest
+	(*ResolveResponse)(nil),                       // 87: stagehand.host.v1.ResolveResponse
+	(*DependencyNode)(nil),                        // 88: stagehand.host.v1.DependencyNode
+	(*ForgeAdvisoryWarning)(nil),                  // 89: stagehand.host.v1.ForgeAdvisoryWarning
+	nil,                                           // 90: stagehand.host.v1.Node.FactsEntry
+	nil,                                           // 91: stagehand.host.v1.PutFactsRequest.FactsEntry
+	nil,                                           // 92: stagehand.host.v1.HieraLevel.LookupOptionsEntry
+	nil,                                           // 93: stagehand.host.v1.HieraDataFile.ValuesEntry
+	nil,                                           // 94: stagehand.host.v1.HieraDataFile.LookupOptionsEntry
+	(*Json)(nil),                                  // 95: stagehand.host.v1.Json
+	(*timestamppb.Timestamp)(nil),                 // 96: google.protobuf.Timestamp
+	(*Page)(nil),                                  // 97: stagehand.host.v1.Page
+	(*PageInfo)(nil),                              // 98: stagehand.host.v1.PageInfo
+	(*emptypb.Empty)(nil),                         // 99: google.protobuf.Empty
 }
 var file_stagehand_host_v1_host_proto_depIdxs = []int32{
-	90,  // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
-	91,  // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
-	91,  // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
-	90,  // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
-	92,  // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	95,  // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
+	96,  // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
+	96,  // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
+	95,  // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
+	97,  // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
 	3,   // 5: stagehand.host.v1.ListDocumentsResponse.documents:type_name -> stagehand.host.v1.Document
-	93,  // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
+	98,  // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
 	0,   // 7: stagehand.host.v1.QueryDocumentsRequest.op:type_name -> stagehand.host.v1.QueryDocumentsRequest.Op
-	90,  // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
-	92,  // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
-	90,  // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
-	91,  // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
-	91,  // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
+	97,  // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	95,  // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
+	96,  // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
+	96,  // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
 	1,   // 13: stagehand.host.v1.Node.status:type_name -> stagehand.host.v1.Node.Status
-	85,  // 14: stagehand.host.v1.Node.facts:type_name -> stagehand.host.v1.Node.FactsEntry
+	90,  // 14: stagehand.host.v1.Node.facts:type_name -> stagehand.host.v1.Node.FactsEntry
 	22,  // 15: stagehand.host.v1.DiscoverResponse.candidates:type_name -> stagehand.host.v1.Node
-	92,  // 16: stagehand.host.v1.ListNodesRequest.page:type_name -> stagehand.host.v1.Page
+	97,  // 16: stagehand.host.v1.ListNodesRequest.page:type_name -> stagehand.host.v1.Page
 	22,  // 17: stagehand.host.v1.ListNodesResponse.nodes:type_name -> stagehand.host.v1.Node
-	93,  // 18: stagehand.host.v1.ListNodesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	98,  // 18: stagehand.host.v1.ListNodesResponse.page:type_name -> stagehand.host.v1.PageInfo
 	2,   // 19: stagehand.host.v1.QueryNodesRequest.op:type_name -> stagehand.host.v1.QueryNodesRequest.Op
-	90,  // 20: stagehand.host.v1.QueryNodesRequest.value:type_name -> stagehand.host.v1.Json
-	92,  // 21: stagehand.host.v1.QueryNodesRequest.page:type_name -> stagehand.host.v1.Page
-	86,  // 22: stagehand.host.v1.PutFactsRequest.facts:type_name -> stagehand.host.v1.PutFactsRequest.FactsEntry
+	95,  // 20: stagehand.host.v1.QueryNodesRequest.value:type_name -> stagehand.host.v1.Json
+	97,  // 21: stagehand.host.v1.QueryNodesRequest.page:type_name -> stagehand.host.v1.Page
+	91,  // 22: stagehand.host.v1.PutFactsRequest.facts:type_name -> stagehand.host.v1.PutFactsRequest.FactsEntry
 	29,  // 23: stagehand.host.v1.GroupList.groups:type_name -> stagehand.host.v1.Group
-	92,  // 24: stagehand.host.v1.ListGroupNodesRequest.page:type_name -> stagehand.host.v1.Page
-	90,  // 25: stagehand.host.v1.Class.parameters:type_name -> stagehand.host.v1.Json
+	97,  // 24: stagehand.host.v1.ListGroupNodesRequest.page:type_name -> stagehand.host.v1.Page
+	95,  // 25: stagehand.host.v1.Class.parameters:type_name -> stagehand.host.v1.Json
 	35,  // 26: stagehand.host.v1.ClassList.classes:type_name -> stagehand.host.v1.Class
-	91,  // 27: stagehand.host.v1.Environment.created_at:type_name -> google.protobuf.Timestamp
-	91,  // 28: stagehand.host.v1.Environment.updated_at:type_name -> google.protobuf.Timestamp
-	92,  // 29: stagehand.host.v1.ListEnvironmentsRequest.page:type_name -> stagehand.host.v1.Page
-	38,  // 30: stagehand.host.v1.ListEnvironmentsResponse.environments:type_name -> stagehand.host.v1.Environment
-	93,  // 31: stagehand.host.v1.ListEnvironmentsResponse.page:type_name -> stagehand.host.v1.PageInfo
-	46,  // 32: stagehand.host.v1.PutEnvironmentSettingsRequest.settings:type_name -> stagehand.host.v1.EnvironmentSettings
-	50,  // 33: stagehand.host.v1.PuppetfileModule.forge:type_name -> stagehand.host.v1.ForgeSource
-	51,  // 34: stagehand.host.v1.PuppetfileModule.git:type_name -> stagehand.host.v1.GitSource
-	52,  // 35: stagehand.host.v1.GitSource.control_branch:type_name -> stagehand.host.v1.ControlBranch
-	49,  // 36: stagehand.host.v1.Puppetfile.modules:type_name -> stagehand.host.v1.PuppetfileModule
-	92,  // 37: stagehand.host.v1.ListPuppetfileModulesRequest.page:type_name -> stagehand.host.v1.Page
-	49,  // 38: stagehand.host.v1.ListPuppetfileModulesResponse.modules:type_name -> stagehand.host.v1.PuppetfileModule
-	93,  // 39: stagehand.host.v1.ListPuppetfileModulesResponse.page:type_name -> stagehand.host.v1.PageInfo
-	49,  // 40: stagehand.host.v1.PutPuppetfileModuleRequest.module:type_name -> stagehand.host.v1.PuppetfileModule
-	87,  // 41: stagehand.host.v1.HieraLevel.lookup_options:type_name -> stagehand.host.v1.HieraLevel.LookupOptionsEntry
-	61,  // 42: stagehand.host.v1.HieraHierarchy.levels:type_name -> stagehand.host.v1.HieraLevel
-	61,  // 43: stagehand.host.v1.PutHieraLevelRequest.level:type_name -> stagehand.host.v1.HieraLevel
-	62,  // 44: stagehand.host.v1.PutHieraLevelResponse.hierarchy:type_name -> stagehand.host.v1.HieraHierarchy
-	63,  // 45: stagehand.host.v1.PutHieraLevelResponse.warnings:type_name -> stagehand.host.v1.LintWarning
-	88,  // 46: stagehand.host.v1.HieraDataFile.values:type_name -> stagehand.host.v1.HieraDataFile.ValuesEntry
-	89,  // 47: stagehand.host.v1.HieraDataFile.lookup_options:type_name -> stagehand.host.v1.HieraDataFile.LookupOptionsEntry
-	92,  // 48: stagehand.host.v1.ListHieraDataFilesRequest.page:type_name -> stagehand.host.v1.Page
-	93,  // 49: stagehand.host.v1.ListHieraDataFilesResponse.page:type_name -> stagehand.host.v1.PageInfo
-	90,  // 50: stagehand.host.v1.PutHieraDataKeyRequest.value:type_name -> stagehand.host.v1.Json
-	76,  // 51: stagehand.host.v1.SearchRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
-	92,  // 52: stagehand.host.v1.SearchRequest.page:type_name -> stagehand.host.v1.Page
-	80,  // 53: stagehand.host.v1.SearchResponse.results:type_name -> stagehand.host.v1.ForgeSearchResult
-	93,  // 54: stagehand.host.v1.SearchResponse.page:type_name -> stagehand.host.v1.PageInfo
-	91,  // 55: stagehand.host.v1.ForgeSearchResult.release_date:type_name -> google.protobuf.Timestamp
-	76,  // 56: stagehand.host.v1.ResolveRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
-	83,  // 57: stagehand.host.v1.ResolveResponse.root:type_name -> stagehand.host.v1.DependencyNode
-	84,  // 58: stagehand.host.v1.ResolveResponse.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
-	83,  // 59: stagehand.host.v1.DependencyNode.dependencies:type_name -> stagehand.host.v1.DependencyNode
-	84,  // 60: stagehand.host.v1.DependencyNode.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
-	90,  // 61: stagehand.host.v1.Node.FactsEntry.value:type_name -> stagehand.host.v1.Json
-	90,  // 62: stagehand.host.v1.PutFactsRequest.FactsEntry.value:type_name -> stagehand.host.v1.Json
-	90,  // 63: stagehand.host.v1.HieraDataFile.ValuesEntry.value:type_name -> stagehand.host.v1.Json
+	96,  // 27: stagehand.host.v1.Environment.created_at:type_name -> google.protobuf.Timestamp
+	96,  // 28: stagehand.host.v1.Environment.updated_at:type_name -> google.protobuf.Timestamp
+	97,  // 29: stagehand.host.v1.ListEnvironmentsRequest.page:type_name -> stagehand.host.v1.Page
+	43,  // 30: stagehand.host.v1.ListEnvironmentsResponse.environments:type_name -> stagehand.host.v1.Environment
+	98,  // 31: stagehand.host.v1.ListEnvironmentsResponse.page:type_name -> stagehand.host.v1.PageInfo
+	51,  // 32: stagehand.host.v1.PutEnvironmentSettingsRequest.settings:type_name -> stagehand.host.v1.EnvironmentSettings
+	55,  // 33: stagehand.host.v1.PuppetfileModule.forge:type_name -> stagehand.host.v1.ForgeSource
+	56,  // 34: stagehand.host.v1.PuppetfileModule.git:type_name -> stagehand.host.v1.GitSource
+	57,  // 35: stagehand.host.v1.GitSource.control_branch:type_name -> stagehand.host.v1.ControlBranch
+	54,  // 36: stagehand.host.v1.Puppetfile.modules:type_name -> stagehand.host.v1.PuppetfileModule
+	97,  // 37: stagehand.host.v1.ListPuppetfileModulesRequest.page:type_name -> stagehand.host.v1.Page
+	54,  // 38: stagehand.host.v1.ListPuppetfileModulesResponse.modules:type_name -> stagehand.host.v1.PuppetfileModule
+	98,  // 39: stagehand.host.v1.ListPuppetfileModulesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	54,  // 40: stagehand.host.v1.PutPuppetfileModuleRequest.module:type_name -> stagehand.host.v1.PuppetfileModule
+	92,  // 41: stagehand.host.v1.HieraLevel.lookup_options:type_name -> stagehand.host.v1.HieraLevel.LookupOptionsEntry
+	66,  // 42: stagehand.host.v1.HieraHierarchy.levels:type_name -> stagehand.host.v1.HieraLevel
+	66,  // 43: stagehand.host.v1.PutHieraLevelRequest.level:type_name -> stagehand.host.v1.HieraLevel
+	67,  // 44: stagehand.host.v1.PutHieraLevelResponse.hierarchy:type_name -> stagehand.host.v1.HieraHierarchy
+	68,  // 45: stagehand.host.v1.PutHieraLevelResponse.warnings:type_name -> stagehand.host.v1.LintWarning
+	93,  // 46: stagehand.host.v1.HieraDataFile.values:type_name -> stagehand.host.v1.HieraDataFile.ValuesEntry
+	94,  // 47: stagehand.host.v1.HieraDataFile.lookup_options:type_name -> stagehand.host.v1.HieraDataFile.LookupOptionsEntry
+	97,  // 48: stagehand.host.v1.ListHieraDataFilesRequest.page:type_name -> stagehand.host.v1.Page
+	98,  // 49: stagehand.host.v1.ListHieraDataFilesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	95,  // 50: stagehand.host.v1.PutHieraDataKeyRequest.value:type_name -> stagehand.host.v1.Json
+	81,  // 51: stagehand.host.v1.SearchRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
+	97,  // 52: stagehand.host.v1.SearchRequest.page:type_name -> stagehand.host.v1.Page
+	85,  // 53: stagehand.host.v1.SearchResponse.results:type_name -> stagehand.host.v1.ForgeSearchResult
+	98,  // 54: stagehand.host.v1.SearchResponse.page:type_name -> stagehand.host.v1.PageInfo
+	96,  // 55: stagehand.host.v1.ForgeSearchResult.release_date:type_name -> google.protobuf.Timestamp
+	81,  // 56: stagehand.host.v1.ResolveRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
+	88,  // 57: stagehand.host.v1.ResolveResponse.root:type_name -> stagehand.host.v1.DependencyNode
+	89,  // 58: stagehand.host.v1.ResolveResponse.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
+	88,  // 59: stagehand.host.v1.DependencyNode.dependencies:type_name -> stagehand.host.v1.DependencyNode
+	89,  // 60: stagehand.host.v1.DependencyNode.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
+	95,  // 61: stagehand.host.v1.Node.FactsEntry.value:type_name -> stagehand.host.v1.Json
+	95,  // 62: stagehand.host.v1.PutFactsRequest.FactsEntry.value:type_name -> stagehand.host.v1.Json
+	95,  // 63: stagehand.host.v1.HieraDataFile.ValuesEntry.value:type_name -> stagehand.host.v1.Json
 	4,   // 64: stagehand.host.v1.Documents.Get:input_type -> stagehand.host.v1.GetDocumentRequest
 	5,   // 65: stagehand.host.v1.Documents.Put:input_type -> stagehand.host.v1.PutDocumentRequest
 	7,   // 66: stagehand.host.v1.Documents.List:input_type -> stagehand.host.v1.ListDocumentsRequest
 	9,   // 67: stagehand.host.v1.Documents.Query:input_type -> stagehand.host.v1.QueryDocumentsRequest
 	10,  // 68: stagehand.host.v1.Documents.Delete:input_type -> stagehand.host.v1.DeleteDocumentRequest
-	94,  // 69: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
-	94,  // 70: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
+	99,  // 69: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
+	99,  // 70: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
 	13,  // 71: stagehand.host.v1.Secrets.Store:input_type -> stagehand.host.v1.StoreSecretRequest
 	14,  // 72: stagehand.host.v1.Secrets.Reveal:input_type -> stagehand.host.v1.SecretRef
 	15,  // 73: stagehand.host.v1.Secrets.Seal:input_type -> stagehand.host.v1.SecretValue
@@ -5650,92 +5899,102 @@ var file_stagehand_host_v1_host_proto_depIdxs = []int32{
 	19,  // 77: stagehand.host.v1.Auth.Verify:input_type -> stagehand.host.v1.VerifyTokenRequest
 	21,  // 78: stagehand.host.v1.Auth.Revoke:input_type -> stagehand.host.v1.TokenRef
 	23,  // 79: stagehand.host.v1.Inventory.GetNode:input_type -> stagehand.host.v1.GetNodeRequest
-	94,  // 80: stagehand.host.v1.Inventory.Discover:input_type -> google.protobuf.Empty
+	99,  // 80: stagehand.host.v1.Inventory.Discover:input_type -> google.protobuf.Empty
 	25,  // 81: stagehand.host.v1.Inventory.ListNodes:input_type -> stagehand.host.v1.ListNodesRequest
 	27,  // 82: stagehand.host.v1.Inventory.QueryNodes:input_type -> stagehand.host.v1.QueryNodesRequest
 	28,  // 83: stagehand.host.v1.Inventory.PutFacts:input_type -> stagehand.host.v1.PutFactsRequest
-	94,  // 84: stagehand.host.v1.Inventory.ListGroups:input_type -> google.protobuf.Empty
+	99,  // 84: stagehand.host.v1.Inventory.ListGroups:input_type -> google.protobuf.Empty
 	32,  // 85: stagehand.host.v1.Inventory.ListGroupNodes:input_type -> stagehand.host.v1.ListGroupNodesRequest
 	33,  // 86: stagehand.host.v1.Inventory.ListNodeGroups:input_type -> stagehand.host.v1.ListNodeGroupsRequest
 	34,  // 87: stagehand.host.v1.Inventory.AddNodeToGroup:input_type -> stagehand.host.v1.GroupMembershipRequest
 	30,  // 88: stagehand.host.v1.Inventory.ListClasses:input_type -> stagehand.host.v1.GroupRef
 	37,  // 89: stagehand.host.v1.Inventory.OnboardNode:input_type -> stagehand.host.v1.OnboardNodeRequest
-	39,  // 90: stagehand.host.v1.Code.ListEnvironments:input_type -> stagehand.host.v1.ListEnvironmentsRequest
-	41,  // 91: stagehand.host.v1.Code.GetEnvironment:input_type -> stagehand.host.v1.GetEnvironmentRequest
-	42,  // 92: stagehand.host.v1.Code.CreateEnvironment:input_type -> stagehand.host.v1.CreateEnvironmentRequest
-	43,  // 93: stagehand.host.v1.Code.RenameEnvironment:input_type -> stagehand.host.v1.RenameEnvironmentRequest
-	44,  // 94: stagehand.host.v1.Code.DeleteEnvironment:input_type -> stagehand.host.v1.DeleteEnvironmentRequest
-	45,  // 95: stagehand.host.v1.Code.DuplicateEnvironment:input_type -> stagehand.host.v1.DuplicateEnvironmentRequest
-	47,  // 96: stagehand.host.v1.Code.GetEnvironmentSettings:input_type -> stagehand.host.v1.GetEnvironmentSettingsRequest
-	48,  // 97: stagehand.host.v1.Code.PutEnvironmentSettings:input_type -> stagehand.host.v1.PutEnvironmentSettingsRequest
-	54,  // 98: stagehand.host.v1.Code.ListPuppetfileModules:input_type -> stagehand.host.v1.ListPuppetfileModulesRequest
-	56,  // 99: stagehand.host.v1.Code.PutPuppetfileModule:input_type -> stagehand.host.v1.PutPuppetfileModuleRequest
-	57,  // 100: stagehand.host.v1.Code.RemovePuppetfileModule:input_type -> stagehand.host.v1.RemovePuppetfileModuleRequest
-	58,  // 101: stagehand.host.v1.Code.SetModuledir:input_type -> stagehand.host.v1.SetModuledirRequest
-	59,  // 102: stagehand.host.v1.Code.RenderPuppetfile:input_type -> stagehand.host.v1.RenderPuppetfileRequest
-	64,  // 103: stagehand.host.v1.Code.GetHieraHierarchy:input_type -> stagehand.host.v1.GetHieraHierarchyRequest
-	65,  // 104: stagehand.host.v1.Code.PutHieraLevel:input_type -> stagehand.host.v1.PutHieraLevelRequest
-	67,  // 105: stagehand.host.v1.Code.RemoveHieraLevel:input_type -> stagehand.host.v1.RemoveHieraLevelRequest
-	68,  // 106: stagehand.host.v1.Code.ReorderHieraLevels:input_type -> stagehand.host.v1.ReorderHieraLevelsRequest
-	70,  // 107: stagehand.host.v1.Code.ListHieraDataFiles:input_type -> stagehand.host.v1.ListHieraDataFilesRequest
-	72,  // 108: stagehand.host.v1.Code.GetHieraDataFile:input_type -> stagehand.host.v1.GetHieraDataFileRequest
-	73,  // 109: stagehand.host.v1.Code.PutHieraDataKey:input_type -> stagehand.host.v1.PutHieraDataKeyRequest
-	74,  // 110: stagehand.host.v1.Code.RemoveHieraDataKey:input_type -> stagehand.host.v1.RemoveHieraDataKeyRequest
-	75,  // 111: stagehand.host.v1.Code.DeleteHieraDataFile:input_type -> stagehand.host.v1.DeleteHieraDataFileRequest
-	78,  // 112: stagehand.host.v1.Forge.Search:input_type -> stagehand.host.v1.SearchRequest
-	81,  // 113: stagehand.host.v1.Forge.Resolve:input_type -> stagehand.host.v1.ResolveRequest
-	3,   // 114: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
-	6,   // 115: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
-	8,   // 116: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
-	8,   // 117: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
-	94,  // 118: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
-	11,  // 119: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
-	12,  // 120: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
-	14,  // 121: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
-	15,  // 122: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
-	16,  // 123: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
-	15,  // 124: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
-	94,  // 125: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
-	18,  // 126: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
-	20,  // 127: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
-	94,  // 128: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
-	22,  // 129: stagehand.host.v1.Inventory.GetNode:output_type -> stagehand.host.v1.Node
-	24,  // 130: stagehand.host.v1.Inventory.Discover:output_type -> stagehand.host.v1.DiscoverResponse
-	26,  // 131: stagehand.host.v1.Inventory.ListNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	26,  // 132: stagehand.host.v1.Inventory.QueryNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	22,  // 133: stagehand.host.v1.Inventory.PutFacts:output_type -> stagehand.host.v1.Node
-	31,  // 134: stagehand.host.v1.Inventory.ListGroups:output_type -> stagehand.host.v1.GroupList
-	26,  // 135: stagehand.host.v1.Inventory.ListGroupNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	31,  // 136: stagehand.host.v1.Inventory.ListNodeGroups:output_type -> stagehand.host.v1.GroupList
-	94,  // 137: stagehand.host.v1.Inventory.AddNodeToGroup:output_type -> google.protobuf.Empty
-	36,  // 138: stagehand.host.v1.Inventory.ListClasses:output_type -> stagehand.host.v1.ClassList
-	22,  // 139: stagehand.host.v1.Inventory.OnboardNode:output_type -> stagehand.host.v1.Node
-	40,  // 140: stagehand.host.v1.Code.ListEnvironments:output_type -> stagehand.host.v1.ListEnvironmentsResponse
-	38,  // 141: stagehand.host.v1.Code.GetEnvironment:output_type -> stagehand.host.v1.Environment
-	38,  // 142: stagehand.host.v1.Code.CreateEnvironment:output_type -> stagehand.host.v1.Environment
-	38,  // 143: stagehand.host.v1.Code.RenameEnvironment:output_type -> stagehand.host.v1.Environment
-	94,  // 144: stagehand.host.v1.Code.DeleteEnvironment:output_type -> google.protobuf.Empty
-	38,  // 145: stagehand.host.v1.Code.DuplicateEnvironment:output_type -> stagehand.host.v1.Environment
-	46,  // 146: stagehand.host.v1.Code.GetEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
-	46,  // 147: stagehand.host.v1.Code.PutEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
-	55,  // 148: stagehand.host.v1.Code.ListPuppetfileModules:output_type -> stagehand.host.v1.ListPuppetfileModulesResponse
-	49,  // 149: stagehand.host.v1.Code.PutPuppetfileModule:output_type -> stagehand.host.v1.PuppetfileModule
-	94,  // 150: stagehand.host.v1.Code.RemovePuppetfileModule:output_type -> google.protobuf.Empty
-	53,  // 151: stagehand.host.v1.Code.SetModuledir:output_type -> stagehand.host.v1.Puppetfile
-	60,  // 152: stagehand.host.v1.Code.RenderPuppetfile:output_type -> stagehand.host.v1.RenderedPuppetfile
-	62,  // 153: stagehand.host.v1.Code.GetHieraHierarchy:output_type -> stagehand.host.v1.HieraHierarchy
-	66,  // 154: stagehand.host.v1.Code.PutHieraLevel:output_type -> stagehand.host.v1.PutHieraLevelResponse
-	62,  // 155: stagehand.host.v1.Code.RemoveHieraLevel:output_type -> stagehand.host.v1.HieraHierarchy
-	62,  // 156: stagehand.host.v1.Code.ReorderHieraLevels:output_type -> stagehand.host.v1.HieraHierarchy
-	71,  // 157: stagehand.host.v1.Code.ListHieraDataFiles:output_type -> stagehand.host.v1.ListHieraDataFilesResponse
-	69,  // 158: stagehand.host.v1.Code.GetHieraDataFile:output_type -> stagehand.host.v1.HieraDataFile
-	69,  // 159: stagehand.host.v1.Code.PutHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
-	69,  // 160: stagehand.host.v1.Code.RemoveHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
-	94,  // 161: stagehand.host.v1.Code.DeleteHieraDataFile:output_type -> google.protobuf.Empty
-	79,  // 162: stagehand.host.v1.Forge.Search:output_type -> stagehand.host.v1.SearchResponse
-	82,  // 163: stagehand.host.v1.Forge.Resolve:output_type -> stagehand.host.v1.ResolveResponse
-	114, // [114:164] is the sub-list for method output_type
-	64,  // [64:114] is the sub-list for method input_type
+	44,  // 90: stagehand.host.v1.Code.ListEnvironments:input_type -> stagehand.host.v1.ListEnvironmentsRequest
+	46,  // 91: stagehand.host.v1.Code.GetEnvironment:input_type -> stagehand.host.v1.GetEnvironmentRequest
+	47,  // 92: stagehand.host.v1.Code.CreateEnvironment:input_type -> stagehand.host.v1.CreateEnvironmentRequest
+	48,  // 93: stagehand.host.v1.Code.RenameEnvironment:input_type -> stagehand.host.v1.RenameEnvironmentRequest
+	49,  // 94: stagehand.host.v1.Code.DeleteEnvironment:input_type -> stagehand.host.v1.DeleteEnvironmentRequest
+	50,  // 95: stagehand.host.v1.Code.DuplicateEnvironment:input_type -> stagehand.host.v1.DuplicateEnvironmentRequest
+	38,  // 96: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:input_type -> stagehand.host.v1.ApplyEnvironmentDuplicateRequest
+	52,  // 97: stagehand.host.v1.Code.GetEnvironmentSettings:input_type -> stagehand.host.v1.GetEnvironmentSettingsRequest
+	53,  // 98: stagehand.host.v1.Code.PutEnvironmentSettings:input_type -> stagehand.host.v1.PutEnvironmentSettingsRequest
+	39,  // 99: stagehand.host.v1.Code.ApplyEnvironmentSettings:input_type -> stagehand.host.v1.ApplyEnvironmentSettingsRequest
+	59,  // 100: stagehand.host.v1.Code.ListPuppetfileModules:input_type -> stagehand.host.v1.ListPuppetfileModulesRequest
+	61,  // 101: stagehand.host.v1.Code.PutPuppetfileModule:input_type -> stagehand.host.v1.PutPuppetfileModuleRequest
+	40,  // 102: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:input_type -> stagehand.host.v1.ApplyPuppetfileModuleOverwriteRequest
+	62,  // 103: stagehand.host.v1.Code.RemovePuppetfileModule:input_type -> stagehand.host.v1.RemovePuppetfileModuleRequest
+	63,  // 104: stagehand.host.v1.Code.SetModuledir:input_type -> stagehand.host.v1.SetModuledirRequest
+	64,  // 105: stagehand.host.v1.Code.RenderPuppetfile:input_type -> stagehand.host.v1.RenderPuppetfileRequest
+	69,  // 106: stagehand.host.v1.Code.GetHieraHierarchy:input_type -> stagehand.host.v1.GetHieraHierarchyRequest
+	70,  // 107: stagehand.host.v1.Code.PutHieraLevel:input_type -> stagehand.host.v1.PutHieraLevelRequest
+	41,  // 108: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:input_type -> stagehand.host.v1.ApplyHieraLevelOverwriteRequest
+	72,  // 109: stagehand.host.v1.Code.RemoveHieraLevel:input_type -> stagehand.host.v1.RemoveHieraLevelRequest
+	73,  // 110: stagehand.host.v1.Code.ReorderHieraLevels:input_type -> stagehand.host.v1.ReorderHieraLevelsRequest
+	75,  // 111: stagehand.host.v1.Code.ListHieraDataFiles:input_type -> stagehand.host.v1.ListHieraDataFilesRequest
+	77,  // 112: stagehand.host.v1.Code.GetHieraDataFile:input_type -> stagehand.host.v1.GetHieraDataFileRequest
+	78,  // 113: stagehand.host.v1.Code.PutHieraDataKey:input_type -> stagehand.host.v1.PutHieraDataKeyRequest
+	42,  // 114: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:input_type -> stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest
+	79,  // 115: stagehand.host.v1.Code.RemoveHieraDataKey:input_type -> stagehand.host.v1.RemoveHieraDataKeyRequest
+	80,  // 116: stagehand.host.v1.Code.DeleteHieraDataFile:input_type -> stagehand.host.v1.DeleteHieraDataFileRequest
+	83,  // 117: stagehand.host.v1.Forge.Search:input_type -> stagehand.host.v1.SearchRequest
+	86,  // 118: stagehand.host.v1.Forge.Resolve:input_type -> stagehand.host.v1.ResolveRequest
+	3,   // 119: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
+	6,   // 120: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
+	8,   // 121: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
+	8,   // 122: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
+	99,  // 123: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
+	11,  // 124: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
+	12,  // 125: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
+	14,  // 126: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
+	15,  // 127: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
+	16,  // 128: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
+	15,  // 129: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
+	99,  // 130: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
+	18,  // 131: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
+	20,  // 132: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
+	99,  // 133: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
+	22,  // 134: stagehand.host.v1.Inventory.GetNode:output_type -> stagehand.host.v1.Node
+	24,  // 135: stagehand.host.v1.Inventory.Discover:output_type -> stagehand.host.v1.DiscoverResponse
+	26,  // 136: stagehand.host.v1.Inventory.ListNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	26,  // 137: stagehand.host.v1.Inventory.QueryNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	22,  // 138: stagehand.host.v1.Inventory.PutFacts:output_type -> stagehand.host.v1.Node
+	31,  // 139: stagehand.host.v1.Inventory.ListGroups:output_type -> stagehand.host.v1.GroupList
+	26,  // 140: stagehand.host.v1.Inventory.ListGroupNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	31,  // 141: stagehand.host.v1.Inventory.ListNodeGroups:output_type -> stagehand.host.v1.GroupList
+	99,  // 142: stagehand.host.v1.Inventory.AddNodeToGroup:output_type -> google.protobuf.Empty
+	36,  // 143: stagehand.host.v1.Inventory.ListClasses:output_type -> stagehand.host.v1.ClassList
+	22,  // 144: stagehand.host.v1.Inventory.OnboardNode:output_type -> stagehand.host.v1.Node
+	45,  // 145: stagehand.host.v1.Code.ListEnvironments:output_type -> stagehand.host.v1.ListEnvironmentsResponse
+	43,  // 146: stagehand.host.v1.Code.GetEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 147: stagehand.host.v1.Code.CreateEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 148: stagehand.host.v1.Code.RenameEnvironment:output_type -> stagehand.host.v1.Environment
+	99,  // 149: stagehand.host.v1.Code.DeleteEnvironment:output_type -> google.protobuf.Empty
+	43,  // 150: stagehand.host.v1.Code.DuplicateEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 151: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:output_type -> stagehand.host.v1.Environment
+	51,  // 152: stagehand.host.v1.Code.GetEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	51,  // 153: stagehand.host.v1.Code.PutEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	51,  // 154: stagehand.host.v1.Code.ApplyEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	60,  // 155: stagehand.host.v1.Code.ListPuppetfileModules:output_type -> stagehand.host.v1.ListPuppetfileModulesResponse
+	54,  // 156: stagehand.host.v1.Code.PutPuppetfileModule:output_type -> stagehand.host.v1.PuppetfileModule
+	54,  // 157: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:output_type -> stagehand.host.v1.PuppetfileModule
+	99,  // 158: stagehand.host.v1.Code.RemovePuppetfileModule:output_type -> google.protobuf.Empty
+	58,  // 159: stagehand.host.v1.Code.SetModuledir:output_type -> stagehand.host.v1.Puppetfile
+	65,  // 160: stagehand.host.v1.Code.RenderPuppetfile:output_type -> stagehand.host.v1.RenderedPuppetfile
+	67,  // 161: stagehand.host.v1.Code.GetHieraHierarchy:output_type -> stagehand.host.v1.HieraHierarchy
+	71,  // 162: stagehand.host.v1.Code.PutHieraLevel:output_type -> stagehand.host.v1.PutHieraLevelResponse
+	71,  // 163: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:output_type -> stagehand.host.v1.PutHieraLevelResponse
+	67,  // 164: stagehand.host.v1.Code.RemoveHieraLevel:output_type -> stagehand.host.v1.HieraHierarchy
+	67,  // 165: stagehand.host.v1.Code.ReorderHieraLevels:output_type -> stagehand.host.v1.HieraHierarchy
+	76,  // 166: stagehand.host.v1.Code.ListHieraDataFiles:output_type -> stagehand.host.v1.ListHieraDataFilesResponse
+	74,  // 167: stagehand.host.v1.Code.GetHieraDataFile:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 168: stagehand.host.v1.Code.PutHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 169: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 170: stagehand.host.v1.Code.RemoveHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
+	99,  // 171: stagehand.host.v1.Code.DeleteHieraDataFile:output_type -> google.protobuf.Empty
+	84,  // 172: stagehand.host.v1.Forge.Search:output_type -> stagehand.host.v1.SearchResponse
+	87,  // 173: stagehand.host.v1.Forge.Resolve:output_type -> stagehand.host.v1.ResolveResponse
+	119, // [119:174] is the sub-list for method output_type
+	64,  // [64:119] is the sub-list for method input_type
 	64,  // [64:64] is the sub-list for extension type_name
 	64,  // [64:64] is the sub-list for extension extendee
 	0,   // [0:64] is the sub-list for field type_name
@@ -5747,12 +6006,12 @@ func file_stagehand_host_v1_host_proto_init() {
 		return
 	}
 	file_stagehand_host_v1_common_proto_init()
-	file_stagehand_host_v1_host_proto_msgTypes[43].OneofWrappers = []any{}
-	file_stagehand_host_v1_host_proto_msgTypes[46].OneofWrappers = []any{
+	file_stagehand_host_v1_host_proto_msgTypes[48].OneofWrappers = []any{}
+	file_stagehand_host_v1_host_proto_msgTypes[51].OneofWrappers = []any{
 		(*PuppetfileModule_Forge)(nil),
 		(*PuppetfileModule_Git)(nil),
 	}
-	file_stagehand_host_v1_host_proto_msgTypes[48].OneofWrappers = []any{
+	file_stagehand_host_v1_host_proto_msgTypes[53].OneofWrappers = []any{
 		(*GitSource_Ref)(nil),
 		(*GitSource_Tag)(nil),
 		(*GitSource_Branch)(nil),
@@ -5765,7 +6024,7 @@ func file_stagehand_host_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stagehand_host_v1_host_proto_rawDesc), len(file_stagehand_host_v1_host_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   87,
+			NumMessages:   92,
 			NumExtensions: 0,
 			NumServices:   7,
 		},

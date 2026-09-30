@@ -585,9 +585,12 @@ func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.Dupli
 	return cloneEnvironment(env), nil
 }
 
-// gatedCode wraps codeServer with the code:rw permission check every one of
-// the 22 Code RPCs requires, including the read-only ones — there is no
-// narrower per-RPC permission and no read-only exemption. Unlike Documents
+// gatedCode wraps codeServer with the code:rw permission check every
+// forwarded Code RPC requires, including the read-only ones and the Apply*
+// RPCs — there is no narrower per-RPC permission and no read-only exemption.
+// 22 RPCs predate the overwrite gate; ApplyPuppetfileModuleOverwrite is the
+// 23rd forwarder, and the other four Apply* RPCs resolve through the embedded
+// UnimplementedCodeServer until their bodies land. Unlike Documents
 // and Settings, which are always available, Code is a gated facet — the
 // same posture Inventory ships.
 type gatedCode struct {
@@ -678,6 +681,17 @@ func (g *gatedCode) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPupp
 		return nil, err
 	}
 	return g.inner.PutPuppetfileModule(ctx, req)
+}
+
+// ApplyPuppetfileModuleOverwrite needs code:rw and nothing narrower, the same
+// posture gatedInventory gives OnboardNode: the decision to allow the
+// overwrite was recorded elsewhere, by a code:approve token holder, and this
+// forwarder only checks the facet permission before delegating.
+func (g *gatedCode) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *hostv1.ApplyPuppetfileModuleOverwriteRequest) (*hostv1.PuppetfileModule, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyPuppetfileModuleOverwrite(ctx, req)
 }
 
 func (g *gatedCode) RemovePuppetfileModule(ctx context.Context, req *hostv1.RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {

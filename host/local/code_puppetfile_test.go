@@ -53,7 +53,7 @@ func TestCode_PuppetfileEmptyEnvironment(t *testing.T) {
 }
 
 func TestCode_PuppetfileForgeModuleLifecycle(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -107,16 +107,9 @@ func TestCode_PuppetfileForgeModuleLifecycle(t *testing.T) {
 		}
 	}
 
-	// Edit apache in place.
-	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
-		Environment: "prod",
-		Module: &hostv1.PuppetfileModule{
-			Name:   "puppetlabs/apache",
-			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "6.1.0"}},
-		},
-	}); err != nil {
-		t.Fatalf("PutPuppetfileModule(apache edit): %v", err)
-	}
+	// Edit apache in place. Replacing an existing module is an overwrite, so
+	// it goes through the approval gate rather than a plain Put.
+	overwriteViaApproval(t, h, "apache-edit", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
 	resp, err = h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
 	if err != nil {
 		t.Fatalf("ListPuppetfileModules after edit: %v", err)
@@ -239,7 +232,7 @@ func TestCode_PuppetfileRejectsInvalidModule(t *testing.T) {
 	}
 }
 
-func TestCode_PuppetfilePutIsIdempotentAndInPlace(t *testing.T) {
+func TestCode_PuppetfilePutOfExistingModuleIsRefusedAndTextStable(t *testing.T) {
 	h := local.New([]string{"code:rw"}, "controlrepo")
 	ctx := context.Background()
 
@@ -268,14 +261,16 @@ func TestCode_PuppetfilePutIsIdempotentAndInPlace(t *testing.T) {
 	// RenderPuppetfile is not implemented until Task 2 of this plan.
 	firstText := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
 
-	// Put the identical module again.
-	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: "prod", Module: apache}); err != nil {
-		t.Fatalf("PutPuppetfileModule(apache second time): %v", err)
+	// Putting the identical module again is still a replace of an existing
+	// module, so it is refused rather than accepted as a no-op; what matters
+	// here is that the refusal leaves the stored text byte-identical.
+	if err := putModuleErr(h, "prod", apache); !local.IsCodeOverwriteRequiresApproval(err) {
+		t.Fatalf("PutPuppetfileModule(apache second time): got %v, want requires-approval", err)
 	}
 
 	secondText := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
 	if firstText != secondText {
-		t.Fatalf("expected byte-identical text after idempotent put, got:\nfirst:  %q\nsecond: %q", firstText, secondText)
+		t.Fatalf("expected byte-identical text after a refused put, got:\nfirst:  %q\nsecond: %q", firstText, secondText)
 	}
 
 	resp, err := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
@@ -441,7 +436,7 @@ func TestCode_ModuledirSetAndClear(t *testing.T) {
 }
 
 func TestCode_PuppetfileNoSpuriousDiff(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -500,15 +495,7 @@ func TestCode_PuppetfileNoSpuriousDiff(t *testing.T) {
 	assertFixedPoint(t, "after add Git module")
 
 	// 3. Edit the Forge module's version.
-	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
-		Environment: "prod",
-		Module: &hostv1.PuppetfileModule{
-			Name:   "puppetlabs/apache",
-			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "6.1.0"}},
-		},
-	}); err != nil {
-		t.Fatalf("edit forge module: %v", err)
-	}
+	overwriteViaApproval(t, h, "apache-edit", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
 	assertFixedPoint(t, "after edit Forge module")
 
 	// 4. Set moduledir.

@@ -182,10 +182,27 @@ message OnboardNodeRequest { string proposal_id = 1; }
 // from this milestone's actual environment/Puppetfile/Hiera authoring
 // requirements; no RPC or message name was taken from the reference tree.
 //
-// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
-// a name that already exists is refused outright (AlreadyExists), never
-// silently applied. Deliberate overwrite of existing content is a later
-// phase's approval-gated path, not something this contract offers.
+// Overwriting existing content is approval-gated, and creating new content
+// never is. A Put* that would replace something already stored is refused
+// outright with FAILED_PRECONDITION and a structured ErrorDetail whose fix
+// line says what to do next; it never applies the change silently. The path
+// to a deliberate overwrite has three steps, in three separate call graphs:
+//   1. Propose. The caller writes a pending proposal into the shared
+//      "code-overwrites" Documents collection. The proposal body names the
+//      exact target (environment, resource kind, name, path, source) and
+//      freezes the payload to be written.
+//   2. Approve. An operator holding a token scoped "code:approve" decides
+//      the proposal through the approval package. That scope is a route
+//      access scope, never a manifest permission, and nothing in this
+//      service can decide a proposal.
+//   3. Apply. The caller invokes the matching Apply* RPC with only the
+//      proposal_id. The Apply RPC reads the approved proposal, writes the
+//      payload frozen inside it, and never accepts a payload from its
+//      caller, so an approved proposal cannot be used to write content its
+//      approver never saw.
+// One collection and one scope cover every overwrite resource type; the
+// type is carried inside the proposal body, not in a separate collection.
+// Every Apply* RPC needs code:rw and nothing narrower.
 service Code {
   // ------------------------------------------------------ Environments
   // An environment's name is its branch/directory identity, 1:1 with the
@@ -199,6 +216,12 @@ service Code {
   // hierarchy, Hiera data files and settings to a NEW target name in one
   // atomic write. A target that already exists is refused, never merged.
   rpc DuplicateEnvironment(DuplicateEnvironmentRequest) returns (Environment);
+  // ApplyEnvironmentDuplicate reads the referenced "code-overwrites" proposal and refuses with
+  // FAILED_PRECONDITION unless its status is approved. It writes the payload
+  // frozen in that proposal (the request carries only a proposal_id) and is
+  // idempotent: a repeat call for the same approved proposal returns the same
+  // result rather than failing or writing twice. Requires code:rw only.
+  rpc ApplyEnvironmentDuplicate(ApplyEnvironmentDuplicateRequest) returns (Environment);
 
   // ------------------------------------------------- environment.conf
   // Fields a pack never wrote come back absent, not pre-filled with Puppet's
@@ -206,6 +229,12 @@ service Code {
   // second copy of them here would be a second source of truth.
   rpc GetEnvironmentSettings(GetEnvironmentSettingsRequest) returns (EnvironmentSettings);
   rpc PutEnvironmentSettings(PutEnvironmentSettingsRequest) returns (EnvironmentSettings);
+  // ApplyEnvironmentSettings reads the referenced "code-overwrites" proposal and refuses with
+  // FAILED_PRECONDITION unless its status is approved. It writes the payload
+  // frozen in that proposal (the request carries only a proposal_id) and is
+  // idempotent: a repeat call for the same approved proposal returns the same
+  // result rather than failing or writing twice. Requires code:rw only.
+  rpc ApplyEnvironmentSettings(ApplyEnvironmentSettingsRequest) returns (EnvironmentSettings);
 
   // ------------------------------------------------------- Puppetfile
   rpc ListPuppetfileModules(ListPuppetfileModulesRequest) returns (ListPuppetfileModulesResponse);
@@ -213,6 +242,12 @@ service Code {
   // appended, a name already present is replaced in place, preserving its
   // position in the render order.
   rpc PutPuppetfileModule(PutPuppetfileModuleRequest) returns (PuppetfileModule);
+  // ApplyPuppetfileModuleOverwrite reads the referenced "code-overwrites" proposal and refuses with
+  // FAILED_PRECONDITION unless its status is approved. It writes the payload
+  // frozen in that proposal (the request carries only a proposal_id) and is
+  // idempotent: a repeat call for the same approved proposal returns the same
+  // result rather than failing or writing twice. Requires code:rw only.
+  rpc ApplyPuppetfileModuleOverwrite(ApplyPuppetfileModuleOverwriteRequest) returns (PuppetfileModule);
   rpc RemovePuppetfileModule(RemovePuppetfileModuleRequest) returns (google.protobuf.Empty);
   rpc SetModuledir(SetModuledirRequest) returns (Puppetfile);
   // RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
@@ -229,6 +264,12 @@ service Code {
   // warnings alongside the already-applied write — a flagged anti-pattern
   // never blocks the write.
   rpc PutHieraLevel(PutHieraLevelRequest) returns (PutHieraLevelResponse);
+  // ApplyHieraLevelOverwrite reads the referenced "code-overwrites" proposal and refuses with
+  // FAILED_PRECONDITION unless its status is approved. It writes the payload
+  // frozen in that proposal (the request carries only a proposal_id) and is
+  // idempotent: a repeat call for the same approved proposal returns the same
+  // result rather than failing or writing twice. Requires code:rw only.
+  rpc ApplyHieraLevelOverwrite(ApplyHieraLevelOverwriteRequest) returns (PutHieraLevelResponse);
   rpc RemoveHieraLevel(RemoveHieraLevelRequest) returns (HieraHierarchy);
   rpc ReorderHieraLevels(ReorderHieraLevelsRequest) returns (HieraHierarchy);
 
@@ -236,9 +277,25 @@ service Code {
   rpc ListHieraDataFiles(ListHieraDataFilesRequest) returns (ListHieraDataFilesResponse);
   rpc GetHieraDataFile(GetHieraDataFileRequest) returns (HieraDataFile);
   rpc PutHieraDataKey(PutHieraDataKeyRequest) returns (HieraDataFile);
+  // ApplyHieraDataKeyOverwrite reads the referenced "code-overwrites" proposal and refuses with
+  // FAILED_PRECONDITION unless its status is approved. It writes the payload
+  // frozen in that proposal (the request carries only a proposal_id) and is
+  // idempotent: a repeat call for the same approved proposal returns the same
+  // result rather than failing or writing twice. Requires code:rw only.
+  rpc ApplyHieraDataKeyOverwrite(ApplyHieraDataKeyOverwriteRequest) returns (HieraDataFile);
   rpc RemoveHieraDataKey(RemoveHieraDataKeyRequest) returns (HieraDataFile);
   rpc DeleteHieraDataFile(DeleteHieraDataFileRequest) returns (google.protobuf.Empty);
 }
+
+// ------------------------------------------------------- Overwrite approval
+// Every Apply* request carries only the proposal id. The resource payload was
+// frozen into the proposal body at propose time and is never taken from the
+// caller of Apply.
+message ApplyEnvironmentDuplicateRequest { string proposal_id = 1; }
+message ApplyEnvironmentSettingsRequest { string proposal_id = 1; }
+message ApplyPuppetfileModuleOverwriteRequest { string proposal_id = 1; }
+message ApplyHieraLevelOverwriteRequest { string proposal_id = 1; }
+message ApplyHieraDataKeyOverwriteRequest { string proposal_id = 1; }
 
 // ------------------------------------------------------------ Environments
 

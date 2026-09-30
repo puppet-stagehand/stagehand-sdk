@@ -142,12 +142,15 @@ func (s *codeServer) ListPuppetfileModules(ctx context.Context, req *hostv1.List
 // PutPuppetfileModule rejects a nil req.Module or an empty req.Module.Name
 // with codes.InvalidArgument, then runs code.ValidateModule and maps its
 // error — this is where D-02's and D-03's rules and the git-URL safety
-// checks are enforced on a caller-supplied module. It then loads the model
-// and upserts by name: a name already present is replaced in place, keeping
-// its index in the render order, and a name not present is appended.
-// Replacing in place matters because a Puppetfile's order is the author's,
-// and silently moving an edited module to the end would be a change nobody
-// requested showing up as a diff.
+// checks are enforced on a caller-supplied module. It then loads the model.
+// A name not present is appended, ungated. A name already present is an
+// overwrite and is refused with codes.FailedPrecondition (D-04): either
+// ErrCodeOverwriteRequiresApproval, or ErrCodeOverwriteApplyPending when an
+// approved code-overwrites proposal already covers it. A replacement
+// happens only through ApplyPuppetfileModuleOverwrite, which keeps the
+// module's index in the render order — a Puppetfile's order is the
+// author's, and silently moving an edited module to the end would be a
+// change nobody requested showing up as a diff.
 func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPuppetfileModuleRequest) (*hostv1.PuppetfileModule, error) {
 	if err := validateEnvName(req.Environment); err != nil {
 		return nil, err
@@ -173,17 +176,28 @@ func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPup
 	}
 
 	upserted := proto.Clone(req.Module).(*hostv1.PuppetfileModule)
-	replaced := false
-	for i, m := range pf.Modules {
+	for _, m := range pf.Modules {
 		if m.GetName() == upserted.GetName() {
-			pf.Modules[i] = upserted
-			replaced = true
-			break
+			// Replacing an existing module is an overwrite, and an
+			// overwrite is never applied silently (D-04). It is decided per
+			// module, not per environment (D-02): the append below stays
+			// ungated. The refusal happens before storePuppetfileLocked, so
+			// a refused call leaves the stored text byte-identical. Even
+			// when an approved proposal covers this module the Put still
+			// refuses; materializing it is ApplyPuppetfileModuleOverwrite's
+			// job, never this RPC's.
+			target := code.OverwriteTarget{
+				Environment: req.Environment,
+				Resource:    code.OverwriteResourcePuppetfileModule,
+				Name:        upserted.GetName(),
+			}
+			if proposalID, covered := s.approvedOverwriteProposalLocked(target); covered {
+				return nil, ErrCodeOverwriteApplyPending(proposalID, applyPuppetfileModuleRPC)
+			}
+			return nil, ErrCodeOverwriteRequiresApproval(target, applyPuppetfileModuleRPC)
 		}
 	}
-	if !replaced {
-		pf.Modules = append(pf.Modules, upserted)
-	}
+	pf.Modules = append(pf.Modules, upserted)
 
 	if err := s.storePuppetfileLocked(req.Environment, pf); err != nil {
 		return nil, err
