@@ -56,7 +56,7 @@ func newHost(t *testing.T) *host.Host {
 	)
 }
 
-// approverToken mints an approval.ScopeApprove-scoped token and returns
+// approverToken mints an OnboardingKind.ApproveScope-scoped token and returns
 // only its secret — standing in for an operator obtaining a token out of
 // band. This helper belongs in the test file and nowhere else: it is the
 // entire structural claim of this example that no function in
@@ -64,7 +64,7 @@ func newHost(t *testing.T) *host.Host {
 func approverToken(t *testing.T, h *host.Host, label string) string {
 	t.Helper()
 	tok, err := h.Auth.IssueToken(context.Background(), &hostv1.IssueTokenRequest{
-		Scope:      approval.ScopeApprove,
+		Scope:      inventoryonboarding.OnboardingKind.ApproveScope,
 		Label:      label,
 		TtlSeconds: 300,
 	})

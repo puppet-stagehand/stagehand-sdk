@@ -16,7 +16,7 @@ import (
 // reaches the token facet — proposing has no business verifying anything,
 // and a reader should be able to confirm that by opening this one short
 // file.
-func Propose(ctx context.Context, h *host.Host, node *hostv1.Node) (*Proposal, error) {
+func Propose(ctx context.Context, h *host.Host, node *hostv1.Node, kind Kind) (*Proposal, error) {
 	if node == nil || node.Id == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "node with a non-empty id is required")
 	}
@@ -49,7 +49,7 @@ func Propose(ctx context.Context, h *host.Host, node *hostv1.Node) (*Proposal, e
 	// (D-01) — do not add a Get-then-check before this write, which would
 	// reintroduce the check-then-act window the CAS exists to close.
 	resp, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: Collection,
+		Collection: kind.Collection,
 		DocId:      node.Id,
 		Body:       &hostv1.Json{Value: s},
 		IfVersion:  0,

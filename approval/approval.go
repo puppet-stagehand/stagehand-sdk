@@ -35,18 +35,23 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
-// Collection is the D-00 Documents collection this package writes to and
-// reads from — the exact literal host/local/inventory.go's OnboardNode
-// already binds to (proposalCollection).
-const Collection = "inventory-proposals"
-
-// ScopeApprove is the fixed, code-defined approval scope required to
-// decide a proposal (D-02). It is never sourced from the proposal
-// document's body or from caller-supplied request input: a caller who can
-// create proposals must not be able to name the scope required to decide
-// them, or they could pick one they can trivially self-issue, reopening
-// the self-approval hole this pattern exists to close.
-const ScopeApprove = "inventory:approve"
+// Kind names one governed action: the Documents collection its proposals
+// live in and the approval scope required to decide them. Both fields are
+// code-defined by the caller. The caller pinning them as a constant — never
+// building either from request input, from a proposal document body, or
+// from any value the proposing persona controls — is what preserves the
+// property the removed package-level scope constant used to provide (D-02,
+// GOV-01): a caller who can create proposals must not be able to name the
+// scope required to decide them, or they could pick one they can trivially
+// self-issue, reopening the self-approval hole this pattern exists to
+// close. Two Kinds that share a Collection but differ in ApproveScope are
+// distinct: decide hands h.Auth.Verify exactly the ApproveScope it was
+// given and never merges them. A Kind with an empty Collection or an empty
+// ApproveScope is refused with ErrKindRequired.
+type Kind struct {
+	Collection   string
+	ApproveScope string
+}
 
 // The complete status vocabulary a proposal document can carry. There is
 // no fourth value — no "expired" status exists (D-08).
@@ -74,6 +79,7 @@ const (
 	detailAlreadyProposed = "proposal_already_exists"
 	detailAlreadyDecided  = "proposal_already_decided"
 	detailReasonRequired  = "reject_reason_required"
+	detailKindRequired    = "approval_kind_required"
 )
 
 // Proposal is a read-only snapshot of a proposal document. It carries no
@@ -219,8 +225,8 @@ func proposalFromBody(proposalID string, m map[string]any, version int64) *Propo
 // authorization check here — it would look prudent and buy nothing, since
 // nothing about this read crosses the governance boundary Approve/Reject
 // guard.
-func Get(ctx context.Context, h *host.Host, proposalID string) (*Proposal, error) {
-	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: Collection, DocId: proposalID})
+func Get(ctx context.Context, h *host.Host, kind Kind, proposalID string) (*Proposal, error) {
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: kind.Collection, DocId: proposalID})
 	if err != nil {
 		return nil, err
 	}

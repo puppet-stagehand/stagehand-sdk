@@ -30,7 +30,7 @@ func TestApproval_ConcurrentApproveIsExactlyOneWinner(t *testing.T) {
 	h := testHost(t, "inventory:rw", "tokens:issue")
 
 	node := &hostv1.Node{Id: "race-01", DisplayName: "race-01-display", Environment: "staging"}
-	if _, err := approval.Propose(ctx, h, node); err != nil {
+	if _, err := approval.Propose(ctx, h, node, testKind); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestApproval_ConcurrentApproveIsExactlyOneWinner(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			<-gate
-			_, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: node.Id, TokenSecret: secrets[i]})
+			_, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: testKind, ProposalID: node.Id, TokenSecret: secrets[i]})
 			errs[i] = err
 		}(i)
 	}
@@ -74,7 +74,7 @@ func TestApproval_ConcurrentApproveIsExactlyOneWinner(t *testing.T) {
 		t.Fatalf("expected exactly 1 nil error across 8 racing approvals, got %d", nilCount)
 	}
 
-	prop, err := approval.Get(ctx, h, node.Id)
+	prop, err := approval.Get(ctx, h, testKind, node.Id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestApproval_ConcurrentApproveAndRejectResolveToOneOutcome(t *testing.T) {
 	h := testHost(t, "inventory:rw", "tokens:issue")
 
 	node := &hostv1.Node{Id: "race-02", DisplayName: "race-02-display"}
-	if _, err := approval.Propose(ctx, h, node); err != nil {
+	if _, err := approval.Propose(ctx, h, node, testKind); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 
@@ -116,12 +116,12 @@ func TestApproval_ConcurrentApproveAndRejectResolveToOneOutcome(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		<-gate
-		approveProp, approveErr = approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: node.Id, TokenSecret: approveSecret})
+		approveProp, approveErr = approval.Approve(ctx, h, approval.ApproveRequest{Kind: testKind, ProposalID: node.Id, TokenSecret: approveSecret})
 	}()
 	go func() {
 		defer wg.Done()
 		<-gate
-		rejectProp, rejectErr = approval.Reject(ctx, h, approval.RejectRequest{ProposalID: node.Id, TokenSecret: rejectSecret, Reason: "raced rejection"})
+		rejectProp, rejectErr = approval.Reject(ctx, h, approval.RejectRequest{Kind: testKind, ProposalID: node.Id, TokenSecret: rejectSecret, Reason: "raced rejection"})
 	}()
 	close(gate)
 	wg.Wait()
@@ -146,7 +146,7 @@ func TestApproval_ConcurrentApproveAndRejectResolveToOneOutcome(t *testing.T) {
 		t.Fatalf("expected exactly 1 nil error between the racing approve and reject, got %d", nilCount)
 	}
 
-	prop, err := approval.Get(ctx, h, node.Id)
+	prop, err := approval.Get(ctx, h, testKind, node.Id)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -182,14 +182,14 @@ func TestApproval_ConcurrentApproveMaterializesOneNode(t *testing.T) {
 	t.Run("only the winner onboards", func(t *testing.T) {
 		h := testHost(t, "inventory:rw", "tokens:issue")
 		node := &hostv1.Node{Id: "race-onboard-01", DisplayName: "race-onboard-01-display"}
-		if _, err := approval.Propose(ctx, h, node); err != nil {
+		if _, err := approval.Propose(ctx, h, node, inventoryKind); err != nil {
 			t.Fatalf("Propose: %v", err)
 		}
 
 		const n = 5
 		secrets := make([]string, n)
 		for i := 0; i < n; i++ {
-			secrets[i] = approverToken(t, h, fmt.Sprintf("onboard-racer-%d", i))
+			secrets[i] = approverTokenFor(t, h, inventoryKind, fmt.Sprintf("onboard-racer-%d", i))
 		}
 
 		gate := make(chan struct{})
@@ -202,7 +202,7 @@ func TestApproval_ConcurrentApproveMaterializesOneNode(t *testing.T) {
 				// Sequencing the pattern actually asks for: the side
 				// effect happens only after decide's own CAS write has
 				// returned success, never off the earlier read.
-				if _, err := approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: node.Id, TokenSecret: secrets[i]}); err == nil {
+				if _, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: inventoryKind, ProposalID: node.Id, TokenSecret: secrets[i]}); err == nil {
 					_, _ = h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id})
 				}
 			}(i)
@@ -216,14 +216,14 @@ func TestApproval_ConcurrentApproveMaterializesOneNode(t *testing.T) {
 	t.Run("every racer onboards regardless", func(t *testing.T) {
 		h := testHost(t, "inventory:rw", "tokens:issue")
 		node := &hostv1.Node{Id: "race-onboard-02", DisplayName: "race-onboard-02-display"}
-		if _, err := approval.Propose(ctx, h, node); err != nil {
+		if _, err := approval.Propose(ctx, h, node, inventoryKind); err != nil {
 			t.Fatalf("Propose: %v", err)
 		}
 
 		const n = 5
 		secrets := make([]string, n)
 		for i := 0; i < n; i++ {
-			secrets[i] = approverToken(t, h, fmt.Sprintf("onboard-racer-b-%d", i))
+			secrets[i] = approverTokenFor(t, h, inventoryKind, fmt.Sprintf("onboard-racer-b-%d", i))
 		}
 
 		gate := make(chan struct{})
@@ -235,7 +235,7 @@ func TestApproval_ConcurrentApproveMaterializesOneNode(t *testing.T) {
 				<-gate
 				// Ignoring the sequencing contract on purpose: onboard
 				// whether or not this goroutine's own approve won.
-				_, _ = approval.Approve(ctx, h, approval.ApproveRequest{ProposalID: node.Id, TokenSecret: secrets[i]})
+				_, _ = approval.Approve(ctx, h, approval.ApproveRequest{Kind: inventoryKind, ProposalID: node.Id, TokenSecret: secrets[i]})
 				_, _ = h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id})
 			}(i)
 		}
@@ -285,11 +285,11 @@ func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
 	h := testHost(t, "inventory:rw", "tokens:issue")
 
 	node := &hostv1.Node{Id: "bypass-01", DisplayName: "bypass-01-display"}
-	if _, err := approval.Propose(ctx, h, node); err != nil {
+	if _, err := approval.Propose(ctx, h, node, inventoryKind); err != nil {
 		t.Fatalf("Propose: %v", err)
 	}
 
-	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: approval.Collection, DocId: node.Id})
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: inventoryKind.Collection, DocId: node.Id})
 	if err != nil {
 		t.Fatalf("Documents.Get: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
 	// require one, and this is exactly the bypass the test's name says it
 	// pins.
 	if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: approval.Collection,
+		Collection: inventoryKind.Collection,
 		DocId:      node.Id,
 		Body:       &hostv1.Json{Value: s},
 		IfVersion:  doc.Version,

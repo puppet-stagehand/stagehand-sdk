@@ -13,11 +13,13 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
-// ApproveRequest is the input to Approve: the proposal to decide and the
-// caller's approval-scoped token secret. There is deliberately no scope
-// field here — the required scope is the ScopeApprove package constant
-// (D-02), never something a caller can supply.
+// ApproveRequest is the input to Approve: the Kind being decided, the
+// proposal to decide and the caller's approval-scoped token secret. The
+// required scope travels in Kind.ApproveScope (D-02, GOV-01); the caller is
+// required to pin that Kind as a code-defined value and never build it from
+// request input or a proposal body.
 type ApproveRequest struct {
+	Kind        Kind
 	ProposalID  string
 	TokenSecret string
 }
@@ -25,7 +27,7 @@ type ApproveRequest struct {
 // decide is the single guarded write path shared by Approve and Reject.
 // It runs in a fixed order and the order is the security property:
 //  1. Refuse an empty proposal id before touching anything.
-//  2. Verify the caller's token carries ScopeApprove via h.Auth.Verify,
+//  2. Verify the caller's token carries kind.ApproveScope via h.Auth.Verify,
 //     and return its error unchanged. Never compare the returned
 //     principal's scopes a second time — the facet already did the
 //     comparison, and a host that later namespaces scopes would silently
@@ -55,17 +57,17 @@ type ApproveRequest struct {
 //     whoever's Put succeeds made the decision, and everyone else lost.
 //     A returned codes.Aborted is translated into ErrAlreadyDecided,
 //     naming what the winner actually recorded via one best-effort Get.
-func decide(ctx context.Context, h *host.Host, proposalID, tokenSecret, newStatus, reason string) (*Proposal, error) {
+func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecret, newStatus, reason string) (*Proposal, error) {
 	if proposalID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "proposal id is required")
 	}
 
-	principal, err := h.Auth.Verify(ctx, &hostv1.VerifyTokenRequest{Secret: tokenSecret, Scope: ScopeApprove})
+	principal, err := h.Auth.Verify(ctx, &hostv1.VerifyTokenRequest{Secret: tokenSecret, Scope: kind.ApproveScope})
 	if err != nil {
 		return nil, err
 	}
 
-	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: Collection, DocId: proposalID})
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: kind.Collection, DocId: proposalID})
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +99,7 @@ func decide(ctx context.Context, h *host.Host, proposalID, tokenSecret, newStatu
 	}
 
 	resp, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: Collection,
+		Collection: kind.Collection,
 		DocId:      proposalID,
 		Body:       &hostv1.Json{Value: s},
 		IfVersion:  doc.Version,
@@ -109,7 +111,7 @@ func decide(ctx context.Context, h *host.Host, proposalID, tokenSecret, newStatu
 			// actually recorded, so the error can name it; fall back to
 			// an empty status if that read fails.
 			winnerStatus := ""
-			if winnerDoc, gerr := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: Collection, DocId: proposalID}); gerr == nil && winnerDoc.Body != nil && winnerDoc.Body.Value != nil {
+			if winnerDoc, gerr := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: kind.Collection, DocId: proposalID}); gerr == nil && winnerDoc.Body != nil && winnerDoc.Body.Value != nil {
 				winnerStatus, _ = winnerDoc.Body.Value.AsMap()[keyStatus].(string)
 			}
 			return nil, ErrAlreadyDecided(proposalID, winnerStatus)
@@ -131,13 +133,15 @@ func decide(ctx context.Context, h *host.Host, proposalID, tokenSecret, newStatu
 // empty reason. There is no exported way to set a status that skips
 // verification or the CAS write.
 func Approve(ctx context.Context, h *host.Host, req ApproveRequest) (*Proposal, error) {
-	return decide(ctx, h, req.ProposalID, req.TokenSecret, StatusApproved, "")
+	return decide(ctx, h, req.Kind, req.ProposalID, req.TokenSecret, StatusApproved, "")
 }
 
-// RejectRequest is the input to Reject: the proposal to decide, the
-// caller's approval-scoped token secret, and the required human-readable
-// reason (D-06).
+// RejectRequest is the input to Reject: the Kind being decided, the
+// proposal to decide, the caller's approval-scoped token secret, and the
+// required human-readable reason (D-06). As with ApproveRequest, the Kind
+// must be a code-defined value the caller pinned.
 type RejectRequest struct {
+	Kind        Kind
 	ProposalID  string
 	TokenSecret string
 	Reason      string
@@ -155,5 +159,5 @@ func Reject(ctx context.Context, h *host.Host, req RejectRequest) (*Proposal, er
 	if reason == "" {
 		return nil, ErrReasonRequired(req.ProposalID)
 	}
-	return decide(ctx, h, req.ProposalID, req.TokenSecret, StatusRejected, reason)
+	return decide(ctx, h, req.Kind, req.ProposalID, req.TokenSecret, StatusRejected, reason)
 }
