@@ -26,7 +26,8 @@ type ApproveRequest struct {
 
 // decide is the single guarded write path shared by Approve and Reject.
 // It runs in a fixed order and the order is the security property:
-//  1. Refuse an empty proposal id before touching anything.
+//  1. Refuse an unusable Kind (empty Collection or ApproveScope) and an
+//     empty proposal id before touching anything.
 //  2. Verify the caller's token carries kind.ApproveScope via h.Auth.Verify,
 //     and return its error unchanged. Never compare the returned
 //     principal's scopes a second time — the facet already did the
@@ -58,6 +59,9 @@ type ApproveRequest struct {
 //     A returned codes.Aborted is translated into ErrAlreadyDecided,
 //     naming what the winner actually recorded via one best-effort Get.
 func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecret, newStatus, reason string) (*Proposal, error) {
+	if err := kind.validate(); err != nil {
+		return nil, err
+	}
 	if proposalID == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "proposal id is required")
 	}

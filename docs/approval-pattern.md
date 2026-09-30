@@ -8,11 +8,14 @@ is the first consumer, not a special case baked into the package.
 
 ## What this package guarantees
 
-- A proposal is created once, through `approval.Propose`. A second
-  `Propose` call for the same node id is refused; it cannot overwrite the
-  first.
+- A proposal is created once, through `approval.Propose` (or the generic
+  `approval.ProposeBody`). A second call for the same proposal id is
+  refused; it cannot overwrite the first. `ProposeBody` sets the pending
+  status itself and refuses a body that carries a `status` key, so no
+  caller can create a proposal that is born approved.
 - A decision — `approval.Approve` or `approval.Reject` — requires a token
-  the Auth facet issued for the approval scope, and nothing else will do.
+  the Auth facet issued for the approval scope named by the caller's
+  `approval.Kind`, and nothing else will do.
   A token minted for any other scope, or no token at all, is refused
   before the package ever looks at the proposal.
 - Every decision records who made it and when.
@@ -108,12 +111,13 @@ then act.
 ```go
 // Proposing path (the pack's normal request handling).
 node := &hostv1.Node{Id: "web-01", DisplayName: "web-01", Environment: "production"}
-proposal, err := approval.Propose(ctx, h, node)
+proposal, err := approval.Propose(ctx, h, node, inventoryonboarding.OnboardingKind)
 
 // Deciding path — structurally separate from the code above. The
 // operator obtained secret out of band; nothing in the proposing path
 // can reach it.
 decided, err := approval.Approve(ctx, h, approval.ApproveRequest{
+	Kind:        inventoryonboarding.OnboardingKind,
 	ProposalID:  node.Id,
 	TokenSecret: secret,
 })
@@ -142,8 +146,9 @@ code, rather than hidden inside a helper the caller has to trust.
 Errors worth branching on: `approval.ErrAlreadyProposed` (a second
 `Propose` for a node id already in flight), `approval.IsAlreadyDecided`
 (the predicate — use it, don't compare `codes.FailedPrecondition`
-directly, since a malformed proposal can also produce that code), and
-`approval.ErrReasonRequired` (`Reject` called with an empty reason).
+directly, since a malformed proposal can also produce that code),
+`approval.ErrReasonRequired` (`Reject` called with an empty reason), and
+`approval.IsKindRequired` (an `approval.Kind` with an empty field).
 
 Two manifest notes: the pack's manifest needs the `tokens:issue`
 permission for the decide calls to be allowed at all, and the approval
@@ -152,6 +157,20 @@ pack's `permissions` list.
 
 ## What this pattern does not do
 
+- **The required scope is pinned by the caller, not by this package.**
+  `approval.Kind{Collection, ApproveScope}` is passed by the caller to
+  every entry point, so the guarantee moved from "this package fixes the
+  scope" to "the caller pins the scope as a code-defined value, and the
+  propose/decide call-graph separation test is the proof". The one
+  runtime check is `approval.ErrKindRequired`, which refuses an empty
+  `Collection` or `ApproveScope` before any read and before any token
+  verification. Everything else is mechanized by tests, not enforced at
+  runtime: `TestApprovalScopeSourcedFromKindOnly` asserts over the real AST
+  that `decide` hands `Auth.Verify` exactly `kind.ApproveScope`, and a
+  pack's own call-graph test (as in `examples/inventory-onboarding`) must
+  show its proposing persona cannot choose the `Kind` it is decided
+  under. A `Kind` built from request input or a proposal body defeats the
+  gate, and nothing at runtime would notice.
 - **No field-level enforcement on the proposals collection.** The
   Documents facet is a generic namespaced JSON document store; it has no
   concept of collections, field names, or state machines. Any code
@@ -181,12 +200,32 @@ pack's `permissions` list.
 
 This package depends on nothing but the host's `Documents` and `Auth`
 fields, which is exactly what lets a second governed action reuse it
-unchanged rather than forking it. A second action needs its own
-Documents collection (a distinct name from `inventory-proposals`) and its
-own approval scope.
+unchanged rather than forking it. A second action defines its own
+`approval.Kind`: a Documents collection name distinct from
+`inventory-proposals` and its own approval scope.
 
-Today the required scope is one fixed, code-defined constant. That is
-honest about the current state, not a design goal: the first genuine
-second consumer is what turns it into a real kind-to-scope mapping, and
-making that change means auditing every existing caller of this package
-to confirm none of them was relying on the single fixed value.
+```go
+// Code-defined, package-level, never built from request input or a
+// proposal body.
+var OverwriteKind = approval.Kind{Collection: "code-overwrites", ApproveScope: "code:approve"}
+```
+
+Pass that `Kind` to `Propose` (node-shaped subjects) or `ProposeBody` (any
+other subject, described by a body map), to `Approve`/`Reject` through the
+`Kind` field of their request, and to `Get`. Two Kinds that share a
+collection but differ in scope never merge: `decide` presents exactly the
+scope it was handed to `Auth.Verify`.
+
+### What changed, and the GOV-03 audit
+
+The two package constants this API replaces, `approval.Collection`
+(`"inventory-proposals"`) and `approval.ScopeApprove`
+(`"inventory:approve"`), no longer exist; there is no compatibility alias.
+Removing them required auditing every existing caller of this package, as
+this section previously demanded. The audit result: the sole prior caller,
+`examples/inventory-onboarding`, was migrated onto `Kind` through a
+package-level `OnboardingKind` var referenced at its three call sites
+(`ProposeOnboarding`, `ApproverBackend.Approve`, `ApproverBackend.Reject`).
+Its call-graph test, `TestInventoryOnboarding_ProposerCannotSelfApprove`,
+passes with every liveness and refusal assertion unmodified; only that
+test file's token helper changed, to read the scope from `OnboardingKind`.

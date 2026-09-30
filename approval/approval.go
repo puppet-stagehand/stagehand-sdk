@@ -146,6 +146,42 @@ func ErrReasonRequired(proposalID string) error {
 	return withDetails.Err()
 }
 
+// ErrKindRequired builds the error every entry point returns when the Kind
+// it was handed has an empty field. field names which one ("collection" or
+// "approve_scope"). A Kind is refused before any document read and before
+// any token verification, so a zero-valued Kind can never reach
+// h.Auth.Verify with an empty Scope.
+func ErrKindRequired(field string) error {
+	msg := "approval kind requires a non-empty " + field
+	st := status.New(codes.InvalidArgument, msg)
+	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
+		Code:    detailKindRequired,
+		Message: msg,
+		Fix:     "pass a code-defined approval.Kind with both Collection and ApproveScope set",
+	})
+	if err != nil {
+		return st.Err() // details are best-effort; the status itself must never fail to construct
+	}
+	return withDetails.Err()
+}
+
+// IsKindRequired reports whether err is (or wraps) an ErrKindRequired
+// error.
+func IsKindRequired(err error) bool {
+	return errorDetailCode(err) == detailKindRequired
+}
+
+// validate refuses a Kind with an empty Collection or ApproveScope.
+func (k Kind) validate() error {
+	if k.Collection == "" {
+		return ErrKindRequired("collection")
+	}
+	if k.ApproveScope == "" {
+		return ErrKindRequired("approve_scope")
+	}
+	return nil
+}
+
 // IsAlreadyDecided reports whether err is (or wraps) an ErrAlreadyDecided
 // error. codes.FailedPrecondition alone is not distinguishable enough to
 // branch on — a malformed proposal body can also produce that code — so a
@@ -226,6 +262,9 @@ func proposalFromBody(proposalID string, m map[string]any, version int64) *Propo
 // nothing about this read crosses the governance boundary Approve/Reject
 // guard.
 func Get(ctx context.Context, h *host.Host, kind Kind, proposalID string) (*Proposal, error) {
+	if err := kind.validate(); err != nil {
+		return nil, err
+	}
 	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: kind.Collection, DocId: proposalID})
 	if err != nil {
 		return nil, err

@@ -12,11 +12,15 @@ import (
 )
 
 // Propose creates a pending proposal document for node, keyed by the
-// node's own id (D-00: doc_id == proposal_id == node.id). This file never
+// node's own id (D-00: doc_id == proposal_id == node.id). It builds the
+// node-shaped body and delegates the write to ProposeBody. This file never
 // reaches the token facet — proposing has no business verifying anything,
 // and a reader should be able to confirm that by opening this one short
 // file.
 func Propose(ctx context.Context, h *host.Host, node *hostv1.Node, kind Kind) (*Proposal, error) {
+	if err := kind.validate(); err != nil {
+		return nil, err
+	}
 	if node == nil || node.Id == "" {
 		return nil, status.Errorf(codes.InvalidArgument, "node with a non-empty id is required")
 	}
@@ -36,13 +40,36 @@ func Propose(ctx context.Context, h *host.Host, node *hostv1.Node, kind Kind) (*
 		nodeBody["facts"] = facts
 	}
 
-	body := map[string]any{
-		keyStatus: StatusPending,
-		keyNode:   nodeBody,
+	return ProposeBody(ctx, h, kind, node.Id, map[string]any{keyNode: nodeBody})
+}
+
+// ProposeBody creates a pending proposal document under kind.Collection
+// keyed by proposalID, carrying exactly the caller's body entries plus a
+// status this package sets itself. It is the generic create path for a
+// governed action whose subject is not an Inventory node. A body that
+// already carries the status key is refused: the proposal status is set by
+// this package and never by a caller, so no caller can create a proposal
+// that is born approved.
+func ProposeBody(ctx context.Context, h *host.Host, kind Kind, proposalID string, body map[string]any) (*Proposal, error) {
+	if err := kind.validate(); err != nil {
+		return nil, err
 	}
-	s, err := structpb.NewStruct(body)
+	if proposalID == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "proposal id is required")
+	}
+	if _, present := body[keyStatus]; present {
+		return nil, status.Errorf(codes.InvalidArgument, "proposal body must not carry the %q key: the proposal status is set by the approval package and never by a caller", keyStatus)
+	}
+
+	doc := make(map[string]any, len(body)+1)
+	for k, v := range body {
+		doc[k] = v
+	}
+	doc[keyStatus] = StatusPending
+
+	s, err := structpb.NewStruct(doc)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "propose %q: build document body: %v", node.Id, err)
+		return nil, status.Errorf(codes.Internal, "propose %q: build document body: %v", proposalID, err)
 	}
 
 	// The create-only if_version=0 branch IS the no-clobber guarantee
@@ -50,16 +77,16 @@ func Propose(ctx context.Context, h *host.Host, node *hostv1.Node, kind Kind) (*
 	// reintroduce the check-then-act window the CAS exists to close.
 	resp, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
 		Collection: kind.Collection,
-		DocId:      node.Id,
+		DocId:      proposalID,
 		Body:       &hostv1.Json{Value: s},
 		IfVersion:  0,
 	})
 	if err != nil {
 		if status.Code(err) == codes.AlreadyExists {
-			return nil, ErrAlreadyProposed(node.Id)
+			return nil, ErrAlreadyProposed(proposalID)
 		}
 		return nil, err
 	}
 
-	return &Proposal{ID: node.Id, Status: StatusPending, Version: resp.Version}, nil
+	return &Proposal{ID: proposalID, Status: StatusPending, Version: resp.Version}, nil
 }
