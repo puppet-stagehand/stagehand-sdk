@@ -1710,3 +1710,61 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 		}
 	})
 }
+
+// TestCodeOverwriteRemoveThenPutBypassesTheGate documents WR-04: deletes are
+// deliberately ungated (D-01), so replacing an item without approval takes two
+// calls, a remove and then a put, and the put is an ungated create. This test
+// pins that reachable path so the gate is described honestly: it guards against
+// accidental in-place replacement through a Put, and is not a control against a
+// code:rw holder acting deliberately.
+func TestCodeOverwriteRemoveThenPutBypassesTheGate(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("puppetfile module", func(t *testing.T) {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "prod")
+		mustPutModule(t, h, "prod", forgeModule("puppetlabs/apache", "0.10.0"))
+		replacement := forgeModule("puppetlabs/apache", "6.1.0")
+		if err := putModuleErr(h, "prod", replacement); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("direct replace: got %v, want requires-approval", err)
+		}
+		if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "puppetlabs/apache"}); err != nil {
+			t.Fatalf("RemovePuppetfileModule: %v", err)
+		}
+		mustPutModule(t, h, "prod", replacement)
+		resp, _ := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
+		if len(resp.Modules) != 1 || resp.Modules[0].GetForge().GetVersion() != "6.1.0" {
+			t.Fatalf("module not replaced through remove-then-put: %v", resp.Modules)
+		}
+	})
+
+	t.Run("hiera level", func(t *testing.T) {
+		h := newHieraHost(t)
+		replacement := &hostv1.HieraLevel{Name: "role", Path: "roles/y.yaml"}
+		if err := putLevelErr(h, "prod", replacement, 0, false); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("direct replace: got %v, want requires-approval", err)
+		}
+		if _, err := h.Code.RemoveHieraLevel(ctx, &hostv1.RemoveHieraLevelRequest{Environment: "prod", Name: "role"}); err != nil {
+			t.Fatalf("RemoveHieraLevel: %v", err)
+		}
+		if err := putLevelErr(h, "prod", replacement, 0, true); err != nil {
+			t.Fatalf("PutHieraLevel after remove: %v", err)
+		}
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); !strings.Contains(got, "roles/y.yaml") {
+			t.Fatalf("level not replaced through remove-then-put:\n%s", got)
+		}
+	})
+
+	t.Run("hiera data key", func(t *testing.T) {
+		h := newHieraHost(t)
+		if err := putKeyErr(h, "prod", "common.yaml", "port", scalarJSON(t, float64(1))); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("direct replace: got %v, want requires-approval", err)
+		}
+		if _, err := h.Code.RemoveHieraDataKey(ctx, &hostv1.RemoveHieraDataKeyRequest{Environment: "prod", Path: "common.yaml", Key: "port"}); err != nil {
+			t.Fatalf("RemoveHieraDataKey: %v", err)
+		}
+		if err := putKeyErr(h, "prod", "common.yaml", "port", scalarJSON(t, float64(1))); err != nil {
+			t.Fatalf("PutHieraDataKey after remove: %v", err)
+		}
+	})
+}

@@ -9,7 +9,8 @@ It explains one rule of the Code facet and how to work with it:
 The rule is not a warning and not a setting. The SDK refuses the write. There
 is no flag that turns the gate off, and no version of the Code facet that
 skips it. If a write is refused, the fix is to follow the loop below, not to
-look for a way around it.
+look for a way around it. The gate guards against accidental in-place
+replacement through a Put; section 6 says plainly what it does not stop.
 
 ## Some words first
 
@@ -190,7 +191,18 @@ permission.
   directly can write a complete approval record into `code-overwrites` (or
   write the Code collections themselves) and bypass the gate on `host.Local`.
   `TestCodeOverwriteApprovalProvenance` pins that.
-- **Creating and deleting are not gated.** Only replacing is.
+- **Creating and deleting are not gated, so the gate can be walked around by
+  a caller who means to.** Only an in-place replace is refused. Removing a
+  module, level or data key is ungated (D-01), and putting it back afterwards
+  is then an ungated create, so any holder of `code:rw` can replace an item
+  without approval by calling the remove and then the put. `ReorderHieraLevels`
+  and `SetModuledir` also change behaviour with no gate. The gate protects
+  against accidental in-place replacement and gives a reviewable path for
+  deliberate ones; it is not a control against a `code:rw` holder acting
+  maliciously. If you need that, gate the removes as well in the pack or the
+  host that embeds this SDK. `TestCodeOverwriteRemoveThenPutBypassesTheGate`
+  pins the remove-then-put path so this stays documented rather than
+  rediscovered.
 - **A pack that can reach both proposing and approving code has no gate.**
   Keep the two apart as described in
   [`docs/approval-pattern.md`](approval-pattern.md).

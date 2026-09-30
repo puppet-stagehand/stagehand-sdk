@@ -1517,6 +1517,17 @@ const (
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
 // Every Apply* RPC needs code:rw and nothing narrower.
+//
+// What the gate is and is not. It refuses an in-place replace made through a
+// Put*, which stops accidental replacement and gives deliberate replacement a
+// reviewable path. It is not a control against a caller with code:rw who means
+// to get around it: the delete RPCs (RemovePuppetfileModule, RemoveHieraLevel,
+// RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
+// putting an item back after removing it is an ungated create, so a replace
+// can be done as a remove followed by a put. ReorderHieraLevels and
+// SetModuledir change effective behaviour and are ungated too. A caller that
+// can also write the Documents facet directly can bypass the gate on
+// host.Local, since Documents has no access control.
 type CodeClient interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
@@ -1922,6 +1933,17 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
 // Every Apply* RPC needs code:rw and nothing narrower.
+//
+// What the gate is and is not. It refuses an in-place replace made through a
+// Put*, which stops accidental replacement and gives deliberate replacement a
+// reviewable path. It is not a control against a caller with code:rw who means
+// to get around it: the delete RPCs (RemovePuppetfileModule, RemoveHieraLevel,
+// RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
+// putting an item back after removing it is an ungated create, so a replace
+// can be done as a remove followed by a put. ReorderHieraLevels and
+// SetModuledir change effective behaviour and are ungated too. A caller that
+// can also write the Documents facet directly can bypass the gate on
+// host.Local, since Documents has no access control.
 type CodeServer interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
