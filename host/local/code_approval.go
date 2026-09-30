@@ -207,34 +207,27 @@ func (s *codeServer) approvedOverwriteProposalLocked(t code.OverwriteTarget) (st
 	return "", false
 }
 
-// approvedOverwriteBody resolves proposalID through the Documents store and
-// returns its decoded body, refusing unless its status is exactly the string
-// "approved". It must be called with NO lock held: it uses the documentsServer
-// Get method, which takes s.docs.mu itself. The store's own NotFound is
-// returned unchanged for an unknown proposal id.
-func (s *codeServer) approvedOverwriteBody(ctx context.Context, proposalID string) (map[string]any, error) {
-	doc, err := s.docs.Get(ctx, &hostv1.GetDocumentRequest{Collection: code.OverwriteCollection, DocId: proposalID})
-	if err != nil {
-		return nil, err
+// resolveApplyProposalLocked is the first step of every Apply RPC. It reads the
+// proposal document itself, under the lock the caller already holds, so the
+// status it checks is the status the write that follows is based on: there is no
+// window between "was it approved" and "write" in which the proposal could be
+// deleted or replaced. It requires the status string "approved", parses the
+// target and refuses a resource other than wantResource. It reads a decision
+// someone else recorded and never changes it. The caller must already hold
+// s.docs.mu; this method calls no documentsServer gRPC method, because those
+// take the same lock. An unknown proposal id returns the same NotFound the
+// Documents store returns.
+func (s *codeServer) resolveApplyProposalLocked(proposalID, wantResource string) (map[string]any, code.OverwriteTarget, error) {
+	doc, ok := s.docs.getLocked(code.OverwriteCollection, proposalID)
+	if !ok {
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.NotFound, "collection %q has no document %q", code.OverwriteCollection, proposalID)
 	}
 	if doc.Body == nil || doc.Body.Value == nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q has no body", proposalID)
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q has no body", proposalID)
 	}
 	body := doc.Body.Value.AsMap()
 	if st, isStr := body[overwriteStatusKey].(string); !isStr || st != overwriteStatusApproved {
-		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q is not approved", proposalID)
-	}
-	return body, nil
-}
-
-// resolveApplyProposal is phase one of every Apply RPC: with no lock held it
-// resolves proposalID, requires the status string "approved", parses the
-// target and refuses a resource other than wantResource. It reads a decision
-// someone else recorded and never changes it.
-func (s *codeServer) resolveApplyProposal(ctx context.Context, proposalID, wantResource string) (map[string]any, code.OverwriteTarget, error) {
-	body, err := s.approvedOverwriteBody(ctx, proposalID)
-	if err != nil {
-		return nil, code.OverwriteTarget{}, err
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q is not approved", proposalID)
 	}
 	target, err := code.ParseOverwriteTarget(body)
 	if err != nil {
@@ -260,28 +253,18 @@ func (s *codeServer) resolveApplyProposal(ctx context.Context, proposalID, wantR
 // token, never evaluates a scope and never writes into the overwrite
 // collection; the decision and the materialization stay in separate code.
 //
-// Phase one runs with no lock held and resolves and validates the proposal.
-// Phase two takes s.docs.mu once, re-reads the current model under that lock
-// rather than trusting anything read earlier, and uses only *Locked helpers,
-// so two concurrent calls converge on one stored Puppetfile. The call is
+// The whole body runs under one s.docs.mu acquisition and uses only *Locked
+// helpers. That includes reading the proposal itself: the approved status it
+// acts on is read under the same lock as the write, never before it, so two
+// concurrent calls converge on one stored Puppetfile. The call is
 // idempotent: when the stored module already equals the frozen payload it
 // returns it without writing.
 func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *hostv1.ApplyPuppetfileModuleOverwriteRequest) (*hostv1.PuppetfileModule, error) {
-	body, err := s.approvedOverwriteBody(ctx, req.ProposalId)
-	if err != nil {
-		return nil, err
-	}
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
 
-	target, err := code.ParseOverwriteTarget(body)
+	body, target, err := s.resolveApplyProposalLocked(req.ProposalId, code.OverwriteResourcePuppetfileModule)
 	if err != nil {
-		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
-	}
-	if target.Resource != code.OverwriteResourcePuppetfileModule {
-		return nil, status.Errorf(codes.FailedPrecondition,
-			"overwrite proposal %q targets a %q, not a %q; use the matching Apply RPC",
-			req.ProposalId, target.Resource, code.OverwriteResourcePuppetfileModule)
-	}
-	if err := validateEnvName(target.Environment); err != nil {
 		return nil, err
 	}
 	frozen, err := code.OverwritePayloadPuppetfileModule(body)
@@ -296,9 +279,6 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 	if err := code.ValidateModule(frozen); err != nil {
 		return nil, mapPuppetfileErr(err)
 	}
-
-	s.docs.mu.Lock()
-	defer s.docs.mu.Unlock()
 
 	if _, ok := s.docs.getLocked(envCollection, target.Environment); !ok {
 		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
@@ -338,12 +318,15 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 // can never write settings its approver did not see. Like every Apply RPC it
 // only reads the decision, never records one.
 //
-// Phase one resolves and validates the proposal with no lock held. Phase two
-// takes s.docs.mu once, re-reads the environment under that lock and uses only
-// *Locked helpers. The call is idempotent: when the stored settings already
+// The whole body runs under one s.docs.mu acquisition and uses only *Locked
+// helpers, including the read of the proposal itself, so the approved status
+// and the write cannot be separated by another writer. The call is idempotent: when the stored settings already
 // equal the frozen record it returns them without writing.
 func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.ApplyEnvironmentSettingsRequest) (*hostv1.EnvironmentSettings, error) {
-	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceSettings)
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	body, target, err := s.resolveApplyProposalLocked(req.ProposalId, code.OverwriteResourceSettings)
 	if err != nil {
 		return nil, err
 	}
@@ -354,9 +337,6 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 	if err := checkSettingsRoundTrip(frozen); err != nil {
 		return nil, err
 	}
-
-	s.docs.mu.Lock()
-	defer s.docs.mu.Unlock()
 
 	doc, ok := s.docs.getLocked(envCollection, target.Environment)
 	if !ok {
@@ -398,8 +378,9 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 // of the source, so the source is read at apply time and no document set is
 // frozen in the proposal. That is deliberate, not an oversight.
 //
-// Phase one resolves and validates the proposal with no lock held. Phase two
-// takes s.docs.mu once for the whole materialize step: it plans the rekeyed
+// The whole body runs under one s.docs.mu acquisition, including the read of
+// the proposal itself, so the approved status and the write cannot be
+// separated by another writer. It plans the rekeyed
 // copies with the same two helpers DuplicateEnvironment uses, so ownership is
 // decided in exactly one place, deletes everything the target owns, then writes
 // every planned copy. No documentsServer gRPC method runs in between, so a
@@ -414,7 +395,10 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 // retry after a lost response); if the source or target has moved on it is
 // refused and a new proposal is needed.
 func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.ApplyEnvironmentDuplicateRequest) (*hostv1.Environment, error) {
-	_, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceEnvironment)
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	_, target, err := s.resolveApplyProposalLocked(req.ProposalId, code.OverwriteResourceEnvironment)
 	if err != nil {
 		return nil, err
 	}
@@ -424,9 +408,6 @@ func (s *codeServer) ApplyEnvironmentDuplicate(ctx context.Context, req *hostv1.
 	if target.Source == target.Environment {
 		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q names %q as both source and target", req.ProposalId, target.Source)
 	}
-
-	s.docs.mu.Lock()
-	defer s.docs.mu.Unlock()
 
 	if _, ok := s.docs.getLocked(envCollection, target.Source); !ok {
 		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Source)
@@ -501,15 +482,18 @@ func (s *codeServer) targetMatchesPlanLocked(existing []docRef, writes []planned
 // insert flag it writes are the ones frozen in the proposal at propose time.
 // Like every Apply RPC it only reads the decision, never records one.
 //
-// Phase one resolves and validates the proposal with no lock held. Phase two
-// takes s.docs.mu once, re-reads the stored hierarchy under that lock and uses
-// only *Locked helpers. When a level of the approved name exists it is
+// The whole body runs under one s.docs.mu acquisition and uses only *Locked
+// helpers, including the read of the proposal itself, so the approved status
+// and the write cannot be separated by another writer. When a level of the approved name exists it is
 // replaced in place so the hierarchy order is preserved; the frozen insert
 // flag is only honoured when no such level exists, since inserting a second
 // level of the same name would corrupt the hierarchy. The call is idempotent:
 // when the stored level already equals the approved one nothing is written.
 func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.ApplyHieraLevelOverwriteRequest) (*hostv1.PutHieraLevelResponse, error) {
-	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceHieraLevel)
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	body, target, err := s.resolveApplyProposalLocked(req.ProposalId, code.OverwriteResourceHieraLevel)
 	if err != nil {
 		return nil, err
 	}
@@ -527,9 +511,6 @@ func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.A
 			"overwrite proposal %q carries lookup_options, which is read-only and cannot be written", req.ProposalId)
 	}
 	warnings := code.LintLevelPaths(lvl)
-
-	s.docs.mu.Lock()
-	defer s.docs.mu.Unlock()
 
 	if _, ok := s.docs.getLocked(envCollection, target.Environment); !ok {
 		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
@@ -580,12 +561,16 @@ func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.A
 // named data file, through code.PutDataKey so comments and key order survive.
 // Like every Apply RPC it only reads the decision, never records one.
 //
-// Phase one resolves and validates the proposal with no lock held. Phase two
-// takes s.docs.mu once and uses only *Locked helpers. The call is idempotent:
+// The whole body runs under one s.docs.mu acquisition and uses only *Locked
+// helpers, including the read of the proposal itself, so the approved status
+// and the write cannot be separated by another writer. The call is idempotent:
 // when the file already holds the approved value under that key nothing is
 // written.
 func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1.ApplyHieraDataKeyOverwriteRequest) (*hostv1.HieraDataFile, error) {
-	body, target, err := s.resolveApplyProposal(ctx, req.ProposalId, code.OverwriteResourceHieraDataKey)
+	s.docs.mu.Lock()
+	defer s.docs.mu.Unlock()
+
+	body, target, err := s.resolveApplyProposalLocked(req.ProposalId, code.OverwriteResourceHieraDataKey)
 	if err != nil {
 		return nil, err
 	}
@@ -599,9 +584,6 @@ func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
 	}
-
-	s.docs.mu.Lock()
-	defer s.docs.mu.Unlock()
 
 	if _, ok := s.docs.getLocked(envCollection, target.Environment); !ok {
 		return nil, status.Errorf(codes.NotFound, "no environment %q", target.Environment)
