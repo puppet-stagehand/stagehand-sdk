@@ -49,7 +49,8 @@ type ApproveRequest struct {
 //     is to compose two existing facets would be new, unproven machinery.
 //  5. Copy every entry of the body read back so the node object and any
 //     additive field a later version writes survive untouched, then set
-//     the new status, the deciding principal's Label, and the current
+//     the new status, the deciding principal's Label, the scope that was
+//     verified (approved_scope), and the current
 //     time as an RFC3339Nano UTC string (a time.Time cannot be put
 //     directly into a structpb.Struct).
 //  6. Write with h.Documents.Put using IfVersion set to the version Get
@@ -91,6 +92,11 @@ func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecre
 	}
 	next[keyStatus] = newStatus
 	next[keyDecidedBy] = principal.Label
+	// Record the scope that was actually verified, taken from the same
+	// kind.ApproveScope handed to Auth.Verify above, so a consumer of an
+	// approved proposal can require the scope it expects rather than trust
+	// the status string alone.
+	next[keyApprovedScope] = kind.ApproveScope
 	decidedAt := time.Now().UTC()
 	next[keyDecidedAt] = decidedAt.Format(time.RFC3339Nano)
 	if reason != "" {

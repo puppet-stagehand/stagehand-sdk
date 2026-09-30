@@ -191,6 +191,13 @@ pack's `permissions` list.
   `host.Local`'s Auth facet has no requester-identity concept beyond
   that label; do not read `decided_by` as a stronger guarantee than it
   is.
+- **Approval records the verified scope.** `Approve` and `Reject` also write
+  `approved_scope`, the scope the caller's token was verified against (the
+  `Kind`'s `ApproveScope`). A consumer of an approved proposal that acts on it
+  outside this package should require the scope it expects, rather than trust
+  the `status` string alone: the scope travels in the caller's `Kind`, so
+  nothing in this package can stop a different `Kind` from producing an
+  `approved` status on the same collection.
 - **Fact values must be byte-safe.** Fact values travel through a JSON
   structure (`structpb.Struct`), which cannot hold invalid UTF-8. Any
   value carrying raw bytes must be base64-encoded before it is proposed,

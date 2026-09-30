@@ -71,6 +71,11 @@ const (
 	keyReason    = "reason"
 	keyDecidedBy = "decided_by"
 	keyDecidedAt = "decided_at"
+
+	// keyApprovedScope records the approval scope decide verified the
+	// caller's token against, so a reader of an approved proposal can tell
+	// which scope authorized it instead of trusting the bare status string.
+	keyApprovedScope = "approved_scope"
 )
 
 // Detail codes attached to this package's errors, used by IsAlreadyDecided

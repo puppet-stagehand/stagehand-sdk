@@ -1616,3 +1616,97 @@ func TestCodeOverwriteAppliedProposalIsSpent(t *testing.T) {
 		}
 	})
 }
+
+// TestCodeOverwriteApprovalProvenance pins WR-03: the gate trusts an approval
+// only when the proposal records a decision made under code:approve, not on the
+// bare status string.
+func TestCodeOverwriteApprovalProvenance(t *testing.T) {
+	ctx := context.Background()
+	setup := func(t *testing.T) (*host.Host, string) {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "prod")
+		mustPutModule(t, h, "prod", forgeModule("puppetlabs/apache", "0.10.0"))
+		proposeOverwrite(t, h, "p1", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
+		return h, puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
+	}
+	setBody := func(t *testing.T, h *host.Host, mutate func(map[string]any)) {
+		t.Helper()
+		doc, ok := getDoc(t, h, ctx, code.OverwriteCollection, "p1")
+		if !ok {
+			t.Fatal("proposal missing")
+		}
+		body := doc.Body.Value.AsMap()
+		mutate(body)
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: code.OverwriteCollection, DocId: "p1", IfVersion: doc.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, body)},
+		}); err != nil {
+			t.Fatalf("Documents.Put: %v", err)
+		}
+	}
+
+	t.Run("a genuine approval records the verified scope", func(t *testing.T) {
+		h, _ := setup(t)
+		approveOverwrite(t, h, "p1")
+		doc, _ := getDoc(t, h, ctx, code.OverwriteCollection, "p1")
+		m := doc.Body.Value.AsMap()
+		if m["approved_scope"] != code.OverwriteApproveScope || m["decided_by"] != "operator" {
+			t.Fatalf("approval provenance missing from %v", m)
+		}
+	})
+
+	t.Run("an approval decided under another scope does not authorize an overwrite", func(t *testing.T) {
+		h, before := setup(t)
+		otherKind := approval.Kind{Collection: code.OverwriteCollection, ApproveScope: "anything:else"}
+		tok, err := h.Auth.IssueToken(ctx, &hostv1.IssueTokenRequest{Scope: "anything:else", Label: "someone", TtlSeconds: 300})
+		if err != nil {
+			t.Fatalf("IssueToken: %v", err)
+		}
+		if _, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: otherKind, ProposalID: "p1", TokenSecret: tok.Secret}); err != nil {
+			t.Fatalf("Approve with the other kind: %v", err)
+		}
+		_, err = applyModule(h, "p1")
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), code.OverwriteApproveScope) {
+			t.Fatalf("Apply: got %v, want FailedPrecondition naming the required scope", err)
+		}
+		if err := putModuleErr(h, "prod", forgeModule("puppetlabs/apache", "6.1.0")); !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("Put: got %v, want requires-approval (the proposal covers nothing)", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
+			t.Fatalf("a wrong-scope approval wrote: %q", got)
+		}
+	})
+
+	t.Run("a bare status flip without provenance is refused", func(t *testing.T) {
+		h, before := setup(t)
+		setBody(t, h, func(m map[string]any) { m["status"] = "approved" })
+		if _, err := applyModule(h, "p1"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("Apply: got %v, want FailedPrecondition", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
+			t.Fatalf("a bare approved status wrote: %q", got)
+		}
+	})
+
+	// This pins an accepted property, like TestApproval_DocumentsHasNoFieldLevelACL
+	// for inventory: the Documents facet has no ACL, so any holder of *host.Host
+	// can write a complete, well-formed approval record straight into the
+	// code-overwrites collection. The gate defends against accidental and
+	// unapproved overwrites through the Code RPCs; it is not a boundary against a
+	// pack that can also write Documents.
+	t.Run("Documents has no ACL, so a full forged approval record is honoured", func(t *testing.T) {
+		h, _ := setup(t)
+		setBody(t, h, func(m map[string]any) {
+			m["status"] = "approved"
+			m["approved_scope"] = code.OverwriteApproveScope
+			m["decided_by"] = "forged"
+		})
+		got, err := applyModule(h, "p1")
+		if err != nil {
+			t.Fatalf("Apply of a forged-but-well-formed approval: %v", err)
+		}
+		if got.GetForge().GetVersion() != "6.1.0" {
+			t.Fatalf("Apply returned %+v", got)
+		}
+	})
+}

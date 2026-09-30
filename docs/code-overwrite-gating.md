@@ -180,9 +180,16 @@ permission.
   the call is refused with `FailedPrecondition` ("already applied") and you
   need a new proposal and a new approval. Without this rule one approval would
   be a standing permission to copy whatever the source later became.
-- **The gate is not advisory and cannot be switched off.** There is no
-  option, permission or environment variable that lets an overwrite through
-  without an approved proposal.
+- **The Code RPCs cannot be told to skip the gate.** There is no option,
+  permission or environment variable that lets a Put through without an
+  approved proposal. The trust boundary is the Code facet, not the Documents
+  facet: an approval is only honoured when the proposal records that it was
+  decided under the `code:approve` scope (`approved_scope`) by a named
+  principal (`decided_by`), and `approval.Approve` writes both. The Documents
+  facet has no access control, so a pack that can call `Documents.Put`
+  directly can write a complete approval record into `code-overwrites` (or
+  write the Code collections themselves) and bypass the gate on `host.Local`.
+  `TestCodeOverwriteApprovalProvenance` pins that.
 - **Creating and deleting are not gated.** Only replacing is.
 - **A pack that can reach both proposing and approving code has no gate.**
   Keep the two apart as described in

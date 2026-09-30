@@ -42,6 +42,28 @@ const (
 	overwriteStatusApproved = "approved"
 )
 
+// overwriteScopeKey and overwriteDecidedByKey name the provenance the approval
+// package records when it decides a proposal: the scope it verified the
+// caller's token against, and the deciding principal's label. A proposal counts
+// as approved for the overwrite gate only when its status is "approved" AND
+// that provenance shows the decision was made under code.OverwriteApproveScope.
+const (
+	overwriteScopeKey     = "approved_scope"
+	overwriteDecidedByKey = "decided_by"
+)
+
+// overwriteApprovalRecorded reports whether body carries the provenance of a
+// decision made under code.OverwriteApproveScope: the verified scope equals it
+// exactly and a deciding principal is named. Requiring this, not the status
+// string alone, is what stops approval.Approve called with a Kind that names a
+// different scope (which the approval package cannot refuse, since the scope
+// travels in the caller's Kind) from authorizing a code overwrite.
+func overwriteApprovalRecorded(body map[string]any) bool {
+	scope, _ := body[overwriteScopeKey].(string)
+	by, _ := body[overwriteDecidedByKey].(string)
+	return scope == code.OverwriteApproveScope && by != ""
+}
+
 // overwriteAppliedCollection is the Code facet's own record of which approved
 // proposals have already been materialized, keyed by proposal id. It is not a
 // status change on the proposal, so the "Apply never decides" rule holds: the
@@ -201,6 +223,9 @@ func (s *codeServer) approvedOverwriteProposalLocked(t code.OverwriteTarget) (st
 		if st, isStr := body[overwriteStatusKey].(string); !isStr || st != overwriteStatusApproved {
 			continue
 		}
+		if !overwriteApprovalRecorded(body) {
+			continue
+		}
 		got, err := code.ParseOverwriteTarget(body)
 		if err != nil {
 			continue
@@ -217,7 +242,9 @@ func (s *codeServer) approvedOverwriteProposalLocked(t code.OverwriteTarget) (st
 // status it checks is the status the write that follows is based on: there is no
 // window between "was it approved" and "write" in which the proposal could be
 // deleted or replaced. It requires the status string "approved", parses the
-// target and refuses a resource other than wantResource. It reads a decision
+// target and refuses a resource other than wantResource. A status of
+// "approved" alone is not enough: the body must also record a decision made
+// under code.OverwriteApproveScope (see overwriteApprovalRecorded). It reads a decision
 // someone else recorded and never changes it. The caller must already hold
 // s.docs.mu; this method calls no documentsServer gRPC method, because those
 // take the same lock. An unknown proposal id returns the same NotFound the
@@ -233,6 +260,11 @@ func (s *codeServer) resolveApplyProposalLocked(proposalID, wantResource string)
 	body := doc.Body.Value.AsMap()
 	if st, isStr := body[overwriteStatusKey].(string); !isStr || st != overwriteStatusApproved {
 		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q is not approved", proposalID)
+	}
+	if !overwriteApprovalRecorded(body) {
+		return nil, code.OverwriteTarget{}, status.Errorf(codes.FailedPrecondition,
+			"overwrite proposal %q carries no record of a decision under the %s scope; propose it again and have an operator holding that scope approve it",
+			proposalID, code.OverwriteApproveScope)
 	}
 	target, err := code.ParseOverwriteTarget(body)
 	if err != nil {

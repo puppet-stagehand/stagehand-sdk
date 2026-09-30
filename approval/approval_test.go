@@ -264,6 +264,9 @@ func TestApproval_ApproveWritesAuditTrail(t *testing.T) {
 	if _, ok := afterBody["decided_at"].(string); !ok {
 		t.Fatalf("expected stored decided_at to be a string, got %T", afterBody["decided_at"])
 	}
+	if afterBody["approved_scope"] != testKind.ApproveScope {
+		t.Fatalf("expected stored approved_scope %q, got %v", testKind.ApproveScope, afterBody["approved_scope"])
+	}
 	nodeAfter := afterBody["node"]
 	if fmtEqual(nodeBefore, nodeAfter) == false {
 		t.Fatalf("expected node object unchanged by approval: before %+v after %+v", nodeBefore, nodeAfter)
