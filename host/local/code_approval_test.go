@@ -1522,3 +1522,97 @@ func TestCodeOverwriteAllApplyRPCsRequireCodeRW(t *testing.T) {
 		})
 	}
 }
+
+// TestCodeOverwriteAppliedProposalIsSpent pins WR-02: an approval covers one
+// application. After a proposal is applied and a later approved proposal changes
+// the same item, replaying the first proposal is refused rather than silently
+// reverting the item, and the Put refusal never names a spent proposal.
+func TestCodeOverwriteAppliedProposalIsSpent(t *testing.T) {
+	ctx := context.Background()
+
+	requireSpent := func(t *testing.T, err error) {
+		t.Helper()
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "already applied") {
+			t.Fatalf("replay of a spent proposal: got %v, want FailedPrecondition naming already applied", err)
+		}
+	}
+	requireNotPending := func(t *testing.T, err error) {
+		t.Helper()
+		if !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+			t.Fatalf("a Put over an item whose only approval is spent: got %v, want requires-approval (not apply-pending)", err)
+		}
+	}
+
+	t.Run("puppetfile module", func(t *testing.T) {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "prod")
+		mustPutModule(t, h, "prod", forgeModule("puppetlabs/ntp", "0.1.0"))
+		overwriteViaApproval(t, h, "a", "prod", forgeModule("puppetlabs/ntp", "1.0.0"))
+		requireNotPending(t, putModuleErr(h, "prod", forgeModule("puppetlabs/ntp", "1.0.0")))
+		overwriteViaApproval(t, h, "b", "prod", forgeModule("puppetlabs/ntp", "2.0.0"))
+
+		_, err := applyModule(h, "a")
+		requireSpent(t, err)
+		resp, _ := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
+		if got := resp.Modules[0].GetForge().GetVersion(); got != "2.0.0" {
+			t.Fatalf("stale replay reverted the module to %q, want 2.0.0", got)
+		}
+		// A retry that changes nothing is still fine.
+		if _, err := applyModule(h, "b"); err != nil {
+			t.Fatalf("no-op retry of the latest proposal: %v", err)
+		}
+	})
+
+	t.Run("environment settings", func(t *testing.T) {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "production")
+		proposeSettings(t, h, "a", &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr("one")})
+		approveOverwrite(t, h, "a")
+		if _, err := applySettings(h, "a"); err != nil {
+			t.Fatalf("Apply a: %v", err)
+		}
+		putSettingsViaApproval(t, h, &hostv1.EnvironmentSettings{Environment: "production", Modulepath: strPtr("two")})
+
+		_, err := applySettings(h, "a")
+		requireSpent(t, err)
+		if got := mustGetSettings(t, h, "production").GetModulepath(); got != "two" {
+			t.Fatalf("stale replay reverted settings to %q, want two", got)
+		}
+	})
+
+	t.Run("hiera level", func(t *testing.T) {
+		h := newHieraHost(t)
+		first := &hostv1.HieraLevel{Name: "common", Path: "one.yaml"}
+		putHieraLevelViaApproval(t, h, "prod", first, 0, false)
+		requireNotPending(t, putLevelErr(h, "prod", first, 0, false))
+		proposeHieraLevel(t, h, "a", "prod", first, 0, false)
+		approveOverwrite(t, h, "a")
+		if _, err := applyHieraLevel(h, "a"); err != nil {
+			t.Fatalf("Apply a: %v", err)
+		}
+		putHieraLevelViaApproval(t, h, "prod", &hostv1.HieraLevel{Name: "common", Path: "two.yaml"}, 0, false)
+
+		_, err := applyHieraLevel(h, "a")
+		requireSpent(t, err)
+		if got := hieraHierarchyTextRaw(t, h, ctx, "prod"); !strings.Contains(got, "two.yaml") || strings.Contains(got, "one.yaml") {
+			t.Fatalf("stale replay reverted the level:\n%s", got)
+		}
+	})
+
+	t.Run("hiera data key", func(t *testing.T) {
+		h := newHieraHost(t)
+		proposeHieraDataKey(t, h, "a", "prod", "common.yaml", "port", scalarJSON(t, float64(1111)))
+		approveOverwrite(t, h, "a")
+		if _, err := applyHieraDataKey(h, "a"); err != nil {
+			t.Fatalf("Apply a: %v", err)
+		}
+		requireNotPending(t, putKeyErr(h, "prod", "common.yaml", "port", scalarJSON(t, float64(1111))))
+		dataKeyViaApproval(t, h, "prod", "common.yaml", "port", scalarJSON(t, float64(2222)))
+
+		_, err := applyHieraDataKey(h, "a")
+		requireSpent(t, err)
+		if got, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml"); !strings.Contains(got.Body.Value.AsMap()["yaml"].(string), "2222") {
+			t.Fatalf("stale replay reverted the key: %v", got.Body.Value.AsMap())
+		}
+	})
+}

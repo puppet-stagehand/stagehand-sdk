@@ -159,11 +159,17 @@ permission.
 
 ## 6. What the gate does not do
 
-- **Applying does not use up the proposal.** An approved proposal stays
-  approved, so you can apply it again. That is safe for the four content
-  writes (module, settings, Hiera level, Hiera data key): each one writes the
-  content frozen at propose time, and applying the same proposal twice leaves
-  the same result and does not rewrite anything the second time.
+- **An approval covers one application.** The SDK records each applied
+  proposal in a marker of its own (the proposal document is never touched, so
+  its status stays `approved`). For the four content writes (module, settings,
+  Hiera level, Hiera data key) each Apply writes the content frozen at propose
+  time. Applying the same proposal again is allowed only when it would change
+  nothing, for example a retry after a lost reply. If a later approved
+  proposal has changed the same item in the meantime, replaying the old
+  proposal is refused with `FailedPrecondition` ("already applied") instead of
+  quietly reverting the newer change. An applied proposal is also no longer
+  offered by the `code_overwrite_apply_pending` refusal: a fresh Put over that
+  item asks for a new proposal.
 - **`ApplyEnvironmentDuplicate` is different, and is single-use.** It freezes
   no copy of the source. The approver approved the operation "replace the
   target with a copy of the source", so the source is read when you apply. If

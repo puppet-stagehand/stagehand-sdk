@@ -184,10 +184,15 @@ func errOverwriteAlreadyApplied(proposalID string) error {
 // specified tie-break when several approved proposals cover one target: the
 // lowest doc id wins, deterministically, never map iteration order. A
 // document whose status is not exactly "approved", or whose target cannot be
-// read, covers nothing. The caller must already hold s.docs.mu; this method
+// read, covers nothing, and neither does a proposal that has already been
+// applied: an approval covers one application, so a spent proposal must not be
+// named as the way to make a fresh write. The caller must already hold s.docs.mu; this method
 // calls no documentsServer gRPC method, because those take the same lock.
 func (s *codeServer) approvedOverwriteProposalLocked(t code.OverwriteTarget) (string, bool) {
 	for _, id := range s.docs.idsLocked(code.OverwriteCollection) {
+		if s.overwriteAppliedLocked(id) {
+			continue
+		}
 		doc, ok := s.docs.getLocked(code.OverwriteCollection, id)
 		if !ok || doc.Body == nil || doc.Body.Value == nil {
 			continue
@@ -258,7 +263,11 @@ func (s *codeServer) resolveApplyProposalLocked(proposalID, wantResource string)
 // acts on is read under the same lock as the write, never before it, so two
 // concurrent calls converge on one stored Puppetfile. The call is
 // idempotent: when the stored module already equals the frozen payload it
-// returns it without writing.
+// returns it without writing. An approval covers one application: once the
+// proposal has been applied, a repeat call is honoured only when it would write
+// nothing, so a stale proposal can never revert a module that a later approved
+// proposal has since changed. The other three content-write Apply RPCs follow
+// the same rule.
 func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *hostv1.ApplyPuppetfileModuleOverwriteRequest) (*hostv1.PuppetfileModule, error) {
 	s.docs.mu.Lock()
 	defer s.docs.mu.Unlock()
@@ -297,7 +306,13 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 		}
 	}
 	if idx >= 0 && proto.Equal(pf.Modules[idx], frozen) {
+		if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
+			return nil, err
+		}
 		return clonePuppetfileModule(pf.Modules[idx]), nil
+	}
+	if s.overwriteAppliedLocked(req.ProposalId) {
+		return nil, errOverwriteAlreadyApplied(req.ProposalId)
 	}
 
 	written := clonePuppetfileModule(frozen)
@@ -307,6 +322,9 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 		pf.Modules = append(pf.Modules, written)
 	}
 	if err := s.storePuppetfileLocked(target.Environment, pf); err != nil {
+		return nil, err
+	}
+	if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
 		return nil, err
 	}
 	return clonePuppetfileModule(written), nil
@@ -347,7 +365,13 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 		return nil, err
 	}
 	if proto.Equal(current, frozen) {
+		if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
+			return nil, err
+		}
 		return proto.Clone(current).(*hostv1.EnvironmentSettings), nil
+	}
+	if s.overwriteAppliedLocked(req.ProposalId) {
+		return nil, errOverwriteAlreadyApplied(req.ProposalId)
 	}
 
 	newBody, err := settingsIntoBody(doc.Body, frozen)
@@ -363,6 +387,9 @@ func (s *codeServer) ApplyEnvironmentSettings(ctx context.Context, req *hostv1.A
 	}
 	result, err := settingsFromDoc(stored, target.Environment)
 	if err != nil {
+		return nil, err
+	}
+	if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
 		return nil, err
 	}
 	return proto.Clone(result).(*hostv1.EnvironmentSettings), nil
@@ -534,6 +561,9 @@ func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.A
 	}
 
 	if idx < 0 || !proto.Equal(current.GetLevels()[idx], lvl) {
+		if s.overwriteAppliedLocked(req.ProposalId) {
+			return nil, errOverwriteAlreadyApplied(req.ProposalId)
+		}
 		newText, err := code.PutLevel(text, lvl, index, insert && idx < 0)
 		if err != nil {
 			return nil, mapHieraErr(err)
@@ -541,6 +571,10 @@ func (s *codeServer) ApplyHieraLevelOverwrite(ctx context.Context, req *hostv1.A
 		if err := s.storeHierarchyLocked(target.Environment, newText); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
+		return nil, err
 	}
 
 	stored, _ := s.hierarchyTextLocked(target.Environment)
@@ -601,6 +635,9 @@ func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1
 		}
 	}
 	if !unchanged {
+		if s.overwriteAppliedLocked(req.ProposalId) {
+			return nil, errOverwriteAlreadyApplied(req.ProposalId)
+		}
 		newText, err := code.PutDataKey(text, target.Name, value)
 		if err != nil {
 			return nil, mapHieraErr(err)
@@ -608,6 +645,10 @@ func (s *codeServer) ApplyHieraDataKeyOverwrite(ctx context.Context, req *hostv1
 		if err := s.storeDataFileLocked(target.Environment, target.Path, newText); err != nil {
 			return nil, err
 		}
+	}
+
+	if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
+		return nil, err
 	}
 
 	stored, _ := s.dataFileTextLocked(target.Environment, target.Path)
