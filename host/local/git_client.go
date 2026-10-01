@@ -2,6 +2,13 @@ package local
 
 import (
 	"context"
+	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // GitBranchRef is one branch head a remote advertises: its short name (no
@@ -33,13 +40,30 @@ const (
 )
 
 // GitCredential is a materialised credential the host holds for one
-// invocation.
+// invocation: the plaintext of a sealed Secret, revealed just before a fetch
+// and never persisted. Kind says which fields apply: Username and Token for
+// an HTTPS token, PrivateKey for an SSH key. No field may reach a log, a
+// status message, argv, a URL or a formatted struct dump, so the type redacts
+// every secret field from every fmt verb exactly as LLMProvider redacts its
+// API key; only Kind stays visible.
 type GitCredential struct {
 	Kind       GitCredentialKind
 	Username   string
 	Token      string
 	PrivateKey string
 }
+
+// String implements fmt.Stringer without any secret material.
+func (c GitCredential) String() string {
+	return fmt.Sprintf("GitCredential{Kind:%q Username:[redacted] Token:[redacted] PrivateKey:[redacted]}", string(c.Kind))
+}
+
+// GoString implements fmt.GoStringer without any secret material.
+func (c GitCredential) GoString() string { return c.String() }
+
+// Format implements fmt.Formatter so %v, %+v and %#v all stay redacted, also
+// when the credential is nested inside another struct.
+func (c GitCredential) Format(f fmt.State, _ rune) { _, _ = fmt.Fprint(f, c.String()) }
 
 // GitRemote names a remote and, optionally, the credential to present to it.
 // A nil Credential means an anonymous fetch.
@@ -48,19 +72,84 @@ type GitRemote struct {
 	Credential *GitCredential
 }
 
-// GitClient is the injectable git seam.
+// GitClient is the injectable git seam, the only place this host touches a
+// network it did not configure. host.Local wires the real system-git client
+// by default (DefaultGitClient); tests and pack examples inject an in-memory
+// fixture with WithGitClient so no other test needs a network. Every method
+// takes the remote explicitly rather than binding one at construction, as
+// ForgeClient does with its endpoint.
 type GitClient interface {
+	// ListBranches reports the branch heads the remote advertises, and only
+	// those: tags and every other ref are absent. It transfers no objects, so
+	// it is cheap and says nothing about a branch's content.
 	ListBranches(ctx context.Context, r GitRemote) ([]GitBranchRef, error)
+	// Open fetches exactly the named branch heads at depth 1 and returns a
+	// read-only view of them. The view has no working tree, so no checkout
+	// filter or hook can run and no symlink can be followed. The caller must
+	// Close it.
 	Open(ctx context.Context, r GitRemote, branches []string) (GitRepo, error)
 }
 
 // GitRepo is a read-only view of the branches Open fetched.
 type GitRepo interface {
+	// Commit reports the commit SHA actually fetched for branch, which is
+	// authoritative over the SHA ListBranches reported: the branch may have
+	// moved between the two calls.
 	Commit(branch string) (string, bool)
+	// ListFiles returns every blob under branch's root recursively, narrowed
+	// to the given path prefixes when any are named. Entries with mode 120000
+	// or 160000 are reported, not hidden, so the caller decides what to do
+	// with them.
 	ListFiles(branch string, pathspecs ...string) ([]GitFileEntry, error)
+	// ReadFile returns a blob's committed bytes. It reads the git object, not
+	// a file, so it never follows a symlink: for a 120000 entry it returns the
+	// link target string.
 	ReadFile(branch, path string) ([]byte, error)
+	// Close always removes the repo's temp directory and stops its helper
+	// process. It is safe to call twice.
 	Close() error
 }
 
-// DefaultGitClient returns the real git client.
+// DefaultGitClient returns the real system-git-backed GitClient host.Local
+// wires in by default. It adds no Go dependency: it drives the git binary on
+// PATH, which is a documented runtime prerequisite.
 func DefaultGitClient() GitClient { return newExecGitClient() }
+
+// reGitSCPClone matches the scp-style user@host:path form accepted as the ssh
+// scheme. Its first character must be alphanumeric, so a value that begins
+// with "-" can never match and be read as an option.
+var reGitSCPClone = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s:-][^\s]*$`)
+
+// errGitURL builds the static InvalidArgument every URL refusal returns. A
+// refusal never quotes the input: url.Parse's own error text does, userinfo
+// included, so that error is never wrapped.
+func errGitURL(msg string) error { return status.Error(codes.InvalidArgument, "git url "+msg) }
+
+// validateGitURL is the Go-side allowlist the exec client runs before any
+// subprocess: https and ssh only, plus the scp-style user@host:path form.
+// It is deliberately not code.gitURLOK, which governs what the Puppetfile
+// model may store and is wider.
+func validateGitURL(raw string) error {
+	if raw == "" {
+		return errGitURL("is empty")
+	}
+	if strings.Contains(raw, "://") {
+		u, err := url.Parse(raw)
+		if err != nil {
+			return errGitURL("is not a valid URL")
+		}
+		switch strings.ToLower(u.Scheme) {
+		case "https", "ssh":
+		default:
+			return errGitURL("must use https or ssh")
+		}
+		if u.Hostname() == "" {
+			return errGitURL("must include a host")
+		}
+		return nil
+	}
+	if !reGitSCPClone.MatchString(raw) {
+		return errGitURL("must use https or ssh")
+	}
+	return nil
+}
