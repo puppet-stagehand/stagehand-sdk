@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
@@ -123,5 +124,232 @@ func TestRecommendTracer(t *testing.T) {
 	}
 	if scripted.providers[0].APIKey != "sk-test-key" || scripted.providers[0].Model != "test-model" {
 		t.Fatalf("expected the resolved provider to be handed to the LLM client, got %v", scripted.providers[0])
+	}
+}
+
+// ------------------------------------------------------- grounding floor
+
+// staticForge is a purpose-built ForgeClient double that returns a fixed
+// candidate list, tagging each with the searched source name.
+type staticForge struct{ results []*hostv1.ForgeSearchResult }
+
+func (f staticForge) Search(_ context.Context, _ ForgeEndpoint, source, _ string, _ *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	out := make([]*hostv1.ForgeSearchResult, 0, len(f.results))
+	for _, r := range f.results {
+		c := proto.Clone(r).(*hostv1.ForgeSearchResult)
+		c.Source = source
+		out = append(out, c)
+	}
+	return out, &hostv1.PageInfo{}, nil
+}
+
+func (staticForge) ListReleases(context.Context, ForgeEndpoint, string) ([]string, error) {
+	return nil, nil
+}
+
+func (staticForge) GetRelease(context.Context, ForgeEndpoint, string, string) (*ForgeRelease, error) {
+	return nil, nil
+}
+
+// twoModules is the candidate set most grounding tests rank over.
+func twoModules() staticForge {
+	return staticForge{results: []*hostv1.ForgeSearchResult{
+		{Name: "puppetlabs/apache", Version: "12.0.0", Endorsement: "Supported", QualityScore: 0.98},
+		{Name: "puppetlabs/iis", Version: "8.1.0", Endorsement: "Approved", QualityScore: 0.71},
+	}}
+}
+
+// recommendHost builds a host holding forge:recommend with a configured
+// provider and the given scripted replies.
+func recommendHost(t *testing.T, forge ForgeClient, replies ...string) (*host.Host, *scriptedLLM) {
+	t.Helper()
+	llm := &scriptedLLM{replies: replies}
+	h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(forge), WithLLMClient(llm))
+	mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "test-model", "sk-test-key")
+	return h, llm
+}
+
+func recommend(h *host.Host) (*hostv1.RecommendResponse, error) {
+	return h.Forge.Recommend(context.Background(), &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"})
+}
+
+func warningCodes(ws []*hostv1.ForgeAdvisoryWarning) []string {
+	out := make([]string, 0, len(ws))
+	for _, w := range ws {
+		out = append(out, w.Code)
+	}
+	return out
+}
+
+func TestRecommendGrounding(t *testing.T) {
+	t.Run("unknown key is dropped with a warning and ranks stay contiguous", func(t *testing.T) {
+		h, _ := recommendHost(t, twoModules(),
+			extractionReply("windows"),
+			rankingReply(
+				scriptedRank{"acme/invented", "puppet-forge", "Sounds plausible."},
+				scriptedRank{"puppetlabs/iis", "puppet-forge", "Manages IIS."},
+				scriptedRank{"puppetlabs/apache", "puppet-forge", "Manages Apache."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 2 {
+			t.Fatalf("expected the invented module to be dropped, got %+v", resp.Suggestions)
+		}
+		for i, s := range resp.Suggestions {
+			if s.Rank != int32(i+1) {
+				t.Fatalf("expected contiguous ranks 1..n, got rank %d at index %d", s.Rank, i)
+			}
+			if s.Module.Name == "acme/invented" {
+				t.Fatalf("an invented module reached the response: %+v", s)
+			}
+		}
+		if resp.Suggestions[0].Module.Name != "puppetlabs/iis" || resp.Suggestions[1].Module.Name != "puppetlabs/apache" {
+			t.Fatalf("expected the ranker's relative order to survive, got %+v", resp.Suggestions)
+		}
+		if len(resp.Warnings) != 1 || resp.Warnings[0].Code != "recommend_unknown_module_dropped" || resp.Warnings[0].Module != "acme/invented" {
+			t.Fatalf("expected one unknown-module warning naming the module, got %v", resp.Warnings)
+		}
+	})
+
+	t.Run("hyphen slug key still joins and the candidate spelling is returned", func(t *testing.T) {
+		h, _ := recommendHost(t, twoModules(),
+			extractionReply("windows"),
+			rankingReply(scriptedRank{"puppetlabs-apache", "puppet-forge", "Manages Apache."}))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 1 || resp.Suggestions[0].Module.Name != "puppetlabs/apache" {
+			t.Fatalf("expected the hyphen slug to join to puppetlabs/apache, got %+v", resp.Suggestions)
+		}
+		if len(resp.Warnings) != 0 {
+			t.Fatalf("expected no warnings for a joinable key, got %v", resp.Warnings)
+		}
+	})
+
+	t.Run("a repeated key is dropped with a duplicate warning", func(t *testing.T) {
+		h, _ := recommendHost(t, twoModules(),
+			extractionReply("windows"),
+			rankingReply(
+				scriptedRank{"puppetlabs/apache", "puppet-forge", "First."},
+				scriptedRank{"puppetlabs-apache", "puppet-forge", "Again."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 1 {
+			t.Fatalf("expected the repeat to be dropped, got %+v", resp.Suggestions)
+		}
+		if got := warningCodes(resp.Warnings); len(got) != 1 || got[0] != "recommend_duplicate_dropped" {
+			t.Fatalf("expected one duplicate warning, got %v", got)
+		}
+	})
+
+	t.Run("a valid empty ranking is success with a no-relevant-modules warning", func(t *testing.T) {
+		h, _ := recommendHost(t, twoModules(), extractionReply("windows"), rankingReply())
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 0 {
+			t.Fatalf("expected zero suggestions, got %+v", resp.Suggestions)
+		}
+		if got := warningCodes(resp.Warnings); len(got) != 1 || got[0] != "recommend_no_relevant_modules" {
+			t.Fatalf("expected one no-relevant-modules warning, got %v", got)
+		}
+	})
+}
+
+func TestRecommendInvalidLLMOutput(t *testing.T) {
+	cases := []struct {
+		name    string
+		replies []string
+	}{
+		{"ranker reply is not JSON", []string{extractionReply("windows"), "here are some great modules!"}},
+		{"ranker reply carries an unknown field", []string{extractionReply("windows"),
+			`{"suggestions":[{"name":"puppetlabs/apache","source":"puppet-forge","reasoning":"ok","version":"99.0.0"}]}`}},
+		{"ranker reply has trailing content", []string{extractionReply("windows"), rankingReply() + ` {"x":1}`}},
+		{"every ranker key is unknown", []string{extractionReply("windows"),
+			rankingReply(scriptedRank{"acme/one", "puppet-forge", "x"}, scriptedRank{"acme/two", "puppet-forge", "y"})}},
+		{"extraction reply is not JSON", []string{"windows security"}},
+		{"extraction reply holds no usable query", []string{extractionReply("", "   ")}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := recommendHost(t, twoModules(), tc.replies...)
+			resp, err := recommend(h)
+			if status.Code(err) != codes.Internal {
+				t.Fatalf("expected Internal, got %v", err)
+			}
+			if resp != nil {
+				t.Fatalf("expected no partial response, got %+v", resp)
+			}
+		})
+	}
+}
+
+func TestRecommendNoResults(t *testing.T) {
+	h, llm := recommendHost(t, staticForge{}, extractionReply("windows"))
+	resp, err := recommend(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Suggestions) != 0 {
+		t.Fatalf("expected zero suggestions, got %+v", resp.Suggestions)
+	}
+	if got := warningCodes(resp.Warnings); len(got) != 1 || got[0] != "recommend_no_results" {
+		t.Fatalf("expected one no-results warning, got %v", got)
+	}
+	if got := llm.callCount(); got != 1 {
+		t.Fatalf("expected exactly 1 LLM call (the ranker is never asked), got %d", got)
+	}
+}
+
+func TestRecommendHostOwnedFields(t *testing.T) {
+	// The ranker's only free-form channel is reasoning; it fabricates module
+	// facts there and echoes the key in a different spelling. The response
+	// must carry the candidate's own values.
+	h, _ := recommendHost(t, twoModules(),
+		extractionReply("windows"),
+		rankingReply(scriptedRank{"PuppetLabs-Apache", "puppet-forge", "Actually version 99.9.9, Certified, quality score 1.0."}))
+	resp, err := recommend(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Suggestions) != 1 {
+		t.Fatalf("expected 1 suggestion, got %+v", resp.Suggestions)
+	}
+	m := resp.Suggestions[0].Module
+	if m.Name != "puppetlabs/apache" || m.Version != "12.0.0" || m.Endorsement != "Supported" || m.QualityScore != 0.98 {
+		t.Fatalf("module facts must be the candidate's own, got %+v", m)
+	}
+}
+
+func TestRecommendReasoningCleaned(t *testing.T) {
+	long := ""
+	for i := 0; i < 600; i++ {
+		long += "x"
+	}
+	h, _ := recommendHost(t, twoModules(),
+		extractionReply("windows"),
+		rankingReply(
+			scriptedRank{"puppetlabs/apache", "puppet-forge", "  \x00Good\x07 fit\x1b[31m.\n  "},
+			scriptedRank{"puppetlabs/iis", "puppet-forge", long},
+		))
+	resp, err := recommend(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resp.Suggestions) != 2 {
+		t.Fatalf("expected 2 suggestions, got %+v", resp.Suggestions)
+	}
+	if got := resp.Suggestions[0].Reasoning; got != "Good fit[31m." {
+		t.Fatalf("expected control characters stripped and text trimmed, got %q", got)
+	}
+	if got := len([]rune(resp.Suggestions[1].Reasoning)); got != 400 {
+		t.Fatalf("expected reasoning capped at 400 runes, got %d", got)
 	}
 }
