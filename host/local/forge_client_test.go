@@ -1,6 +1,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net/http"
@@ -440,5 +441,176 @@ func TestForgeHTTPClient_RejectsBaseURLWithEmbeddedCredentials(t *testing.T) {
 	_, err := client.ListReleases(context.Background(), ForgeEndpoint{BaseURL: "https://user:pass@forge.example.test"}, "ns/mod")
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("expected InvalidArgument for a base URL with embedded userinfo, got %v", err)
+	}
+}
+
+// assertNoLeak fails when an error message carries the test server's host or
+// the endpoint's auth value (T-08-23).
+func assertNoLeak(t *testing.T, err error, ep ForgeEndpoint) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected an error to inspect")
+	}
+	u, perr := url.Parse(ep.BaseURL)
+	if perr != nil {
+		t.Fatalf("parsing endpoint: %v", perr)
+	}
+	msg := err.Error()
+	if strings.Contains(msg, u.Host) {
+		t.Fatalf("error leaks the server host %q: %s", u.Host, msg)
+	}
+	if ep.Auth != "" && strings.Contains(msg, ep.Auth) {
+		t.Fatalf("error leaks the auth value: %s", msg)
+	}
+}
+
+// paddedForgeBody returns valid Forge page JSON whitespace-padded to exactly n bytes.
+func paddedForgeBody(n int) []byte {
+	const doc = `{"pagination":{"limit":20,"offset":0,"total":0},"results":[]}`
+	return append([]byte(doc), bytes.Repeat([]byte(" "), n-len(doc))...)
+}
+
+func TestForgeHTTPResponseOverflowIsReported(t *testing.T) {
+	t.Run("one_byte_over_the_cap_is_internal_and_not_decoded", func(t *testing.T) {
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(paddedForgeBody(forgeMaxResponseBytes + 1))
+		})
+		ep.Auth = "Bearer secret-token"
+		_, _, err := client.Search(context.Background(), ep, "puppet-forge", "security", nil)
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal for an oversized body, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "size limit") {
+			t.Fatalf("expected the error to name the size limit (not a malformed body), got %v", err)
+		}
+		if strings.Contains(err.Error(), "malformed") {
+			t.Fatalf("oversize must not be reported as malformed JSON: %v", err)
+		}
+		assertNoLeak(t, err, ep)
+	})
+	t.Run("exactly_the_cap_decodes", func(t *testing.T) {
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(paddedForgeBody(forgeMaxResponseBytes))
+		})
+		results, _, err := client.Search(context.Background(), ep, "puppet-forge", "security", nil)
+		if err != nil || len(results) != 0 {
+			t.Fatalf("expected an at-cap body to decode to an empty page, got results=%v err=%v", results, err)
+		}
+	})
+	t.Run("the_cap_is_unchanged_from_phase_7", func(t *testing.T) {
+		if forgeMaxResponseBytes != 8<<20 {
+			t.Fatalf("forgeMaxResponseBytes must stay at 8 MiB, got %d", forgeMaxResponseBytes)
+		}
+	})
+}
+
+// threeHitPage answers /v3/modules with three hits (a, b, c under owner "ns").
+func threeHitPage(w http.ResponseWriter) {
+	_, _ = w.Write([]byte(`{"pagination":{"limit":20,"offset":0,"total":3},"results":[
+		{"slug":"ns-a","name":"a","owner":{"slug":"ns"},"endorsement":"supported","releases":[{"version":"1.0.0","created_at":"2026-01-02 03:04:05 -0700"}]},
+		{"slug":"ns-b","name":"b","owner":{"slug":"ns"},"endorsement":"approved","releases":[{"version":"2.0.0","created_at":"2026-02-02 03:04:05 -0700"}]},
+		{"slug":"ns-c","name":"c","owner":{"slug":"ns"},"releases":[{"version":"3.0.0","created_at":"2026-03-02 03:04:05 -0700"}]}
+	]}`))
+}
+
+func TestForgeHTTPSearchEnrichmentDegradesOneHit(t *testing.T) {
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/modules":
+			threeHitPage(w)
+		case "/v3/releases":
+			mod := r.URL.Query().Get("module")
+			if mod == "ns-b" {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"pagination":{"limit":1,"offset":0,"total":1},"results":[{"version":"9.9.9","validation_score":70,"created_at":"2026-04-02 03:04:05 -0700","metadata":{"summary":"Summary for ` + mod + `"},"tags":["t"]}]}`))
+		}
+	})
+	ep.Auth = "Bearer secret-token"
+	results, _, err := client.Search(context.Background(), ep, "puppet-forge", "x", nil)
+	if err != nil {
+		t.Fatalf("one failed enrichment must not fail the page: %v", err)
+	}
+	if len(results) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(results))
+	}
+	byName := map[string]*hostv1.ForgeSearchResult{}
+	for _, r := range results {
+		byName[r.Name] = r
+	}
+	b := byName["ns/b"]
+	if b == nil || b.Summary != "" || len(b.Tags) != 0 || b.QualityScore != 0 {
+		t.Fatalf("expected ns/b degraded (no summary/tags/score), got %+v", b)
+	}
+	if b.Version != "2.0.0" || b.ReleaseDate == nil || b.Endorsement != "approved" {
+		t.Fatalf("expected ns/b to keep its slim-page version, date and endorsement, got %+v", b)
+	}
+	a := byName["ns/a"]
+	if a == nil || a.Summary != "Summary for ns-a" || a.QualityScore != 70 || a.Version != "9.9.9" {
+		t.Fatalf("expected ns/a fully enriched, got %+v", a)
+	}
+	if c := byName["ns/c"]; c == nil || c.Summary == "" {
+		t.Fatalf("expected ns/c fully enriched, got %+v", c)
+	}
+}
+
+func TestForgeHTTPSearchAllEnrichmentTransportFailuresAreUnavailable(t *testing.T) {
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v3/modules" {
+			w.Header().Set("Content-Type", "application/json")
+			threeHitPage(w)
+			return
+		}
+		// Drop the connection without answering: a transport-level failure.
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			t.Errorf("response writer cannot hijack")
+			return
+		}
+		conn, _, err := hj.Hijack()
+		if err != nil {
+			t.Errorf("hijack: %v", err)
+			return
+		}
+		_ = conn.Close()
+	})
+	ep.Auth = "Bearer secret-token"
+	results, _, err := client.Search(context.Background(), ep, "puppet-forge", "x", nil)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable when every enrichment call fails in transport, got results=%v err=%v", results, err)
+	}
+	assertNoLeak(t, err, ep)
+}
+
+func TestForgeHTTPSearchToleratesThinSource(t *testing.T) {
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/modules":
+			_, _ = w.Write([]byte(`{"pagination":{"limit":20,"offset":0,"total":1},"results":[{"slug":"ns-a","name":"a","owner":{"slug":"ns"},"endorsement":"supported"}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"errors":["not found"]}`))
+		}
+	})
+	ep.Auth = "Bearer secret-token"
+	results, _, err := client.Search(context.Background(), ep, "private", "a", nil)
+	if err != nil {
+		t.Fatalf("a thin source must still search: %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+	r := results[0]
+	if r.Name != "ns/a" || r.Source != "private" || r.Endorsement != "supported" {
+		t.Fatalf("expected identity fields populated, got %+v", r)
+	}
+	if r.Version != "" || r.Summary != "" || len(r.Tags) != 0 || r.ReleaseDate != nil {
+		t.Fatalf("expected nothing fabricated for a thin source, got %+v", r)
 	}
 }
