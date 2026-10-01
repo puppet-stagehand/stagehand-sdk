@@ -7,6 +7,8 @@ package code
 // onto ImportFS.
 
 import (
+	"fmt"
+	"strings"
 	"unicode/utf8"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
@@ -72,6 +74,22 @@ func DefaultImportLimits() ImportLimits {
 
 // withDefaults fills any zero field from the defaults.
 func (l ImportLimits) withDefaults() ImportLimits {
+	d := DefaultImportLimits()
+	if l.MaxFileBytes <= 0 {
+		l.MaxFileBytes = d.MaxFileBytes
+	}
+	if l.MaxBranchBytes <= 0 {
+		l.MaxBranchBytes = d.MaxBranchBytes
+	}
+	if l.MaxSnapshotBytes <= 0 {
+		l.MaxSnapshotBytes = d.MaxSnapshotBytes
+	}
+	if l.ExcerptBytes <= 0 {
+		l.ExcerptBytes = d.ExcerptBytes
+	}
+	if l.MaxFindingsPerBranch <= 0 {
+		l.MaxFindingsPerBranch = d.MaxFindingsPerBranch
+	}
 	return l
 }
 
@@ -100,33 +118,73 @@ const (
 	FindingBranchNameInvalid = "branch_name_invalid"
 )
 
-// truncateExcerpt is a stub in the RED commit.
+// truncateExcerpt returns s made valid UTF-8 and cut to at most max bytes on
+// a rune boundary. An invalid sequence cannot be held by a structpb.Struct
+// and would fail the proposal write late (T-10-39), so the result is always
+// valid, whatever the remote bytes were.
 func truncateExcerpt(s string, max int) string {
-	_ = utf8.RuneError
-	return s
+	s = strings.ToValidUTF8(s, "\uFFFD")
+	if len(s) <= max {
+		return s
+	}
+	cut := max
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
-// newFinding builds one finding with a capped, valid-UTF-8 excerpt.
+// newFinding builds one finding with an excerpt capped at lim.ExcerptBytes
+// on a rune boundary. Branch and file are left empty: a parser does not know
+// which branch it serves, and stampFindings sets both (D-10).
 func newFinding(kind string, sev hostv1.ImportFinding_Severity, line int, excerpt, message string, lim ImportLimits) *hostv1.ImportFinding {
+	lim = lim.withDefaults()
 	return &hostv1.ImportFinding{
 		Kind:     kind,
 		Severity: sev,
 		Line:     int32(line),
-		Excerpt:  excerpt,
+		Excerpt:  truncateExcerpt(excerpt, lim.ExcerptBytes),
 		Message:  message,
 	}
 }
 
-// findingList accumulates findings under the per-branch cap.
+// findingList accumulates findings under the per-branch cap (T-10-17).
 type findingList struct {
-	lim   ImportLimits
-	items []*hostv1.ImportFinding
+	lim       ImportLimits
+	items     []*hostv1.ImportFinding
+	truncated bool
 }
 
-func newFindingList(lim ImportLimits) *findingList { return &findingList{lim: lim} }
+func newFindingList(lim ImportLimits) *findingList {
+	return &findingList{lim: lim.withDefaults()}
+}
 
-// add appends f.
-func (l *findingList) add(f *hostv1.ImportFinding) { l.items = append(l.items, f) }
+// add appends f while under lim.MaxFindingsPerBranch. The first finding past
+// the cap is replaced by one terminal truncation finding carrying its
+// line, and every later one is dropped, so the list holds at most cap+1
+// entries and the loss is never silent.
+func (l *findingList) add(f *hostv1.ImportFinding) {
+	if l.truncated {
+		return
+	}
+	if len(l.items) >= l.lim.MaxFindingsPerBranch {
+		l.truncated = true
+		line := int(f.GetLine())
+		if line < 1 {
+			line = 1
+		}
+		l.items = append(l.items, newFinding(FindingFindingsTruncated, hostv1.ImportFinding_WARNING, line, "",
+			fmt.Sprintf("more than %d findings in this branch; the rest are not listed (the findings cap, never a silent drop)", l.lim.MaxFindingsPerBranch), l.lim))
+		return
+	}
+	l.items = append(l.items, f)
+}
 
-// stampFindings sets branch and file on every finding.
-func stampFindings(fs []*hostv1.ImportFinding, branch, file string) {}
+// stampFindings sets branch and file on every finding, so a parser can stay
+// ignorant of which branch it is serving and AnalyzeBranch stamps once.
+func stampFindings(fs []*hostv1.ImportFinding, branch, file string) {
+	for _, f := range fs {
+		f.Branch = branch
+		f.File = file
+	}
+}

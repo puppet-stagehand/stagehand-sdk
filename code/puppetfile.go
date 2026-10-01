@@ -167,7 +167,7 @@ func ParsePuppetfile(text string) (*hostv1.Puppetfile, error) {
 		if m := reMod.FindStringSubmatch(ll.text); m != nil {
 			name := m[1]
 			remainder := strings.TrimSpace(m[2])
-			mod, err := parseModuleRemainder(name, remainder, ll.line)
+			mod, err := parseModuleRemainder(name, remainder, ll.line, false)
 			if err != nil {
 				return nil, err
 			}
@@ -179,10 +179,59 @@ func ParsePuppetfile(text string) (*hostv1.Puppetfile, error) {
 	return pf, nil
 }
 
+// normalizeRuby19Keys rewrites Ruby-1.9 hash keys (`git: 'u'`) outside quoted
+// strings into the hash-rocket form (`:git => 'u'`) the one grammar speaks.
+// It is applied only on the lenient path (DQ-5); strict ParsePuppetfile never
+// calls it, so strict keeps rejecting the 1.9 form exactly as before. It is
+// idempotent, and a ':' inside a quoted scalar (a URL scheme or SCP-style
+// host) is never touched.
+func normalizeRuby19Keys(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	var quote byte
+	for i := 0; i < len(s); {
+		c := s[i]
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		if c == '\'' || c == '"' {
+			quote = c
+			b.WriteByte(c)
+			i++
+			continue
+		}
+		startsKey := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || c == '_'
+		if startsKey && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t' || s[i-1] == ',') {
+			j := i
+			for j < len(s) && ((s[j] >= 'A' && s[j] <= 'Z') || (s[j] >= 'a' && s[j] <= 'z') || (s[j] >= '0' && s[j] <= '9') || s[j] == '_') {
+				j++
+			}
+			if j < len(s) && s[j] == ':' && (j+1 >= len(s) || s[j+1] != ':') {
+				b.WriteString(":" + s[i:j] + " =>")
+				i = j + 1
+				continue
+			}
+		}
+		b.WriteByte(c)
+		i++
+	}
+	return b.String()
+}
+
 // parseModuleRemainder builds a *hostv1.PuppetfileModule from a mod line's
 // name and the (possibly empty) text after its first comma. A remainder
 // carrying a :git attribute is Git-sourced; otherwise it is Forge-sourced.
-func parseModuleRemainder(name, remainder string, lineNo int) (*hostv1.PuppetfileModule, error) {
+// ruby19 permits the Ruby-1.9 hash-key form and is true only on the lenient
+// path; strict callers pass false and see no change.
+func parseModuleRemainder(name, remainder string, lineNo int, ruby19 bool) (*hostv1.PuppetfileModule, error) {
+	if ruby19 {
+		remainder = normalizeRuby19Keys(remainder)
+	}
 	if reHasGit.MatchString(remainder) {
 		return parseGitModule(name, remainder, lineNo)
 	}
