@@ -2,6 +2,8 @@ package code
 
 import (
 	"errors"
+	"fmt"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -288,4 +290,188 @@ func TestParseOverwriteTargetRejects(t *testing.T) {
 			}
 		})
 	}
+}
+
+// importSnapshotFixture is a two-branch snapshot exercising every field the
+// proposal body must carry: findings (with line, kind, severity, excerpt), data
+// files, settings and the per-branch flags. Branch names are deliberately out of
+// order so the sorted-name join in the target is observable.
+func importSnapshotFixture() *hostv1.ImportSnapshot {
+	return &hostv1.ImportSnapshot{
+		Url: "https://git.example.com/org/control-repo.git",
+		Branches: []*hostv1.ImportBranchSnapshot{
+			{
+				Branch:         "staging",
+				Commit:         "0123456789abcdef0123456789abcdef01234567",
+				Importable:     true,
+				WillOverwrite:  true,
+				PuppetfileText: "mod 'puppetlabs/stdlib', '9.0.0'\n",
+				HieraYaml:      "---\nversion: 5\n",
+				DataFiles: []*hostv1.ImportDataFile{
+					{Path: "common.yaml", Yaml: "---\nntp::server: pool.ntp.org\n"},
+					{Path: "nodes/web01.yaml", Yaml: "---\nnote: \"caf\\u00e9 \u2603\"\n"},
+				},
+				Settings: &hostv1.EnvironmentSettings{Modulepath: strp("site:modules"), RichData: boolp(true)},
+				Findings: []*hostv1.ImportFinding{
+					{
+						Branch: "staging", File: "Puppetfile", Line: 12, Kind: "puppetfile_forge_directive",
+						Severity: hostv1.ImportFinding_WARNING, Excerpt: "forge 'https://forge.example.com'",
+						Message: "a forge directive cannot be represented and was skipped",
+					},
+					{
+						Branch: "staging", File: "hiera.yaml", Line: 0, Kind: "hiera_unparseable",
+						Severity: hostv1.ImportFinding_ERROR, Excerpt: "{{{", Message: "file is absent from the snapshot",
+					},
+				},
+			},
+			{
+				Branch:     "production",
+				Commit:     "89abcdef0123456789abcdef0123456789abcdef",
+				Importable: true,
+			},
+		},
+	}
+}
+
+func TestOverwriteImportBodyRoundTrip(t *testing.T) {
+	in := importSnapshotFixture()
+	body, err := OverwriteBodyForImport(in)
+	if err != nil {
+		t.Fatalf("OverwriteBodyForImport: %v", err)
+	}
+
+	t.Run("target is fixed by construction", func(t *testing.T) {
+		want := OverwriteTarget{
+			Environment: "",
+			Resource:    OverwriteResourceImport,
+			Source:      "https://git.example.com/org/control-repo.git",
+			Name:        "production,staging",
+			Path:        "",
+		}
+		if got := mustTarget(t, viaStore(t, body)); got != want {
+			t.Fatalf("target = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("snapshot round trips byte-equal through the store", func(t *testing.T) {
+		out, err := OverwritePayloadImport(viaStore(t, body))
+		if err != nil {
+			t.Fatalf("OverwritePayloadImport: %v", err)
+		}
+		if !proto.Equal(in, out) {
+			t.Fatalf("round trip changed the snapshot:\n in  %v\n out %v", in, out)
+		}
+		// The line number must survive as a number, not become a string.
+		f := out.GetBranches()[0].GetFindings()[0]
+		if f.GetLine() != 12 || f.GetKind() != "puppetfile_forge_directive" || f.GetSeverity() != hostv1.ImportFinding_WARNING || f.GetExcerpt() == "" {
+			t.Fatalf("finding lost fields on the round trip: %v", f)
+		}
+	})
+
+	t.Run("the builder does not mutate its input", func(t *testing.T) {
+		if in.GetBranches()[0].GetBranch() != "staging" {
+			t.Fatalf("builder reordered the caller's branches: %v", in.GetBranches()[0].GetBranch())
+		}
+	})
+
+	t.Run("builder refuses bad input", func(t *testing.T) {
+		bads := map[string]*hostv1.ImportSnapshot{
+			"nil":         nil,
+			"empty url":   {Branches: []*hostv1.ImportBranchSnapshot{{Branch: "production"}}},
+			"no branches": {Url: "https://git.example.com/r.git"},
+		}
+		for name, s := range bads {
+			t.Run(name, func(t *testing.T) {
+				if _, err := OverwriteBodyForImport(s); !errors.Is(err, ErrOverwriteBodyInvalid) {
+					t.Fatalf("got %v, want ErrOverwriteBodyInvalid", err)
+				}
+			})
+		}
+	})
+
+	t.Run("payload of another resource kind is refused", func(t *testing.T) {
+		other, _ := OverwriteBodyForSettings(&hostv1.EnvironmentSettings{Environment: "prod"})
+		_, err := OverwritePayloadImport(viaStore(t, other))
+		if !errors.Is(err, ErrOverwriteBodyInvalid) {
+			t.Fatalf("got %v, want ErrOverwriteBodyInvalid", err)
+		}
+		if err != nil && !strings.Contains(err.Error(), "settings") {
+			t.Fatalf("mismatch error should name the actual resource: %v", err)
+		}
+	})
+
+	t.Run("no governance key at any depth", func(t *testing.T) {
+		banned := map[string]bool{"status": true, "approved_scope": true, "decided_by": true, "decided_at": true, "reason": true}
+		var walk func(path string, v any)
+		walk = func(path string, v any) {
+			switch x := v.(type) {
+			case map[string]any:
+				for k, child := range x {
+					if banned[k] {
+						t.Errorf("body carries governance key %q at %s", k, path)
+					}
+					walk(path+"."+k, child)
+				}
+			case []any:
+				for i, child := range x {
+					walk(fmt.Sprintf("%s[%d]", path, i), child)
+				}
+			}
+		}
+		walk("body", body)
+	})
+}
+
+func TestParseOverwriteTargetImportRelaxationIsScoped(t *testing.T) {
+	mk := func(resource, env, source string) map[string]any {
+		return map[string]any{"target": map[string]any{"environment": env, "resource": resource, "source": source}}
+	}
+
+	t.Run("import with empty environment and a source parses", func(t *testing.T) {
+		got, err := ParseOverwriteTarget(mk(OverwriteResourceImport, "", "https://git.example.com/r.git"))
+		if err != nil {
+			t.Fatalf("got %v, want success", err)
+		}
+		if got.Environment != "" || got.Resource != OverwriteResourceImport || got.Source != "https://git.example.com/r.git" {
+			t.Fatalf("unexpected target %+v", got)
+		}
+	})
+
+	t.Run("import with empty environment and empty source is refused", func(t *testing.T) {
+		if _, err := ParseOverwriteTarget(mk(OverwriteResourceImport, "", "")); !errors.Is(err, ErrOverwriteBodyInvalid) {
+			t.Fatalf("got %v, want ErrOverwriteBodyInvalid", err)
+		}
+	})
+
+	t.Run("each pre-existing kind still refuses an empty environment", func(t *testing.T) {
+		kinds := []string{
+			OverwriteResourceSettings,
+			OverwriteResourcePuppetfileModule,
+			OverwriteResourceHieraLevel,
+			OverwriteResourceHieraDataKey,
+			OverwriteResourceEnvironment,
+		}
+		for _, kind := range kinds {
+			t.Run(kind, func(t *testing.T) {
+				// A non-empty source must not rescue a non-import kind.
+				if _, err := ParseOverwriteTarget(mk(kind, "", "https://git.example.com/r.git")); !errors.Is(err, ErrOverwriteBodyInvalid) {
+					t.Fatalf("got %v, want ErrOverwriteBodyInvalid", err)
+				}
+			})
+		}
+	})
+
+	t.Run("only the exact literal reaches the relaxation", func(t *testing.T) {
+		for _, kind := range []string{"imports", "Import", "import "} {
+			t.Run(fmt.Sprintf("%q", kind), func(t *testing.T) {
+				_, err := ParseOverwriteTarget(mk(kind, "", "https://git.example.com/r.git"))
+				if !errors.Is(err, ErrOverwriteBodyInvalid) {
+					t.Fatalf("got %v, want ErrOverwriteBodyInvalid", err)
+				}
+				if err != nil && !strings.Contains(err.Error(), "resource") {
+					t.Fatalf("want an unknown-resource refusal, got %v", err)
+				}
+			})
+		}
+	})
 }

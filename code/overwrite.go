@@ -47,6 +47,7 @@ const (
 	OverwriteResourcePuppetfileModule = "puppetfile_module"
 	OverwriteResourceHieraLevel       = "hiera_level"
 	OverwriteResourceHieraDataKey     = "hiera_data_key"
+	OverwriteResourceImport           = "import"
 )
 
 // ErrOverwriteBodyInvalid is returned (wrapped) when a proposal body cannot
@@ -455,4 +456,14 @@ func OverwritePayloadHieraDataKey(body map[string]any) (*hostv1.Json, error) {
 		return nil, fmt.Errorf("%w: decoding data key payload: %v", ErrOverwriteBodyInvalid, err)
 	}
 	return v, nil
+}
+
+// OverwriteBodyForImport is a skeleton awaiting its implementation.
+func OverwriteBodyForImport(s *hostv1.ImportSnapshot) (map[string]any, error) {
+	return nil, errors.New("not implemented")
+}
+
+// OverwritePayloadImport is a skeleton awaiting its implementation.
+func OverwritePayloadImport(body map[string]any) (*hostv1.ImportSnapshot, error) {
+	return nil, errors.New("not implemented")
 }
