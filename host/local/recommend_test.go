@@ -488,3 +488,277 @@ func TestLLMProviderNeverFormatsAPIKey(t *testing.T) {
 		}
 	}
 }
+
+// ------------------------------------------------------- search plan
+
+// planForge is a ForgeClient double for the search-plan tests. Every Search is
+// recorded (source, query and the endpoint it was aimed at) and answered by fn.
+type planForge struct {
+	mu    sync.Mutex
+	calls []plannedSearch
+	fn    func(source, query string) ([]*hostv1.ForgeSearchResult, error)
+}
+
+type plannedSearch struct {
+	source, query, baseURL, auth string
+}
+
+func (f *planForge) Search(_ context.Context, ep ForgeEndpoint, source, query string, _ *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	f.mu.Lock()
+	f.calls = append(f.calls, plannedSearch{source: source, query: query, baseURL: ep.BaseURL, auth: ep.Auth})
+	f.mu.Unlock()
+	res, err := f.fn(source, query)
+	if err != nil {
+		return nil, nil, err
+	}
+	return res, &hostv1.PageInfo{}, nil
+}
+
+func (f *planForge) ListReleases(context.Context, ForgeEndpoint, string) ([]string, error) {
+	return nil, nil
+}
+
+func (f *planForge) GetRelease(context.Context, ForgeEndpoint, string, string) (*ForgeRelease, error) {
+	return nil, nil
+}
+
+func (f *planForge) snapshot() []plannedSearch {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]plannedSearch(nil), f.calls...)
+}
+
+// slugOf turns an extracted query into a module-name-safe slug.
+func slugOf(q string) string {
+	return strings.NewReplacer(" ", "_", "-", "_").Replace(strings.ToLower(q))
+}
+
+// ladderResults answers a search with a shared module (the same name from every
+// pair) followed by `depth` query-specific modules.
+func ladderResults(source, query string, depth int) []*hostv1.ForgeSearchResult {
+	out := []*hostv1.ForgeSearchResult{{Name: "acme/shared", Version: "1.0.0", Source: source}}
+	for i := 1; i <= depth; i++ {
+		out = append(out, &hostv1.ForgeSearchResult{
+			Name: fmt.Sprintf("acme/%s_%d", slugOf(query), i), Version: "1.0.0", Source: source,
+		})
+	}
+	return out
+}
+
+// planHost builds a recommend-capable host with two configured private forge
+// sources and an LLM scripted with the given replies. reveals records the ref
+// of every Secrets.Reveal.
+func planHost(t *testing.T, forge ForgeClient, replies ...string) (*host.Host, *scriptedLLM, *[]string) {
+	t.Helper()
+	llm := &scriptedLLM{replies: replies}
+	h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(forge), WithLLMClient(llm))
+	mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "test-model", "sk-test-key")
+	mustConfigureForgeSource(t, h, "internal-a", "Internal A", "https://internal-a.example.test", "Bearer token-a")
+	mustConfigureForgeSource(t, h, "internal-b", "Internal B", "https://internal-b.example.test", "Bearer token-b")
+	var mu sync.Mutex
+	reveals := &[]string{}
+	h.Forge.(*gatedForge).inner.secrets.revealHook = func(ref string) {
+		mu.Lock()
+		*reveals = append(*reveals, ref)
+		mu.Unlock()
+	}
+	return h, llm, reveals
+}
+
+func recommendFrom(h *host.Host, sources ...string) (*hostv1.RecommendResponse, error) {
+	req := &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"}
+	for _, s := range sources {
+		req.Sources = append(req.Sources, &hostv1.ForgeSourceSelection{Name: s})
+	}
+	return h.Forge.Recommend(context.Background(), req)
+}
+
+// candidateBlock extracts the JSON candidate array the ranking request carried.
+func candidateBlock(t *testing.T, user string) []map[string]any {
+	t.Helper()
+	const open, closeD = "<<<CANDIDATES\n", "\nCANDIDATES>>>"
+	i := strings.Index(user, open)
+	j := strings.LastIndex(user, closeD)
+	if i < 0 || j < i {
+		t.Fatalf("ranking request has no candidate block: %q", user)
+	}
+	var out []map[string]any
+	if err := json.Unmarshal([]byte(user[i+len(open):j]), &out); err != nil {
+		t.Fatalf("candidate block is not a JSON array: %v", err)
+	}
+	return out
+}
+
+func TestRecommendSearchPlanMergesAndCaps(t *testing.T) {
+	forge := &planForge{fn: func(source, query string) ([]*hostv1.ForgeSearchResult, error) {
+		return ladderResults(source, query, 9), nil
+	}}
+	long := strings.Repeat("z", 100)
+	h, llm, _ := planHost(t, forge,
+		// A case-insensitive duplicate and a blank query must not become searches,
+		// and the long query is truncated to 80 runes.
+		extractionReply("Windows Security", long, "  ", "windows security", "hardening"),
+		rankingReply(
+			scriptedRank{"acme/shared", "internal-b", "Shared module from the second private source."},
+			scriptedRank{"acme/hardening_1", "puppet-forge", "Hardening content."},
+		))
+
+	resp, err := recommendFrom(h, "internal-a", "internal-b", "puppet-forge")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wantQueries := []string{"Windows Security", long[:recommendMaxQueryRunes], "hardening"}
+	if fmt.Sprint(resp.Queries) != fmt.Sprint(wantQueries) {
+		t.Fatalf("queries echo = %q, want %q", resp.Queries, wantQueries)
+	}
+
+	// Exact (source, query) pair set: nine searches, no extra call.
+	var wantPairs []string
+	for _, src := range []string{"internal-a", "internal-b", "puppet-forge"} {
+		for _, q := range wantQueries {
+			wantPairs = append(wantPairs, src+"|"+q)
+		}
+	}
+	var gotPairs []string
+	for _, c := range forge.snapshot() {
+		gotPairs = append(gotPairs, c.source+"|"+c.query)
+	}
+	if fmt.Sprint(gotPairs) != fmt.Sprint(wantPairs) {
+		t.Fatalf("searched pairs = %v, want exactly %v", gotPairs, wantPairs)
+	}
+
+	// The ranking request carries the merged candidate set.
+	if llm.callCount() != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", llm.callCount())
+	}
+	cands := candidateBlock(t, llm.calls[1].User)
+	if len(cands) != recommendDefaultMaxCandidates {
+		t.Fatalf("expected the candidate set capped at %d, got %d", recommendDefaultMaxCandidates, len(cands))
+	}
+
+	// Interleaving, positionally. Rank 0 of every pair contributes the shared
+	// module once per SOURCE (not once per pair); rank 1 then contributes one
+	// module per pair, source-major.
+	var wantHead []string
+	for _, src := range []string{"internal-a", "internal-b", "puppet-forge"} {
+		wantHead = append(wantHead, "acme/shared@"+src)
+	}
+	for _, src := range []string{"internal-a", "internal-b", "puppet-forge"} {
+		for _, q := range wantQueries {
+			wantHead = append(wantHead, "acme/"+slugOf(q)+"_1@"+src)
+		}
+	}
+	for i, want := range wantHead {
+		got := fmt.Sprintf("%v@%v", cands[i]["name"], cands[i]["source"])
+		if got != want {
+			t.Fatalf("candidate %d = %s, want %s (interleaved order)", i, got, want)
+		}
+	}
+	// No candidate appears twice, and the tail came from rank 2 of the pairs.
+	seen := map[string]bool{}
+	for _, c := range cands {
+		k := fmt.Sprintf("%v@%v", c["name"], c["source"])
+		if seen[k] {
+			t.Fatalf("candidate %s appears twice", k)
+		}
+		seen[k] = true
+	}
+
+	// The cap is reported, never silent.
+	var truncated int
+	for _, w := range resp.Warnings {
+		if w.Code == "recommend_candidates_truncated" {
+			truncated++
+		}
+	}
+	if truncated != 1 {
+		t.Fatalf("expected exactly one truncation warning, got %v", warningCodes(resp.Warnings))
+	}
+
+	// Each candidate keeps the source tag the search returned.
+	if len(resp.Suggestions) != 2 {
+		t.Fatalf("expected 2 suggestions, got %+v", resp.Suggestions)
+	}
+	if m := resp.Suggestions[0].Module; m.Name != "acme/shared" || m.Source != "internal-b" {
+		t.Fatalf("expected the shared module from internal-b, got %+v", m)
+	}
+	if m := resp.Suggestions[1].Module; m.Name != "acme/hardening_1" || m.Source != "puppet-forge" {
+		t.Fatalf("expected hardening_1 from puppet-forge, got %+v", m)
+	}
+}
+
+func TestRecommendSearchPartialFailure(t *testing.T) {
+	forge := &planForge{fn: func(source, query string) ([]*hostv1.ForgeSearchResult, error) {
+		if source == "internal-b" {
+			return nil, status.Error(codes.Unavailable, "registry down")
+		}
+		return ladderResults(source, query, 1), nil
+	}}
+	h, _, _ := planHost(t, forge,
+		extractionReply("windows"),
+		rankingReply(scriptedRank{"acme/windows_1", "internal-a", "Surviving source."}))
+
+	resp, err := recommendFrom(h, "internal-a", "internal-b")
+	if err != nil {
+		t.Fatalf("a partial failure must not fail the call: %v", err)
+	}
+	var failed []*hostv1.ForgeAdvisoryWarning
+	for _, w := range resp.Warnings {
+		if w.Code == "recommend_search_failed" {
+			failed = append(failed, w)
+		}
+	}
+	if len(failed) != 1 || len(failed[0].Origins) != 1 || failed[0].Origins[0] != "internal-b" || !strings.Contains(failed[0].Message, "internal-b") {
+		t.Fatalf("expected exactly one search-failed warning naming internal-b, got %+v", resp.Warnings)
+	}
+	if len(resp.Suggestions) < 1 || resp.Suggestions[0].Module.Source != "internal-a" {
+		t.Fatalf("expected a suggestion from the surviving source, got %+v", resp.Suggestions)
+	}
+}
+
+func TestRecommendSearchAllFailures(t *testing.T) {
+	forge := &planForge{fn: func(string, string) ([]*hostv1.ForgeSearchResult, error) {
+		return nil, status.Error(codes.FailedPrecondition, "registry rejected the credential")
+	}}
+	h, llm, _ := planHost(t, forge, extractionReply("windows", "hardening"))
+
+	resp, err := recommendFrom(h, "internal-a", "internal-b")
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("expected the search's own code to propagate, got %v", err)
+	}
+	if resp != nil {
+		t.Fatalf("expected no response when every search failed, got %+v", resp)
+	}
+	if got := llm.callCount(); got != 1 {
+		t.Fatalf("the ranker must not be asked when nothing was found, got %d LLM calls", got)
+	}
+	if got := len(forge.snapshot()); got != 4 {
+		t.Fatalf("expected all four searches to be attempted, got %d", got)
+	}
+}
+
+func TestRecommendEmptySourcesMeansPublicOnly(t *testing.T) {
+	forge := &planForge{fn: func(source, query string) ([]*hostv1.ForgeSearchResult, error) {
+		return ladderResults(source, query, 1), nil
+	}}
+	h, _, reveals := planHost(t, forge,
+		extractionReply("windows"),
+		rankingReply(scriptedRank{"acme/windows_1", "puppet-forge", "ok"}))
+
+	resp, err := recommendFrom(h) // no sources named; two private ones are configured
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := forge.snapshot()
+	if len(calls) != 1 || calls[0].source != "puppet-forge" || calls[0].baseURL != DefaultForgeBaseURL || calls[0].auth != "" {
+		t.Fatalf("expected exactly one public-registry search, got %+v", calls)
+	}
+	// The only reveal is the LLM provider's own sealed config.
+	if len(*reveals) != 1 {
+		t.Fatalf("expected one reveal (the provider) and none for a private source, got %v", *reveals)
+	}
+	if len(resp.Suggestions) != 1 || resp.Suggestions[0].Module.Source != "puppet-forge" {
+		t.Fatalf("unexpected suggestions: %+v", resp.Suggestions)
+	}
+}
