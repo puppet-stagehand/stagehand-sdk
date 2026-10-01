@@ -1014,6 +1014,26 @@ func TestRecommendReplyDecodingIsStrict(t *testing.T) {
 		}
 	})
 
+	// WR-05: a structurally empty reply is malformed, not "nothing relevant".
+	t.Run("a missing or null required list is rejected, an explicit empty list is not", func(t *testing.T) {
+		for _, raw := range []string{`{}`, `{"suggestions":null}`} {
+			if _, err := decodeRankReply(raw); status.Code(err) != codes.Internal {
+				t.Fatalf("rank reply %s: expected Internal, got %v", raw, err)
+			}
+		}
+		for _, raw := range []string{`{}`, `{"queries":null}`} {
+			if _, err := decodeExtractReply(raw); status.Code(err) != codes.Internal {
+				t.Fatalf("extract reply %s: expected Internal, got %v", raw, err)
+			}
+		}
+		if r, err := decodeRankReply(`{"suggestions":[]}`); err != nil || len(r.Suggestions) != 0 {
+			t.Fatalf("an explicit empty list must still decode as none relevant, got %+v (err %v)", r, err)
+		}
+		if r, err := decodeExtractReply(`{"queries":["apache"]}`); err != nil || len(r.Queries) != 1 {
+			t.Fatalf("a populated list must decode, got %+v (err %v)", r, err)
+		}
+	})
+
 	t.Run("the schemas close their objects", func(t *testing.T) {
 		h, llm := recommendHost(t, twoModules(), goodExtract, goodRank)
 		if _, err := recommend(h); err != nil {

@@ -283,18 +283,37 @@ func decodeReply(raw string, v any, what string) error {
 	return nil
 }
 
+// extractReplyWire / rankReplyWire decode with a pointer to the required list
+// so an absent or null key is distinguishable from an explicit empty list. A
+// reply of {} or {"suggestions": null} is a malformed answer, not "nothing
+// relevant" (WR-05); only an explicit [] means the model answered and found
+// nothing.
+type extractReplyWire struct {
+	Queries *[]string `json:"queries"`
+}
+
+type rankReplyWire struct {
+	Suggestions *[]rankedEntry `json:"suggestions"`
+}
+
 func decodeExtractReply(raw string) (extractReply, error) {
-	var r extractReply
-	if err := decodeReply(raw, &r, "extraction"); err != nil {
+	var w extractReplyWire
+	if err := decodeReply(raw, &w, "extraction"); err != nil {
 		return extractReply{}, err
 	}
-	return r, nil
+	if w.Queries == nil {
+		return extractReply{}, status.Error(codes.Internal, "llm extraction reply was not valid")
+	}
+	return extractReply{Queries: *w.Queries}, nil
 }
 
 func decodeRankReply(raw string) (rankReply, error) {
-	var r rankReply
-	if err := decodeReply(raw, &r, "ranking"); err != nil {
+	var w rankReplyWire
+	if err := decodeReply(raw, &w, "ranking"); err != nil {
 		return rankReply{}, err
 	}
-	return r, nil
+	if w.Suggestions == nil {
+		return rankReply{}, status.Error(codes.Internal, "llm ranking reply was not valid")
+	}
+	return rankReply{Suggestions: *w.Suggestions}, nil
 }
