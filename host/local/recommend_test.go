@@ -3,6 +3,8 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -351,5 +353,138 @@ func TestRecommendReasoningCleaned(t *testing.T) {
 	}
 	if got := len([]rune(resp.Suggestions[1].Reasoning)); got != 400 {
 		t.Fatalf("expected reasoning capped at 400 runes, got %d", got)
+	}
+}
+
+// ------------------------------------------------------- gates and egress
+
+func TestForgeRecommendPermission(t *testing.T) {
+	recommendReq := &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"}
+	forgeReplies := []string{extractionReply("windows"), rankingReply(scriptedRank{"puppetlabs/apache", "puppet-forge", "ok"})}
+
+	t.Run("no permissions is refused with the facet_not_declared detail", func(t *testing.T) {
+		llm := &scriptedLLM{replies: forgeReplies}
+		h := New(nil, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
+		_, err := h.Forge.Recommend(context.Background(), recommendReq)
+		if status.Code(err) != codes.PermissionDenied || !hasFacetDetail(err) {
+			t.Fatalf("expected facet permission denial, got %v", err)
+		}
+		if got := llm.callCount(); got != 0 {
+			t.Fatalf("a denied Recommend must make zero LLM calls, got %d", got)
+		}
+	})
+
+	t.Run("forge:rw alone is refused Recommend", func(t *testing.T) {
+		llm := &scriptedLLM{replies: forgeReplies}
+		h := New([]string{"forge:rw", "secrets:rw"}, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
+		mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "m", "k")
+		_, err := h.Forge.Recommend(context.Background(), recommendReq)
+		if status.Code(err) != codes.PermissionDenied || !hasFacetDetail(err) {
+			t.Fatalf("expected forge:rw to be insufficient for Recommend, got %v", err)
+		}
+		if got := llm.callCount(); got != 0 {
+			t.Fatalf("a denied Recommend must make zero LLM calls, got %d", got)
+		}
+	})
+
+	t.Run("forge:recommend alone is refused Search and Resolve", func(t *testing.T) {
+		h := New([]string{"forge:recommend"}, "pkg", WithForgeClient(forgeFixture{}))
+		_, err := h.Forge.Search(context.Background(), &hostv1.SearchRequest{Query: "apache"})
+		if status.Code(err) != codes.PermissionDenied || !hasFacetDetail(err) {
+			t.Fatalf("expected Search to be refused, got %v", err)
+		}
+		_, err = h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{Name: "puppetlabs/apache", Version: "12.0.0"})
+		if status.Code(err) != codes.PermissionDenied || !hasFacetDetail(err) {
+			t.Fatalf("expected Resolve to be refused, got %v", err)
+		}
+	})
+
+	t.Run("denial precedes provider resolution", func(t *testing.T) {
+		// The index entry points at a secret that was never stored. If the
+		// gate ran after provider resolution the error would be Internal
+		// (Reveal failed); PermissionDenied proves no reveal was attempted.
+		llm := &scriptedLLM{replies: forgeReplies}
+		h := New(nil, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
+		body, err := structpb.NewStruct(map[string]any{"name": "primary", "label": "Primary", "secret_ref": "does-not-exist"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+			Collection: llmProviderCollection, DocId: "primary", Body: &hostv1.Json{Value: body},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		_, err = h.Forge.Recommend(context.Background(), recommendReq)
+		if status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("expected PermissionDenied before any provider resolution, got %v", err)
+		}
+	})
+}
+
+func TestRecommendEgressFloor(t *testing.T) {
+	const (
+		keySentinel  = "KEY-SENTINEL-7f3a91c2"
+		docsSentinel = "DOCS-SENTINEL-b04e55d8"
+	)
+	llm := &scriptedLLM{replies: []string{
+		extractionReply("windows"),
+		rankingReply(scriptedRank{"puppetlabs/apache", "puppet-forge", "Manages Apache."}),
+	}}
+	h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
+	mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "test-model", keySentinel)
+
+	// An unrelated Documents collection Recommend has no business reading.
+	body, err := structpb.NewStruct(map[string]any{"note": docsSentinel})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: "pack-private-state", DocId: "secret-notes", Body: &hostv1.Json{Value: body},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := recommend(h); err != nil {
+		t.Fatal(err)
+	}
+	if len(llm.calls) != 2 {
+		t.Fatalf("expected 2 recorded LLM calls, got %d", len(llm.calls))
+	}
+
+	for i, c := range llm.calls {
+		schema, err := json.Marshal(c.Schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		whole := c.System + "\n" + c.User + "\n" + string(schema)
+		for _, sentinel := range []string{keySentinel, docsSentinel} {
+			if strings.Contains(whole, sentinel) {
+				t.Fatalf("call %d leaked %q into the LLM request", i+1, sentinel)
+			}
+		}
+		if !strings.Contains(c.User, canonicalNeed) {
+			t.Fatalf("call %d must carry the caller's text, got %q", i+1, c.User)
+		}
+	}
+
+	// Call #1 runs before any candidate exists, so it carries none.
+	for _, name := range []string{"puppetlabs/apache", "puppetlabs/iis"} {
+		if strings.Contains(llm.calls[0].User, name) {
+			t.Fatalf("extraction call carries candidate metadata %q: %q", name, llm.calls[0].User)
+		}
+		if !strings.Contains(llm.calls[1].User, name) {
+			t.Fatalf("ranking call must carry candidate %q, got %q", name, llm.calls[1].User)
+		}
+	}
+}
+
+func TestLLMProviderNeverFormatsAPIKey(t *testing.T) {
+	p := LLMProvider{Kind: llmKindAnthropic, Model: "m", APIKey: "KEY-SENTINEL-redact"}
+	for _, out := range []string{
+		fmt.Sprintf("%v", p), fmt.Sprintf("%+v", p), fmt.Sprintf("%#v", p), fmt.Sprintf("%s", p),
+	} {
+		if strings.Contains(out, "KEY-SENTINEL-redact") {
+			t.Fatalf("LLMProvider formatted its API key: %s", out)
+		}
 	}
 }
