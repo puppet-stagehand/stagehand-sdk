@@ -66,8 +66,13 @@ var reEnvInterp = regexp.MustCompile(`%\{(?:::)?environment\}`)
 // whitespace-only text is not a parse error: it returns (nil, nil),
 // because an environment whose hiera.yaml or data file has not been
 // authored yet is a legitimate state the facet's read path must be able
-// to report. A non-empty document whose root is not a mapping is a parse
-// error, wrapping ErrHieraParse.
+// to report. The same holds for a document with no content: a comment-only
+// file, a bare "---" and a null root ("~", "null") are the empty state too,
+// because a "---"-only or comment-only common.yaml is the commonest real
+// placeholder data file in a control repo, and reporting it unparseable
+// would produce a false error on a legitimate file (RESEARCH Pitfall 4,
+// DQ-6). A non-empty document whose root is not a mapping — a sequence, a
+// scalar, a number — is still a parse error, wrapping ErrHieraParse.
 func decodeDoc(text string) (*yaml.Node, error) {
 	if strings.TrimSpace(text) == "" {
 		return nil, nil
@@ -75,6 +80,16 @@ func decodeDoc(text string) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal([]byte(text), &doc); err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrHieraParse, err)
+	}
+	// No content: no document at all (comment-only text), or a document whose
+	// whole root is a null scalar (a bare "---", "~", "null"). A quoted "null"
+	// is a !!str and falls through to the shape check below.
+	if doc.Kind == 0 && len(doc.Content) == 0 {
+		return nil, nil
+	}
+	if doc.Kind == yaml.DocumentNode && len(doc.Content) == 1 &&
+		doc.Content[0].Kind == yaml.ScalarNode && doc.Content[0].ShortTag() == "!!null" {
+		return nil, nil
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) != 1 || doc.Content[0].Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("%w: expected a YAML mapping document", ErrHieraParse)

@@ -8,8 +8,11 @@ package code
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode/utf8"
+
+	"google.golang.org/protobuf/proto"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
@@ -258,7 +261,274 @@ func stampFindings(fs []*hostv1.ImportFinding, branch, file string) {
 	}
 }
 
-// AnalyzeBranch is a compile-only stub for the RED commit.
+// The three root files AnalyzeBranch reads. The branch root is the
+// environment root: r10k's branch-equals-environment model (D-13).
+const (
+	branchPuppetfile  = "Puppetfile"
+	branchHieraYaml   = "hiera.yaml"
+	branchEnvironConf = "environment.conf"
+)
+
+// defaultDatadir is Hiera's default datadir, next to hiera.yaml.
+const defaultDatadir = "data"
+
+// Git file modes AnalyzeBranch refuses to read through.
+const (
+	modeSymlink = "120000"
+	modeGitlink = "160000"
+)
+
+// branchAnalyzer holds one AnalyzeBranch run's state.
+type branchAnalyzer struct {
+	branch string
+	fs     ImportFS
+	lim    ImportLimits
+	fl     *findingList
+	snap   *hostv1.ImportBranchSnapshot
+}
+
+// add stamps fs with the branch and file and adds each under the branch's
+// findings cap.
+func (a *branchAnalyzer) add(file string, fs []*hostv1.ImportFinding) {
+	stampFindings(fs, a.branch, file)
+	for _, f := range fs {
+		a.fl.add(f)
+	}
+}
+
+// fail records one error finding for file: the file is absent from the
+// snapshot.
+func (a *branchAnalyzer) fail(file, kind, msg string) {
+	a.add(file, []*hostv1.ImportFinding{newFinding(kind, hostv1.ImportFinding_ERROR, 0, "", msg, a.lim)})
+}
+
+// warn records one warning finding for file.
+func (a *branchAnalyzer) warn(file, kind, msg string) {
+	a.add(file, []*hostv1.ImportFinding{newFinding(kind, hostv1.ImportFinding_WARNING, 0, "", msg, a.lim)})
+}
+
+// AnalyzeBranch turns one branch's files into the snapshot a human reviews
+// and ApplyImport writes, plus the findings (IMP-03, IMP-04). It reads only
+// through fs, so every policy decision about which files matter is testable
+// without git. It reads Puppetfile, hiera.yaml and environment.conf at the
+// branch root, resolves the declared datadirs from the hierarchy, and imports
+// the data files under them. It lists nothing else, so module-level Hiera
+// configuration, which is out of scope, is never reached.
+//
+// Every text it puts in the snapshot has already passed the Code facet's own
+// read path for the collection it will be stored in: the Puppetfile text
+// re-parses through strict ParsePuppetfile to an equal model, the hierarchy
+// text through ParseHierarchy, each data file through ValidateDataPath and
+// ParseDataFile, and the settings through RenderEnvConf and ParseEnvConf. A
+// text that fails its own read path is an error finding and is absent, never
+// silently stored; that is what lets ApplyImport validate in one pass and
+// write in an infallible second one.
+//
+// Every finding is stamped with branch and, where file-scoped, the
+// repo-relative file. The same findings are returned and set on the snapshot.
 func AnalyzeBranch(branch string, fs ImportFS, lim ImportLimits) (*hostv1.ImportBranchSnapshot, []*hostv1.ImportFinding) {
-	return &hostv1.ImportBranchSnapshot{Branch: branch}, nil
+	lim = lim.withDefaults()
+	a := &branchAnalyzer{
+		branch: branch,
+		fs:     fs,
+		lim:    lim,
+		fl:     newFindingList(lim),
+		snap:   &hostv1.ImportBranchSnapshot{Branch: branch, Importable: true},
+	}
+
+	roots, err := fs.List(branchPuppetfile, branchHieraYaml, branchEnvironConf)
+	if err != nil {
+		a.fail("", FindingBranchFileUnreadable, fmt.Sprintf("the branch's files could not be listed, so nothing was imported: %v", err))
+		a.snap.Importable = false
+		return a.finish()
+	}
+	byPath := map[string]ImportFile{}
+	for _, f := range roots {
+		byPath[f.Path] = f
+	}
+
+	if text, ok := a.readRoot(byPath, branchPuppetfile); ok {
+		a.importPuppetfile(text)
+	}
+	var hier *hostv1.HieraHierarchy
+	hieraUsable := true
+	if text, ok := a.readRoot(byPath, branchHieraYaml); ok {
+		hier, hieraUsable = a.importHiera(text)
+	} else if _, present := byPath[branchHieraYaml]; present {
+		hieraUsable = false
+	}
+	if text, ok := a.readRoot(byPath, branchEnvironConf); ok {
+		a.importEnvConf(text)
+	}
+	if hieraUsable {
+		a.importData(hier)
+	}
+	return a.finish()
+}
+
+// finish stamps the terminal truncation finding, which no parser built, and
+// attaches the findings to the snapshot.
+func (a *branchAnalyzer) finish() (*hostv1.ImportBranchSnapshot, []*hostv1.ImportFinding) {
+	for _, f := range a.fl.items {
+		if f.Branch == "" {
+			f.Branch = a.branch
+		}
+	}
+	a.snap.Findings = a.fl.items
+	return a.snap, a.fl.items
+}
+
+// readRoot reads one root file. It reports false, with no finding, when the
+// file is absent; and false with an error finding when it is present but
+// cannot be read: a symlink or gitlink is never read through, and the size is
+// checked from the size ImportFS reports, before any read.
+func (a *branchAnalyzer) readRoot(byPath map[string]ImportFile, name string) (string, bool) {
+	e, ok := byPath[name]
+	if !ok {
+		return "", false
+	}
+	switch e.Mode {
+	case modeSymlink:
+		a.fail(name, FindingBranchFileUnreadable, name+" is a symlink and is never read through, so it was not imported")
+		return "", false
+	case modeGitlink:
+		a.fail(name, FindingBranchFileUnreadable, name+" is a gitlink (a submodule), not a file, so it was not imported")
+		return "", false
+	}
+	if e.Size > a.lim.MaxFileBytes {
+		a.fail(name, FindingBranchFileUnreadable, fmt.Sprintf("%s is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not read or imported", name, e.Size, a.lim.MaxFileBytes))
+		return "", false
+	}
+	b, err := a.fs.Read(name)
+	if err != nil {
+		a.fail(name, FindingBranchFileUnreadable, fmt.Sprintf("%s could not be read, so it was not imported: %v", name, err))
+		return "", false
+	}
+	if int64(len(b)) > a.lim.MaxFileBytes {
+		a.fail(name, FindingBranchFileUnreadable, fmt.Sprintf("%s is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not imported", name, len(b), a.lim.MaxFileBytes))
+		return "", false
+	}
+	return string(b), true
+}
+
+// puppetfileReadPath renders pf and requires strict ParsePuppetfile to read
+// the rendered text back to an equal model. It returns the text to store.
+func puppetfileReadPath(pf *hostv1.Puppetfile) (string, error) {
+	text, err := RenderPuppetfile(pf)
+	if err != nil {
+		return "", fmt.Errorf("the model does not render: %w", err)
+	}
+	back, err := ParsePuppetfile(text)
+	if err != nil {
+		return "", fmt.Errorf("the rendered text does not parse strictly: %w", err)
+	}
+	if !proto.Equal(back, pf) {
+		return "", fmt.Errorf("the rendered text parses strictly to a different model")
+	}
+	return text, nil
+}
+
+func (a *branchAnalyzer) importPuppetfile(text string) {
+	pf, fs := ParsePuppetfileLenient(text, a.lim)
+	a.add(branchPuppetfile, fs)
+	rendered, err := puppetfileReadPath(pf)
+	if err != nil {
+		a.fail(branchPuppetfile, FindingBranchFileUnreadable, fmt.Sprintf("the Puppetfile failed the Code facet's own read path, so it was not imported: %v", err))
+		return
+	}
+	a.snap.PuppetfileText = rendered
+}
+
+// hierarchyReadPath requires strict ParseHierarchy to read the retained text
+// back to the model the lenient parse produced.
+func hierarchyReadPath(raw string, h *hostv1.HieraHierarchy) error {
+	back, err := ParseHierarchy(raw)
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(back, h) {
+		return fmt.Errorf("the retained text reads back as a different hierarchy")
+	}
+	return nil
+}
+
+// importHiera returns the hierarchy and whether it is usable: an unusable one
+// is absent from the snapshot and its datadirs cannot be known, so no data
+// files are imported.
+func (a *branchAnalyzer) importHiera(text string) (*hostv1.HieraHierarchy, bool) {
+	h, raw, fs, ok := ParseHierarchyLenient(text, a.lim)
+	a.add(branchHieraYaml, fs)
+	if !ok {
+		return nil, false
+	}
+	if err := hierarchyReadPath(raw, h); err != nil {
+		a.fail(branchHieraYaml, FindingBranchFileUnreadable, fmt.Sprintf("hiera.yaml failed the Code facet's own read path, so it was not imported: %v", err))
+		return nil, false
+	}
+	a.snap.HieraYaml = raw
+	return h, true
+}
+
+// settingsReadPath requires RenderEnvConf then ParseEnvConf to give the
+// settings back unchanged: the equivalent of the host's own round-trip check,
+// run in the pure layer so that check is a confirmation, never the first
+// rejection.
+func settingsReadPath(s *hostv1.EnvironmentSettings) error {
+	text, err := RenderEnvConf(s)
+	if err != nil {
+		return err
+	}
+	back, err := ParseEnvConf(text)
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(back, s) {
+		return fmt.Errorf("the settings read back different after a render and parse")
+	}
+	return nil
+}
+
+func (a *branchAnalyzer) importEnvConf(text string) {
+	s, fs := ParseEnvConfLenient(text, a.lim)
+	a.add(branchEnvironConf, fs)
+	if s == nil {
+		return
+	}
+	if err := settingsReadPath(s); err != nil {
+		a.fail(branchEnvironConf, FindingBranchFileUnreadable, fmt.Sprintf("environment.conf failed the Code facet's own read path, so its settings were not imported: %v", err))
+		return
+	}
+	a.snap.Settings = s
+}
+
+// importData imports the data files under the datadirs the hierarchy
+// declares, each under its datadir-relative path.
+func (a *branchAnalyzer) importData(h *hostv1.HieraHierarchy) {
+	datadir := defaultDatadir
+	if h != nil && h.GetDefaultDatadir() != "" {
+		datadir = h.GetDefaultDatadir()
+	}
+	datadir = strings.TrimSuffix(datadir, "/")
+	entries, err := a.fs.List(datadir)
+	if err != nil {
+		a.fail("", FindingBranchFileUnreadable, fmt.Sprintf("the data directory %q could not be listed: %v", datadir, err))
+		return
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	for _, e := range entries {
+		rel := strings.TrimPrefix(e.Path, datadir+"/")
+		if rel == e.Path || !strings.HasSuffix(rel, ".yaml") {
+			continue
+		}
+		b, err := a.fs.Read(e.Path)
+		if err != nil {
+			a.fail(e.Path, FindingDataFileUnparseable, fmt.Sprintf("the file could not be read: %v", err))
+			continue
+		}
+		df, fs := ParseDataFileLenient(rel, string(b), a.lim)
+		a.add(e.Path, fs)
+		if df != nil {
+			a.snap.DataFiles = append(a.snap.DataFiles, df)
+		}
+	}
 }
