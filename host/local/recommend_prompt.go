@@ -156,15 +156,35 @@ func fencedBlock(label, what, payload string) string {
 		"<<<" + label + "\n" + neutraliseDelimiters(payload) + "\n" + label + ">>>"
 }
 
-// cleanText treats s as untrusted display text: control characters are
-// removed (tabs and newlines become spaces), the result is trimmed, and it is
-// capped at max runes.
+// isInvisible reports a rune that renders as nothing (or reorders surrounding
+// text) yet is still read by a model: Unicode category Cf (zero-width
+// characters, bidi overrides and isolates, the U+E0000 tag block that carries
+// "ASCII smuggling" payloads), Co (private use) and Cs (surrogates). Category
+// Cc is handled separately by the callers (WR-06).
+func isInvisible(r rune) bool {
+	return unicode.In(r, unicode.Cf, unicode.Co, unicode.Cs)
+}
+
+// stripInvisible drops invisible format characters from caller-supplied prose
+// while keeping every visible character, newlines and tabs included.
+func stripInvisible(s string) string {
+	return strings.Map(func(r rune) rune {
+		if isInvisible(r) {
+			return -1
+		}
+		return r
+	}, s)
+}
+
+// cleanText treats s as untrusted display text: control and invisible format
+// characters are removed (tabs and newlines become spaces), the result is
+// trimmed, and it is capped at max runes.
 func cleanText(s string, max int) string {
 	s = strings.Map(func(r rune) rune {
 		switch {
 		case r == '\n' || r == '\t' || r == '\r':
 			return ' '
-		case unicode.IsControl(r):
+		case unicode.IsControl(r), isInvisible(r):
 			return -1
 		}
 		return r
@@ -181,6 +201,7 @@ func cleanText(s string, max int) string {
 // buildExtractionRequest is LLM call #1. Only the caller's text leaves the
 // process; no candidate exists yet.
 func buildExtractionRequest(text string) LLMRequest {
+	text = stripInvisible(text)
 	return LLMRequest{
 		System:          extractSystemPrompt,
 		User:            fencedBlock(needLabel, "the user's description of what they need", text),
@@ -192,6 +213,7 @@ func buildExtractionRequest(text string) LLMRequest {
 // buildRankingRequest is LLM call #2: the caller's text in one block and the
 // candidate metadata, marshalled, in a second.
 func buildRankingRequest(text string, candidates []*hostv1.ForgeSearchResult) (LLMRequest, error) {
+	text = stripInvisible(text)
 	payload, err := renderCandidates(candidates)
 	if err != nil {
 		return LLMRequest{}, status.Error(codes.Internal, "candidate list could not be encoded")

@@ -1436,3 +1436,28 @@ func TestRecommendNeverLeaksKey(t *testing.T) {
 		}
 	})
 }
+
+// WR-06: invisible format characters (zero-width, bidi overrides, the Unicode
+// tag block) are stripped from untrusted text and from the caller's prose
+// before either reaches a prompt or an operator-facing reasoning string.
+func TestInvisibleFormatCharactersAreStripped(t *testing.T) {
+	const smuggled = "\U000E0049\U000E0067\U000E006E" // tag-block "Ign"
+	dirty := "a\u200bb\u202ec\u2066d\ufeffe" + smuggled + "f\uE000g"
+	if got := cleanText(dirty, 100); got != "abcdefg" {
+		t.Fatalf("cleanText kept invisible characters: %q", got)
+	}
+	if got := stripInvisible("line one\n\tline\u200b two"); got != "line one\n\tline two" {
+		t.Fatalf("stripInvisible must keep visible text, newlines and tabs: %q", got)
+	}
+	req := buildExtractionRequest("need apache" + smuggled + "\u202e")
+	if strings.ContainsAny(req.User, "\u202e\U000E0049") {
+		t.Fatalf("caller text reached the extraction prompt with invisible characters: %q", req.User)
+	}
+	rr, err := buildRankingRequest("need apache"+smuggled, []*hostv1.ForgeSearchResult{{Name: "acme/m", Source: "puppet-forge", Summary: "ok" + smuggled}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.ContainsAny(rr.User, "\U000E0049\U000E006E") {
+		t.Fatalf("invisible characters reached the ranking prompt: %q", rr.User)
+	}
+}
