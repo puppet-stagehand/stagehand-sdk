@@ -627,3 +627,78 @@ func TestUnknownFieldIsAFinding(t *testing.T) {
 		t.Fatalf("unknown fields must be rejected; got %v", fs)
 	}
 }
+
+// TestCodeImportPermissionIsAcceptedExactly pins that code:import, declared
+// alongside code:rw as the two-permission import gate requires (D-03, DQ-1),
+// validates clean through the same Validate entry point pack-check uses.
+//
+// The literals are declared locally: a test that reads the vocabulary it is
+// pinning proves nothing about that vocabulary.
+func TestCodeImportPermissionIsAcceptedExactly(t *testing.T) {
+	const (
+		codeRW     = "code:rw"
+		codeImport = "code:import"
+	)
+	m := load(t, "../examples/hello/manifest.json")
+	m.Permissions = append(m.Permissions, codeRW, codeImport)
+	if fs := Validate(m); len(fs) != 0 {
+		t.Fatalf("code:rw + code:import must validate clean; got %v", codes(fs))
+	}
+}
+
+// TestCodeImportVocabulariesCarryTheLiteral pins code:import as an exact
+// literal on all three independently maintained vocabularies, and pins the
+// survival of code:read and code:rw as the positive control that the edit
+// added a literal rather than replacing one (the Phase 6 code:read
+// precedent). code:import IS a facet permission, where code:approve is not
+// (see TestCodeApproveScopeIsNotAManifestPermission).
+func TestCodeImportVocabulariesCarryTheLiteral(t *testing.T) {
+	const (
+		codeRead   = "code:read"
+		codeRW     = "code:rw"
+		codeImport = "code:import"
+	)
+	real := []string{codeRead, codeRW, codeImport}
+
+	t.Run("rePerm matches code:import as an exact literal", func(t *testing.T) {
+		for _, p := range real {
+			if !rePerm.MatchString(p) {
+				t.Errorf("rePerm must match %q", p)
+			}
+		}
+	})
+
+	t.Run("Permissions slice carries code:import and the older code literals", func(t *testing.T) {
+		for _, want := range real {
+			var found bool
+			for _, p := range Permissions {
+				if p == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Permissions slice must contain %q", want)
+			}
+		}
+	})
+
+	t.Run("schema.json carries code:import and the older code literals", func(t *testing.T) {
+		raw, err := os.ReadFile("schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range real {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("schema.json must contain the literal %q", want)
+			}
+		}
+	})
+
+	t.Run("fixture declaring code:rw and code:import validates", func(t *testing.T) {
+		m := load(t, "testdata/code-import.json")
+		if fs := Validate(m); len(fs) != 0 {
+			t.Fatalf("code-import fixture must validate; got %v", codes(fs))
+		}
+	})
+}

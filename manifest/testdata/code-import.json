@@ -1,0 +1,24 @@
+{
+  "id": "code_import",
+  "name": "Control Repo Importer",
+  "version": "0.1.0",
+  "contract_version": 1,
+  "publisher": "Example Org",
+  "publisher_key_id": "SHA256:examplekeyfingerprint0000000000000000000000",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Imports an existing Puppet control repo through the Code facet, behind approval. Fixture for the code:import permission vocabulary.",
+  "nav": null,
+  "slots": [],
+  "settings_schema": {
+    "type": "object",
+    "title": "Forge advisor settings",
+    "properties": {}
+  },
+  "permissions": ["documents:rw", "secrets:rw", "code:rw", "code:import"],
+  "jobs": [],
+  "content": null,
+  "resources": { "cpu": "100m", "memory": "64Mi" }
+}
