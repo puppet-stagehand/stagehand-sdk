@@ -490,10 +490,14 @@ func validateForgeBaseURL(raw string) (*url.URL, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return nil, fmt.Errorf("invalid forge base URL: %w", err)
+		// Static text only: a *url.Error embeds the raw URL, userinfo
+		// included, and this message is relayed to the caller (WR-03).
+		return nil, errors.New("forge base URL is not a valid URL")
 	}
 	if u.Scheme != "https" {
-		return nil, fmt.Errorf("forge base URL must use https, got %q", u.Scheme)
+		// The scheme is not echoed either: for a malformed value such as
+		// "tok:secret@host" url.Parse reads "tok" as the scheme.
+		return nil, errors.New("forge base URL must use https")
 	}
 	if u.Host == "" {
 		return nil, errors.New("forge base URL must include a host")

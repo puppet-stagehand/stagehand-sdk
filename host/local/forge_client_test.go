@@ -690,3 +690,23 @@ func TestForgeHTTPClient_GetReleaseRejectsPathyVersion(t *testing.T) {
 		}
 	}
 }
+
+// WR-03: a malformed or non-https base URL must not echo any part of the raw
+// (possibly credential-bearing) value in the error it returns.
+func TestValidateForgeBaseURL_ErrorsDoNotEchoTheRawURL(t *testing.T) {
+	for _, raw := range []string{
+		"https://tok:abc%zz@forge.example.test",
+		"tok:abc@forge.example.test",
+		"%zz-secret-%zz",
+	} {
+		_, err := validateForgeBaseURL(raw)
+		if err == nil {
+			t.Fatalf("%q: expected an error", raw)
+		}
+		for _, frag := range []string{"abc", "tok", "secret", "forge.example.test"} {
+			if strings.Contains(err.Error(), frag) {
+				t.Fatalf("%q: error %q leaks fragment %q", raw, err.Error(), frag)
+			}
+		}
+	}
+}
