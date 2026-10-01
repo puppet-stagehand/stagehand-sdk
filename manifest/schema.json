@@ -40,7 +40,7 @@
 
     "permissions": {
       "type": "array", "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:read|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|activity:read|legacy:read:[a-z_]+)$" }
+      "items": { "type": "string", "pattern": "^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:read|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|code:import|activity:read|legacy:read:[a-z_]+)$" }
     },
     "extension_points": {
       "type": "array",

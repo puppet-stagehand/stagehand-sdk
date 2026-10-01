@@ -22,7 +22,7 @@ var ExtensionPoints = []string{"patching.provider", "compliance.source"}
 // inventory:kind:<name> and legacy:read:<table>.
 var Permissions = []string{
 	"documents:rw", "secrets:rw", "bolt:run", "inventory:read", "inventory:rw", "compliance:ingest",
-	"tokens:issue", "forge:read", "forge:rw", "forge:recommend", "puppetdb:read", "classification:read", "code:read", "code:rw", "activity:read",
+	"tokens:issue", "forge:read", "forge:rw", "forge:recommend", "puppetdb:read", "classification:read", "code:read", "code:rw", "code:import", "activity:read",
 }
 
 type Nav struct {
