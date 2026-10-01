@@ -8,8 +8,13 @@ package local_test
 import (
 	"context"
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -774,5 +779,553 @@ func TestImport_Overwrite(t *testing.T) {
 		}
 		mustApply(t, h, "ow-3")
 		assertReadable(t, h, "production", 1, []string{"common.yaml"})
+	})
+}
+
+// ------------------------------------------------------------ Task 3 proofs
+
+// frozenPuppetfile reads production's stored Puppetfile text straight through
+// the facet.
+func renderedPuppetfile(t *testing.T, h *host.Host, env string) string {
+	t.Helper()
+	r, err := h.Code.RenderPuppetfile(context.Background(), &hostv1.RenderPuppetfileRequest{Environment: env})
+	if err != nil {
+		t.Fatalf("RenderPuppetfile(%s): %v", env, err)
+	}
+	return r.Text
+}
+
+func proposalDoc(t *testing.T, h *host.Host, id string) *hostv1.Document {
+	t.Helper()
+	d, err := h.Documents.Get(context.Background(), &hostv1.GetDocumentRequest{Collection: code.OverwriteCollection, DocId: id})
+	if err != nil {
+		t.Fatalf("reading proposal %s: %v", id, err)
+	}
+	return d
+}
+
+// rewriteProposal replaces a pending proposal's snapshot with mutate(snapshot),
+// keeping it pending. A frozen snapshot is the only place an invalid branch can
+// be injected once the parsers refuse to produce one.
+func rewriteProposal(t *testing.T, h *host.Host, id string, mutate func(*hostv1.ImportSnapshot), extra map[string]any) {
+	t.Helper()
+	d := proposalDoc(t, h, id)
+	snap, err := code.OverwritePayloadImport(d.Body.Value.AsMap())
+	if err != nil {
+		t.Fatalf("OverwritePayloadImport: %v", err)
+	}
+	mutate(snap)
+	body, err := code.OverwriteBodyForImport(snap)
+	if err != nil {
+		t.Fatalf("OverwriteBodyForImport: %v", err)
+	}
+	body["status"] = "pending"
+	for k, v := range extra {
+		body[k] = v
+	}
+	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: code.OverwriteCollection, DocId: id,
+		Body: &hostv1.Json{Value: mustStruct(t, body)}, IfVersion: d.Version,
+	}); err != nil {
+		t.Fatalf("rewriting proposal %s: %v", id, err)
+	}
+}
+
+func TestImport_ApplyIsFrozen(t *testing.T) {
+	t.Run("a push to the remote after Propose does not change what Apply writes", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		resp := mustPropose(t, h, "fz-1")
+		frozenText := branchByName(resp.Snapshot, "production").PuppetfileText
+		fx.SetBranch("production", withFile(canonicalTree(), "Puppetfile", "mod 'puppetlabs-apache', '12.0.0'\n"))
+		approveOverwrite(t, h, "fz-1")
+		mustApply(t, h, "fz-1")
+		if got := renderedPuppetfile(t, h, "production"); got != frozenText || strings.Contains(got, "apache") {
+			t.Fatalf("applied Puppetfile = %q, want exactly the frozen %q", got, frozenText)
+		}
+	})
+
+	t.Run("deleting the branch from the remote does not prevent Apply", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		mustPropose(t, h, "fz-2")
+		fx.DeleteBranch("production")
+		approveOverwrite(t, h, "fz-2")
+		mustApply(t, h, "fz-2")
+		assertReadable(t, h, "production", 1, []string{"common.yaml"})
+	})
+}
+
+func TestImport_Apply(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a repeat Apply with nothing changed is idempotent and writes nothing", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+		mustPropose(t, h, "ap-1")
+		approveOverwrite(t, h, "ap-1")
+		first := mustApply(t, h, "ap-1")
+		after := dumpStore(t, h)
+		second := mustApply(t, h, "ap-1")
+		if strings.Join(envNames(first), ",") != strings.Join(envNames(second), ",") {
+			t.Fatalf("environments differ between calls: %v vs %v", envNames(first), envNames(second))
+		}
+		if !storesEqual(after, dumpStore(t, h)) {
+			t.Fatal("an idempotent repeat Apply changed the stored documents or their versions")
+		}
+	})
+
+	t.Run("after the content drifts a repeat Apply is refused as already applied", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		mustPropose(t, h, "ap-2")
+		approveOverwrite(t, h, "ap-2")
+		mustApply(t, h, "ap-2")
+		// A new module is an ungated create, so this is a legitimate later edit.
+		mustPutModule(t, h, "production", forgeModule("puppetlabs-apache", "12.0.0"))
+		_, err := applyImport(h, "ap-2")
+		wantCode(t, err, codes.FailedPrecondition)
+		if !strings.Contains(err.Error(), "already applied") {
+			t.Fatalf("error = %v, want the already-applied refusal", err)
+		}
+		if got := listModuleNames(t, h, "production"); len(got) != 2 {
+			t.Fatalf("modules = %v: the edit must survive the refused Apply", got)
+		}
+	})
+
+	t.Run("Apply never writes into the proposal", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		mustPropose(t, h, "ap-3")
+		approveOverwrite(t, h, "ap-3")
+		before := proposalDoc(t, h, "ap-3")
+		mustApply(t, h, "ap-3")
+		mustApply(t, h, "ap-3")
+		after := proposalDoc(t, h, "ap-3")
+		if !proto.Equal(before, after) {
+			t.Fatalf("the proposal document changed:\n before %v\n after  %v", before, after)
+		}
+		if after.Body.Value.AsMap()["status"] != "approved" {
+			t.Fatalf("status = %v, want approved", after.Body.Value.AsMap()["status"])
+		}
+	})
+
+	t.Run("a pending proposal and a rejected one write nothing", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		mustPropose(t, h, "ap-4")
+		before := dumpStore(t, h)
+		_, err := applyImport(h, "ap-4")
+		wantCode(t, err, codes.FailedPrecondition)
+		rejectOverwrite(t, h, "ap-4")
+		before = dumpStore(t, h)
+		_, err = applyImport(h, "ap-4")
+		wantCode(t, err, codes.FailedPrecondition)
+		if !storesEqual(before, dumpStore(t, h)) {
+			t.Fatal("a refused ApplyImport changed the store")
+		}
+		if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "production"}); status.Code(err) != codes.NotFound {
+			t.Fatalf("an unapproved proposal created an environment: %v", err)
+		}
+	})
+
+	t.Run("an approved status with no recorded provenance is refused", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		mustPropose(t, h, "ap-5")
+		// Someone with documents access forges the status without going through
+		// the approval package, so there is no approved_scope or decided_by.
+		rewriteProposal(t, h, "ap-5", func(*hostv1.ImportSnapshot) {}, map[string]any{"status": "approved"})
+		_, err := applyImport(h, "ap-5")
+		wantCode(t, err, codes.FailedPrecondition)
+		if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "production"}); status.Code(err) != codes.NotFound {
+			t.Fatalf("a forged approval created an environment: %v", err)
+		}
+	})
+
+	t.Run("an environment whose name is a prefix of another is not disturbed", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		seedOldEnvironment(t, h, "prod")
+		seedOldEnvironment(t, h, "production")
+		mustPropose(t, h, "ap-6")
+		approveOverwrite(t, h, "ap-6")
+		mustApply(t, h, "ap-6")
+		assertEnvDocsPresent(t, h, ctx, "prod") // untouched, nested data file included
+		assertReadable(t, h, "production", 1, []string{"common.yaml"})
+	})
+}
+
+func TestImport_ApplyIsAtomic(t *testing.T) {
+	h, _ := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+	mustPropose(t, h, "at-1")
+	rewriteProposal(t, h, "at-1", func(s *hostv1.ImportSnapshot) {
+		branchByName(s, "staging").PuppetfileText = "mod 'puppetlabs-stdlib', :git => \n((( not a puppetfile\n"
+	}, nil)
+	approveOverwrite(t, h, "at-1")
+	before := dumpStore(t, h)
+
+	_, err := applyImport(h, "at-1")
+	if err == nil {
+		t.Fatal("ApplyImport accepted a snapshot whose second branch is invalid")
+	}
+	wantCode(t, err, codes.FailedPrecondition)
+	for _, env := range []string{"production", "staging"} {
+		if _, err := h.Code.GetEnvironment(context.Background(), &hostv1.GetEnvironmentRequest{Name: env}); status.Code(err) != codes.NotFound {
+			t.Fatalf("environment %s exists although one branch failed: all-or-none broken (%v)", env, err)
+		}
+	}
+	if !storesEqual(before, dumpStore(t, h)) {
+		t.Fatal("a refused ApplyImport changed the store")
+	}
+}
+
+func TestImport_ApplyConcurrent(t *testing.T) {
+	h, _ := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+	mustPropose(t, h, "cc-1")
+	approveOverwrite(t, h, "cc-1")
+
+	const n = 8
+	var wg sync.WaitGroup
+	errs := make([]error, n)
+	resps := make([]*hostv1.ApplyImportResponse, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			resps[i], errs[i] = applyImport(h, "cc-1")
+		}(i)
+	}
+	wg.Wait()
+	for i := 0; i < n; i++ {
+		if errs[i] != nil {
+			t.Fatalf("concurrent ApplyImport #%d: %v", i, errs[i])
+		}
+		if strings.Join(envNames(resps[i]), ",") != "production,staging" {
+			t.Fatalf("call #%d environments = %v", i, envNames(resps[i]))
+		}
+	}
+	assertReadable(t, h, "production", 1, []string{"common.yaml"})
+	assertReadable(t, h, "staging", 1, []string{"common.yaml"})
+	ids, err := h.Documents.List(context.Background(), &hostv1.ListDocumentsRequest{Collection: "code-hiera-data"})
+	if err != nil || len(ids.Documents) != 2 {
+		t.Fatalf("hiera data documents = %v, %v; want exactly 2 (no duplicate)", len(ids.GetDocuments()), err)
+	}
+}
+
+func TestImport_RevealsOnlyTheNamedCredential(t *testing.T) {
+	h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+	ref, err := h.Secrets.Store(context.Background(), &hostv1.StoreSecretRequest{
+		Name: "deploy", Plaintext: []byte(`{"kind":"https_token","username":"u","token":"t"}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A second secret that must never be touched.
+	storeCredential(t, h, "other", `{"kind":"https_token","username":"x","token":"y"}`)
+
+	var mu sync.Mutex
+	var revealed []string
+	local.SetRevealHook(h, func(r string) { mu.Lock(); revealed = append(revealed, r); mu.Unlock() })
+
+	if _, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: importURL, Credential: "deploy"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed) != 1 || revealed[0] != ref.Ref {
+		t.Fatalf("revealed = %v, want exactly [%s]", revealed, ref.Ref)
+	}
+	revealed = nil
+	if _, err := inspectImport(h); err != nil {
+		t.Fatal(err)
+	}
+	if len(revealed) != 0 {
+		t.Fatalf("an anonymous inspect revealed %v", revealed)
+	}
+}
+
+func TestImport_NoLockHeldAcrossNetwork(t *testing.T) {
+	h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+	storeCredential(t, h, "deploy", `{"kind":"https_token","username":"u","token":"t"}`)
+
+	var probes int
+	probe := func() {
+		// Any Documents call takes docs.mu; if the import held it across the
+		// network method this would block forever.
+		_, _ = h.Documents.List(context.Background(), &hostv1.ListDocumentsRequest{Collection: "code-environments"})
+		probes++
+	}
+	fx.OnNetwork(probe)
+	local.SetRevealHook(h, func(string) { probe() })
+
+	done := make(chan error, 1)
+	go func() {
+		if _, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: importURL, Credential: "deploy"}); err != nil {
+			done <- err
+			return
+		}
+		_, err := h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{ProposalId: "nl-1", Url: importURL, Credential: "deploy"})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("deadlock: docs.mu is held across a clone, fetch, reveal or proposal write")
+	}
+	if probes < 6 { // reveal + list + open, twice
+		t.Fatalf("only %d network-time probes ran; the hooks are not wired", probes)
+	}
+}
+
+// ------------------------------------------------------------ structure
+
+// parseGoFile parses one source file of this package for the structural tests.
+func parseGoFile(t *testing.T, name string) (*token.FileSet, *ast.File) {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, name, nil, parser.ParseComments)
+	if err != nil {
+		t.Fatalf("parsing %s: %v", name, err)
+	}
+	return fset, f
+}
+
+func funcDecl(t *testing.T, f *ast.File, recv, name string) *ast.FuncDecl {
+	t.Helper()
+	for _, d := range f.Decls {
+		fd, ok := d.(*ast.FuncDecl)
+		if !ok || fd.Name.Name != name || fd.Body == nil {
+			continue
+		}
+		if recv == "" && fd.Recv == nil {
+			return fd
+		}
+		if recv != "" && fd.Recv != nil && len(fd.Recv.List) == 1 {
+			if star, ok := fd.Recv.List[0].Type.(*ast.StarExpr); ok {
+				if id, ok := star.X.(*ast.Ident); ok && id.Name == recv {
+					return fd
+				}
+			}
+		}
+	}
+	t.Fatalf("function %s.%s not found", recv, name)
+	return nil
+}
+
+// selectors returns every selector expression under n, with its position.
+func selectors(n ast.Node) []*ast.SelectorExpr {
+	var out []*ast.SelectorExpr
+	ast.Inspect(n, func(x ast.Node) bool {
+		if se, ok := x.(*ast.SelectorExpr); ok {
+			out = append(out, se)
+		}
+		return true
+	})
+	return out
+}
+
+func exprString(e ast.Expr) string {
+	switch v := e.(type) {
+	case *ast.Ident:
+		return v.Name
+	case *ast.SelectorExpr:
+		return exprString(v.X) + "." + v.Sel.Name
+	case *ast.StarExpr:
+		return "*" + exprString(v.X)
+	}
+	return ""
+}
+
+// callPositions returns the position of every call whose selector ends in sel.
+func callPositions(n ast.Node, sel string) []token.Pos {
+	var out []token.Pos
+	ast.Inspect(n, func(x ast.Node) bool {
+		if c, ok := x.(*ast.CallExpr); ok {
+			if se, ok := c.Fun.(*ast.SelectorExpr); ok && se.Sel.Name == sel {
+				out = append(out, c.Pos())
+			}
+		}
+		return true
+	})
+	return out
+}
+
+// TestImport_CannotDecide is a structural test, not a behavioural one, because
+// the property it asserts is the absence of a capability, and absence cannot be
+// demonstrated by exercising behaviour. It parses the import controller and
+// the git client files and fails on any selector naming the approval package's
+// decide functions or the Auth facet's token verification, and on any reference
+// to the governance keys a decision writes. Phase 9 asserts the approval
+// scope's provenance the same way (approval's TestApprovalScopeSourcedFromKindOnly).
+func TestImport_CannotDecide(t *testing.T) {
+	files := []string{"code_import.go", "git_client.go", "git_exec.go", "git_exec_unix.go", "git_exec_other.go"}
+	forbiddenIdents := map[string]bool{
+		"overwriteStatusKey": true, "overwriteStatusApproved": true, "overwriteScopeKey": true, "overwriteDecidedByKey": true,
+	}
+	forbiddenStrings := map[string]bool{
+		`"status"`: true, `"approved_scope"`: true, `"decided_by"`: true, `"decided_at"`: true, `"reason"`: true,
+	}
+	sawProposeBody := false
+	for _, name := range files {
+		fset, f := parseGoFile(t, name)
+		for _, se := range selectors(f) {
+			if id, ok := se.X.(*ast.Ident); ok && id.Name == "approval" {
+				switch se.Sel.Name {
+				case "Approve", "Reject":
+					t.Errorf("%s: %s references approval.%s, which decides a proposal", name, fset.Position(se.Pos()), se.Sel.Name)
+				case "ProposeBody":
+					sawProposeBody = true
+				}
+			}
+			if se.Sel.Name == "Verify" {
+				t.Errorf("%s: %s references .Verify, the Auth facet's token verification", name, fset.Position(se.Pos()))
+			}
+		}
+		ast.Inspect(f, func(n ast.Node) bool {
+			switch v := n.(type) {
+			case *ast.Ident:
+				if forbiddenIdents[v.Name] {
+					t.Errorf("%s: %s references governance key %s", name, fset.Position(v.Pos()), v.Name)
+				}
+			case *ast.BasicLit:
+				if v.Kind == token.STRING && forbiddenStrings[v.Value] {
+					t.Errorf("%s: %s uses governance literal %s", name, fset.Position(v.Pos()), v.Value)
+				}
+			}
+			return true
+		})
+	}
+	if !sawProposeBody {
+		t.Fatal("code_import.go never references approval.ProposeBody; the test is not looking at the right file")
+	}
+}
+
+// TestImport_SourceDiscipline asserts, over the parsed source, the properties
+// whose violation no behavioural test can reliably catch: lock scope, the
+// infallible write pass, the approval Kind's provenance and gate order.
+func TestImport_SourceDiscipline(t *testing.T) {
+	_, f := parseGoFile(t, "code_import.go")
+
+	t.Run("ApplyImport takes the lock once and touches Documents only through *Locked helpers", func(t *testing.T) {
+		fd := funcDecl(t, f, "codeServer", "ApplyImport")
+		if n := len(callPositions(fd.Body, "Lock")); n != 1 {
+			t.Fatalf("ApplyImport calls Lock %d times, want exactly 1", n)
+		}
+		if n := len(callPositions(fd.Body, "Unlock")); n != 1 {
+			t.Fatalf("ApplyImport calls Unlock %d times, want exactly 1 (deferred)", n)
+		}
+		deferred := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if d, ok := n.(*ast.DeferStmt); ok {
+				if se, ok := d.Call.Fun.(*ast.SelectorExpr); ok && se.Sel.Name == "Unlock" {
+					deferred = true
+				}
+			}
+			return true
+		})
+		if !deferred {
+			t.Fatal("ApplyImport's Unlock is not deferred")
+		}
+		for _, m := range []string{"Get", "Put", "Delete", "List", "Query"} {
+			for _, se := range selectors(fd.Body) {
+				if se.Sel.Name == m && exprString(se.X) == "s.docs" {
+					t.Fatalf("ApplyImport calls the Documents gRPC method %s inside the lock", m)
+				}
+			}
+		}
+		for _, se := range selectors(fd.Body) {
+			switch {
+			case exprString(se) == "s.git", exprString(se) == "s.secrets":
+				t.Fatalf("ApplyImport references %s: Apply makes no network call and needs no credential", exprString(se))
+			case se.Sel.Name == "Reveal", se.Sel.Name == "ListBranches", se.Sel.Name == "Open":
+				t.Fatalf("ApplyImport references %s", se.Sel.Name)
+			}
+		}
+	})
+
+	t.Run("ApplyImport's write pass cannot return an error before the applied marker", func(t *testing.T) {
+		fd := funcDecl(t, f, "codeServer", "ApplyImport")
+		deletes := callPositions(fd.Body, "deleteLocked")
+		marks := callPositions(fd.Body, "markOverwriteAppliedLocked")
+		if len(deletes) == 0 || len(marks) == 0 {
+			t.Fatal("ApplyImport has no deleteLocked or no markOverwriteAppliedLocked call")
+		}
+		first, lastMark := deletes[0], marks[len(marks)-1]
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			if r, ok := n.(*ast.ReturnStmt); ok && r.Pos() > first && r.Pos() < lastMark {
+				t.Errorf("a return statement sits between the first deleteLocked and the applied marker")
+			}
+			return true
+		})
+	})
+
+	t.Run("analyzeImport holds docs.mu only for the existence loop", func(t *testing.T) {
+		fd := funcDecl(t, f, "codeServer", "analyzeImport")
+		locks := callPositions(fd.Body, "Lock")
+		if len(locks) != 1 {
+			t.Fatalf("analyzeImport calls Lock %d times, want exactly 1", len(locks))
+		}
+		for _, m := range []string{"ListBranches", "Open", "AnalyzeBranch", "resolveGitCredential", "Reveal"} {
+			for _, p := range callPositions(fd.Body, m) {
+				if p > locks[0] {
+					t.Errorf("%s is called after the lock is taken", m)
+				}
+			}
+		}
+		if len(callPositions(fd.Body, "targetInUseLocked")) != 1 {
+			t.Fatal("analyzeImport should call targetInUseLocked exactly once")
+		}
+	})
+
+	t.Run("resolveGitCredential never takes the lock and reveals once", func(t *testing.T) {
+		fd := funcDecl(t, f, "codeServer", "resolveGitCredential")
+		if len(callPositions(fd.Body, "Lock")) != 0 {
+			t.Fatal("resolveGitCredential takes docs.mu")
+		}
+		if len(callPositions(fd.Body, "Reveal")) != 1 {
+			t.Fatal("resolveGitCredential must call Reveal exactly once")
+		}
+	})
+
+	t.Run("ProposeImport composes the approval Kind from the code constants and holds no lock", func(t *testing.T) {
+		fd := funcDecl(t, f, "codeServer", "ProposeImport")
+		if len(callPositions(fd.Body, "Lock")) != 0 {
+			t.Fatal("ProposeImport takes a lock; approval.ProposeBody reaches Documents.Put, which takes the same one")
+		}
+		found := false
+		ast.Inspect(fd.Body, func(n ast.Node) bool {
+			cl, ok := n.(*ast.CompositeLit)
+			if !ok || exprString(cl.Type) != "approval.Kind" {
+				return true
+			}
+			found = true
+			for _, el := range cl.Elts {
+				kv := el.(*ast.KeyValueExpr)
+				se, ok := kv.Value.(*ast.SelectorExpr)
+				if !ok || exprString(se.X) != "code" {
+					t.Errorf("approval.Kind field %s is not a code package constant", exprString(kv.Key))
+				}
+			}
+			if len(cl.Elts) != 2 {
+				t.Errorf("approval.Kind has %d fields set, want exactly Collection and ApproveScope", len(cl.Elts))
+			}
+			return true
+		})
+		if !found {
+			t.Fatal("ProposeImport builds no approval.Kind literal")
+		}
+		for _, se := range selectors(fd.Body) {
+			if exprString(se.X) == "req" && (se.Sel.Name == "Collection" || se.Sel.Name == "ApproveScope") {
+				t.Errorf("a request field reaches the approval Kind")
+			}
+		}
+	})
+
+	t.Run("each gatedCode import forwarder checks code:rw before code:import", func(t *testing.T) {
+		_, cf := parseGoFile(t, "code.go")
+		for _, name := range []string{"InspectImport", "ProposeImport", "ApplyImport"} {
+			fd := funcDecl(t, cf, "gatedCode", name)
+			check, imp, inner := callPositions(fd.Body, "check"), callPositions(fd.Body, "checkImport"), callPositions(fd.Body, name)
+			if len(check) != 1 || len(imp) != 1 || len(inner) != 1 {
+				t.Fatalf("%s: want one check, one checkImport and one delegating call, got %d/%d/%d", name, len(check), len(imp), len(inner))
+			}
+			if !(check[0] < imp[0] && imp[0] < inner[0]) {
+				t.Errorf("%s: the order must be check, checkImport, delegate", name)
+			}
+		}
 	})
 }
