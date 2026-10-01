@@ -218,7 +218,7 @@ func TestLLMStatusMapping(t *testing.T) {
 		{"bad request", http.StatusBadRequest, codes.Internal},
 		{"unprocessable", http.StatusUnprocessableEntity, codes.Internal},
 	}
-	for _, kind := range []string{llmKindAnthropic} {
+	for _, kind := range []string{llmKindAnthropic, llmKindOpenAICompatible} {
 		for _, tc := range cases {
 			t.Run(kind+"/"+tc.name, func(t *testing.T) {
 				const quoted = "PROMPT-QUOTED-BY-PROVIDER-SENTINEL"
@@ -279,4 +279,165 @@ func TestLLMNonJSONReplyIsInternal(t *testing.T) {
 	srv, client, _ := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = io.WriteString(w, "<html>gateway</html>") })
 	_, err := client.Complete(context.Background(), LLMProvider{Kind: llmKindAnthropic, BaseURL: srv.URL, Model: "m", APIKey: "k"}, LLMRequest{User: "u"})
 	requireCode(t, err, codes.Internal)
+}
+
+// ------------------------------------------------- openai-compatible
+
+// openAIReply builds a chat-completions reply with one choice.
+func openAIReply(content string, refusal any, finish string) map[string]any {
+	return map[string]any{"choices": []map[string]any{{
+		"message":       map[string]any{"role": "assistant", "content": content, "refusal": refusal},
+		"finish_reason": finish,
+	}}}
+}
+
+func TestLLMOpenAICompatibleCompleteHappyPath(t *testing.T) {
+	const reply = `{"ranked":[]}`
+	srv, client, rec := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, openAIReply(reply, nil, "stop"))
+	})
+	schema := map[string]any{"type": "object"}
+
+	got, err := client.Complete(context.Background(), LLMProvider{
+		Kind: llmKindOpenAICompatible, BaseURL: srv.URL + "/v1", Model: "gpt-test", APIKey: "KEY-SENTINEL-openai",
+	}, LLMRequest{System: "sys rules", User: "user text", MaxOutputTokens: 777, Schema: schema})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != reply {
+		t.Fatalf("expected the message content verbatim, got %q", got)
+	}
+
+	seen := rec.only(t)
+	if seen.method != http.MethodPost || seen.path != "/v1/chat/completions" {
+		t.Fatalf("unexpected request line: %s %s", seen.method, seen.path)
+	}
+	if seen.header.Get("Authorization") != "Bearer KEY-SENTINEL-openai" {
+		t.Fatalf("bearer header missing or wrong: %q", seen.header.Get("Authorization"))
+	}
+	body := seen.bodyMap(t)
+	if body["model"] != "gpt-test" {
+		t.Fatalf("model not carried: %v", body["model"])
+	}
+	msgs, _ := body["messages"].([]any)
+	if len(msgs) != 2 {
+		t.Fatalf("expected a system then a user message, got %v", body["messages"])
+	}
+	m0, _ := msgs[0].(map[string]any)
+	m1, _ := msgs[1].(map[string]any)
+	if m0["role"] != "system" || m0["content"] != "sys rules" || m1["role"] != "user" || m1["content"] != "user text" {
+		t.Fatalf("unexpected message order or content: %v", msgs)
+	}
+	if body["max_completion_tokens"] != float64(777) {
+		t.Fatalf("expected the newer output-token field by default: %s", seen.body)
+	}
+	if _, ok := body["max_tokens"]; ok {
+		t.Fatalf("legacy max_tokens sent by default (reasoning models reject it): %s", seen.body)
+	}
+	if _, ok := body["response_format"]; ok {
+		t.Fatalf("response_format must not be sent to arbitrary gateways: %s", seen.body)
+	}
+	if strings.Contains(string(seen.body), "KEY-SENTINEL-openai") {
+		t.Fatalf("API key leaked into the request body")
+	}
+}
+
+func TestLLMOpenAICompatibleLegacyTokenFieldOverride(t *testing.T) {
+	srv, client, rec := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, openAIReply("ok", nil, "stop"))
+	})
+	if _, err := client.Complete(context.Background(), LLMProvider{
+		Kind: llmKindOpenAICompatible, BaseURL: srv.URL, Model: "m", APIKey: "k", MaxTokensField: "max_tokens",
+	}, LLMRequest{User: "u", MaxOutputTokens: 321}); err != nil {
+		t.Fatal(err)
+	}
+	seen := rec.only(t)
+	if seen.path != "/chat/completions" {
+		t.Fatalf("a base without /v1 must post to /chat/completions, got %s", seen.path)
+	}
+	body := seen.bodyMap(t)
+	if body["max_tokens"] != float64(321) {
+		t.Fatalf("expected the configured legacy field to carry the budget: %s", seen.body)
+	}
+	if _, ok := body["max_completion_tokens"]; ok {
+		t.Fatalf("newer field sent alongside the override: %s", seen.body)
+	}
+}
+
+func TestLLMOpenAICompatibleOmitsAuthWhenKeyEmpty(t *testing.T) {
+	srv, client, rec := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, openAIReply("ok", nil, "stop"))
+	})
+	if _, err := client.Complete(context.Background(), LLMProvider{
+		Kind: llmKindOpenAICompatible, BaseURL: srv.URL, Model: "m", APIKey: "",
+	}, LLMRequest{User: "u"}); err != nil {
+		t.Fatal(err)
+	}
+	seen := rec.only(t)
+	if _, present := seen.header["Authorization"]; present {
+		t.Fatalf("an empty key must omit Authorization entirely, got %q", seen.header.Get("Authorization"))
+	}
+}
+
+func TestLLMOpenAICompatibleBadReplyIsInternal(t *testing.T) {
+	cases := map[string]map[string]any{
+		"cut short":  openAIReply("{\"cut", nil, "length"),
+		"refusal":    openAIReply("", "I cannot help with that", "stop"),
+		"no choices": {"choices": []map[string]any{}},
+		"empty text": openAIReply("", nil, "stop"),
+	}
+	for name, reply := range cases {
+		t.Run(name, func(t *testing.T) {
+			srv, client, _ := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, reply) })
+			_, err := client.Complete(context.Background(), LLMProvider{Kind: llmKindOpenAICompatible, BaseURL: srv.URL, Model: "m", APIKey: "k"}, LLMRequest{User: "u"})
+			requireCode(t, err, codes.Internal)
+			if strings.Contains(err.Error(), "I cannot help with that") {
+				t.Fatalf("provider refusal text echoed into the status message: %v", err)
+			}
+		})
+	}
+}
+
+func TestLLMBaseURLLoopbackHTTPException(t *testing.T) {
+	// Loopback plain http is accepted: a local model server with no TLS.
+	plain := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, openAIReply("local ok", nil, "stop"))
+	}))
+	t.Cleanup(plain.Close)
+	if !strings.HasPrefix(plain.URL, "http://127.0.0.1") {
+		t.Fatalf("fixture is not a loopback http server: %s", plain.URL)
+	}
+	got, err := DefaultLLMClient().Complete(context.Background(), LLMProvider{
+		Kind: llmKindOpenAICompatible, BaseURL: plain.URL, Model: "m",
+	}, LLMRequest{User: "u"})
+	if err != nil || got != "local ok" {
+		t.Fatalf("loopback plain http must be accepted, got %q, %v", got, err)
+	}
+
+	// https is accepted.
+	srv, client, _ := newLLMTestServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		writeJSON(w, openAIReply("tls ok", nil, "stop"))
+	})
+	if got, err := client.Complete(context.Background(), LLMProvider{Kind: llmKindOpenAICompatible, BaseURL: srv.URL, Model: "m"}, LLMRequest{User: "u"}); err != nil || got != "tls ok" {
+		t.Fatalf("https must be accepted, got %q, %v", got, err)
+	}
+
+	// Everything else is FailedPrecondition before any network I/O.
+	for name, raw := range map[string]string{
+		"non-loopback http":      "http://models.example.test/v1",
+		"http lookalike host":    "http://localhost.example.test/v1",
+		"userinfo over https":    "https://user:pass@models.example.test/v1",
+		"userinfo over loopback": "http://user:pass@127.0.0.1:1/v1",
+		"no host":                "https:///v1",
+		"other scheme":           "ftp://models.example.test/v1",
+		"empty":                  "",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := DefaultLLMClient().Complete(context.Background(), LLMProvider{Kind: llmKindOpenAICompatible, BaseURL: raw, Model: "m", APIKey: "k"}, LLMRequest{User: "u"})
+			requireCode(t, err, codes.FailedPrecondition)
+			if strings.Contains(err.Error(), "pass@") || strings.Contains(err.Error(), "user:pass") {
+				t.Fatalf("validation message echoes embedded credentials: %v", err)
+			}
+		})
+	}
 }
