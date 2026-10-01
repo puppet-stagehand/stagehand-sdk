@@ -81,6 +81,41 @@ const forgeEnrichConcurrency = 6
 // caller's context ended (WR-04). Real modules have a few hundred releases.
 const forgeMaxReleases = 5000
 
+// forgeDegradation collects the modules whose per-hit release enrichment
+// failed during a search (WR-08). It travels on the context so ForgeClient's
+// signature does not change: a caller that wants to know attaches one with
+// withForgeDegradation; a caller that does not simply never reads it. A 404 is
+// not recorded, because a thin source legitimately has no /v3/releases
+// endpoint and that is missing metadata, not a failure.
+type forgeDegradation struct {
+	mu     sync.Mutex
+	failed []string
+}
+
+type forgeDegradationKey struct{}
+
+// withForgeDegradation returns ctx carrying a fresh collector and the
+// collector itself.
+func withForgeDegradation(ctx context.Context) (context.Context, *forgeDegradation) {
+	d := &forgeDegradation{}
+	return context.WithValue(ctx, forgeDegradationKey{}, d), d
+}
+
+func recordForgeDegradation(ctx context.Context, name string) {
+	if d, ok := ctx.Value(forgeDegradationKey{}).(*forgeDegradation); ok {
+		d.mu.Lock()
+		d.failed = append(d.failed, name)
+		d.mu.Unlock()
+	}
+}
+
+// Names returns the "namespace/name" of every module whose enrichment failed.
+func (d *forgeDegradation) Names() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.failed...)
+}
+
 // ForgeEndpoint identifies where a Forge v3 request goes and, for a private
 // source, the credential to send. BaseURL must be an absolute https:// URL
 // with no embedded userinfo (T-07-05). An empty Auth means "no
@@ -239,9 +274,13 @@ func (c *httpForgeClient) Search(ctx context.Context, ep ForgeEndpoint, source, 
 // is index-aligned with hits; a nil entry means that hit's enrichment failed
 // or the source had none, and the hit degrades to its slim-page fields. Each
 // goroutine writes only its own slot, so no lock is needed. An error is
-// returned only when the page had hits and every enrichment call failed at
-// the transport level: that is an unreachable endpoint, not thin metadata, and
-// returning a page of empty metadata would mislead a ranker.
+// returned when the page had hits and every enrichment call failed for a
+// reason other than "not found" (transport failure, 429, 5xx, anything else):
+// that is a broken or throttled endpoint, not thin metadata, and returning a
+// page of empty metadata would mislead a ranker. A partial failure degrades the
+// failed hits and is reported through the context's forgeDegradation collector
+// (WR-08) so the caller can say the ranking ran on thinner data. A 404 is the
+// thin-source case and is neither an error nor reported.
 func (c *httpForgeClient) enrichHits(ctx context.Context, ep ForgeEndpoint, base *url.URL, hits []forgeModuleJSON) ([]*forgeReleaseSummaryJSON, error) {
 	rels := make([]*forgeReleaseSummaryJSON, len(hits))
 	errs := make([]error, len(hits))
@@ -268,20 +307,23 @@ dispatch:
 	wg.Wait()
 
 	if len(hits) > 0 {
-		allTransport := true
+		allFailed := true
 		for _, err := range errs {
-			if err == nil || !isForgeTransportError(err) {
-				allTransport = false
+			if err == nil || errors.Is(err, ErrForgeNotFound) {
+				allFailed = false
 				break
 			}
 		}
-		if allTransport {
-			return nil, status.Error(codes.Unavailable, "forge: release enrichment endpoint unreachable")
+		if allFailed {
+			return nil, status.Error(codes.Unavailable, "forge: release enrichment failed for every module on the page")
 		}
 	}
 	for i, err := range errs {
 		if err != nil {
 			rels[i] = nil
+			if !errors.Is(err, ErrForgeNotFound) {
+				recordForgeDegradation(ctx, hits[i].Owner.Slug+"/"+hits[i].Name)
+			}
 		}
 	}
 	return rels, nil

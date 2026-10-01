@@ -1453,7 +1453,7 @@ func TestInvisibleFormatCharactersAreStripped(t *testing.T) {
 	if strings.ContainsAny(req.User, "\u202e\U000E0049") {
 		t.Fatalf("caller text reached the extraction prompt with invisible characters: %q", req.User)
 	}
-	rr, err := buildRankingRequest("need apache"+smuggled, []*hostv1.ForgeSearchResult{{Name: "acme/m", Source: "puppet-forge", Summary: "ok" + smuggled}})
+	rr, err := buildRankingRequest("need apache"+smuggled, []*hostv1.ForgeSearchResult{{Name: "acme/m", Source: "puppet-forge", Summary: "ok" + smuggled}}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1543,4 +1543,51 @@ func TestRecommendSearchFanOutHasItsOwnDeadline(t *testing.T) {
 			t.Fatalf("expected an error from a cancelled caller")
 		}
 	})
+}
+
+// degradingForge reports one module's enrichment as failed through the
+// context collector, as httpForgeClient does on a partial enrichment failure.
+type degradingForge struct {
+	staticForge
+	failed string
+}
+
+func (f degradingForge) Search(ctx context.Context, ep ForgeEndpoint, source, q string, p *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	recordForgeDegradation(ctx, f.failed)
+	return f.staticForge.Search(ctx, ep, source, q, p)
+}
+
+// WR-08: Recommend must tell the pack, and the ranker, when a candidate was
+// ranked without its release details.
+func TestRecommendSurfacesDegradedMetadata(t *testing.T) {
+	// puppetlabs/iis carries no score, as a hit whose enrichment failed would.
+	base := staticForge{results: []*hostv1.ForgeSearchResult{
+		{Name: "puppetlabs/apache", Version: "12.0.0", Endorsement: "Supported", QualityScore: 0.98},
+		{Name: "puppetlabs/iis", Version: "8.1.0", Endorsement: "Approved"},
+	}}
+	h, llm := recommendHost(t, degradingForge{staticForge: base, failed: "puppetlabs/iis"},
+		`{"queries":["windows"]}`,
+		`{"suggestions":[{"name":"puppetlabs/apache","source":"puppet-forge","reasoning":"ok"}]}`)
+	resp, err := recommend(h)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, c := range warningCodes(resp.Warnings) {
+		if c == recommendWarnMetadataDegraded {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a %s warning, got %v", recommendWarnMetadataDegraded, warningCodes(resp.Warnings))
+	}
+	llm.mu.Lock()
+	defer llm.mu.Unlock()
+	user := llm.calls[1].User
+	if !strings.Contains(user, `"metadata_unavailable":true`) {
+		t.Fatalf("expected the degraded candidate to be marked metadata_unavailable: %s", user)
+	}
+	if strings.Count(user, `"unscored":true`) != 0 {
+		t.Fatalf("a failed fetch must not be sent as unscored: %s", user)
+	}
 }

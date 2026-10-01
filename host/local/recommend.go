@@ -92,6 +92,10 @@ const (
 	// recommendWarnCandidatesTruncated: the merged candidate set exceeded the
 	// candidate budget and the tail was dropped before ranking.
 	recommendWarnCandidatesTruncated = "recommend_candidates_truncated"
+	// recommendWarnMetadataDegraded: a search succeeded but fetching some
+	// modules' release details (summary, tags, quality score) failed, so those
+	// candidates were ranked on thinner data than asked.
+	recommendWarnMetadataDegraded = "recommend_metadata_degraded"
 	// recommendWarnSearchFailed: one (source, query) search failed while at
 	// least one other succeeded, so the candidate set is narrower than asked.
 	recommendWarnSearchFailed = "recommend_search_failed"
@@ -319,6 +323,7 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	searchCtx, cancelSearch := context.WithTimeout(ctx, searchTimeout)
 	defer cancelSearch()
 	budgetSpent := false
+	degradedKeys := make(map[string]bool)
 fanout:
 	for _, src := range sources {
 		for _, q := range queries {
@@ -330,7 +335,8 @@ fanout:
 				budgetSpent = true
 				break fanout
 			}
-			searched, err := s.Search(searchCtx, &hostv1.SearchRequest{
+			degCtx, deg := withForgeDegradation(searchCtx)
+			searched, err := s.Search(degCtx, &hostv1.SearchRequest{
 				Query:  q,
 				Source: &hostv1.ForgeSourceSelection{Name: src},
 				Page:   &hostv1.Page{Limit: recommendSearchPageLimit},
@@ -346,6 +352,9 @@ fanout:
 					Origins: []string{src},
 				})
 				continue
+			}
+			for _, name := range deg.Names() {
+				degradedKeys[recommendKey(name, src)] = true
 			}
 			lists = append(lists, searched.Results)
 		}
@@ -368,6 +377,20 @@ fanout:
 	}
 
 	kept, dropped := mergeInterleaved(lists, maxCandidates)
+	// Report degradation only for modules that actually reach the ranker.
+	degradedKept := make(map[string]bool)
+	for _, c := range kept {
+		if k := recommendKey(c.Name, c.Source); degradedKeys[k] {
+			degradedKept[k] = true
+		}
+	}
+	if len(degradedKept) > 0 {
+		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+			Code: recommendWarnMetadataDegraded,
+			Message: fmt.Sprintf("release details could not be fetched for %d candidate modules; they were ranked on their name and registry data alone",
+				len(degradedKept)),
+		})
+	}
 	if dropped > 0 {
 		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
 			Code: recommendWarnCandidatesTruncated,
@@ -390,7 +413,7 @@ fanout:
 
 	// LLM call #2: ranking. The prompt module renders the candidate metadata
 	// as escaped JSON inside a labelled data block.
-	rankReq, err := buildRankingRequest(text, kept)
+	rankReq, err := buildRankingRequest(text, kept, degradedKept)
 	if err != nil {
 		return nil, err
 	}

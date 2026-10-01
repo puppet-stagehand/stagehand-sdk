@@ -759,3 +759,50 @@ func TestForgeHTTPClient_ListReleasesPaginationIsBounded(t *testing.T) {
 		}
 	})
 }
+
+// WR-08: a rate-limited or erroring enrichment endpoint is a failure, not thin
+// metadata. All-hits-failed of any non-404 kind is Unavailable, and a partial
+// failure is reported through the context's degradation collector.
+func TestForgeHTTPSearchEnrichmentFailuresAreSurfaced(t *testing.T) {
+	t.Run("every enrichment rate_limited is Unavailable", func(t *testing.T) {
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v3/modules" {
+				threeHitPage(w)
+				return
+			}
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte(`{}`))
+		})
+		if _, _, err := client.Search(context.Background(), ep, "puppet-forge", "x", nil); status.Code(err) != codes.Unavailable {
+			t.Fatalf("expected Unavailable when every enrichment call is throttled, got %v", err)
+		}
+	})
+
+	t.Run("a partial failure is recorded, a 404 is not", func(t *testing.T) {
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v3/modules" {
+				threeHitPage(w)
+				return
+			}
+			switch r.URL.Query().Get("module") {
+			case "ns-b":
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{}`))
+			case "ns-c":
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{}`))
+			default:
+				_, _ = w.Write([]byte(`{"pagination":{"total":1},"results":[{"version":"9.9.9","validation_score":70,"created_at":"2026-04-02 03:04:05 -0700","metadata":{"summary":"s"}}]}`))
+			}
+		})
+		ctx, deg := withForgeDegradation(context.Background())
+		if _, _, err := client.Search(ctx, ep, "puppet-forge", "x", nil); err != nil {
+			t.Fatalf("a partial failure must not fail the page: %v", err)
+		}
+		if got := deg.Names(); !reflect.DeepEqual(got, []string{"ns/b"}) {
+			t.Fatalf("expected only the 500 to be recorded as degraded, got %v", got)
+		}
+	})
+}
