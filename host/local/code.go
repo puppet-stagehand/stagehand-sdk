@@ -644,6 +644,13 @@ func (s *codeServer) DuplicateEnvironment(ctx context.Context, req *hostv1.Dupli
 // Every Code RPC is forwarded through this check rather than reaching the
 // embedded UnimplementedCodeServer. Unlike Documents and Settings, which are
 // always available, Code is a gated facet — the same posture Inventory ships.
+//
+// The three import RPCs (InspectImport, ProposeImport, ApplyImport) need more:
+// code:rw first, then code:import, because an import clones an arbitrary git
+// host and bulk-stages its content, which code:rw alone was never meant to
+// grant. A forgotten forwarder would compile and return Unimplemented rather
+// than PermissionDenied, because gatedCode embeds UnimplementedCodeServer;
+// TestImport_Permissions is what proves each one exists.
 type gatedCode struct {
 	hostv1.UnimplementedCodeServer
 	perms  map[string]bool
@@ -654,6 +661,15 @@ type gatedCode struct {
 func (g *gatedCode) check() error {
 	if !g.perms["code:rw"] {
 		return ErrPermissionDenied("code:rw")
+	}
+	return nil
+}
+
+// checkImport is the additional grant the three import RPCs need. It runs
+// after check, so a host with neither permission is always told about code:rw.
+func (g *gatedCode) checkImport() error {
+	if !g.perms["code:import"] {
+		return ErrPermissionDenied("code:import")
 	}
 	return nil
 }
@@ -858,4 +874,36 @@ func (g *gatedCode) DeleteHieraDataFile(ctx context.Context, req *hostv1.DeleteH
 		return nil, err
 	}
 	return g.inner.DeleteHieraDataFile(ctx, req)
+}
+
+// InspectImport, ProposeImport and ApplyImport require code:rw and then
+// code:import (DQ-1). Neither check reaches the git client or Documents.
+func (g *gatedCode) InspectImport(ctx context.Context, req *hostv1.InspectImportRequest) (*hostv1.InspectImportResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	if err := g.checkImport(); err != nil {
+		return nil, err
+	}
+	return g.inner.InspectImport(ctx, req)
+}
+
+func (g *gatedCode) ProposeImport(ctx context.Context, req *hostv1.ProposeImportRequest) (*hostv1.ProposeImportResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	if err := g.checkImport(); err != nil {
+		return nil, err
+	}
+	return g.inner.ProposeImport(ctx, req)
+}
+
+func (g *gatedCode) ApplyImport(ctx context.Context, req *hostv1.ApplyImportRequest) (*hostv1.ApplyImportResponse, error) {
+	if err := g.check(); err != nil {
+		return nil, err
+	}
+	if err := g.checkImport(); err != nil {
+		return nil, err
+	}
+	return g.inner.ApplyImport(ctx, req)
 }
