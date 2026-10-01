@@ -4,14 +4,18 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -64,6 +68,24 @@ const (
 
 	// gitSizePollInterval is how often the repo-size ceiling is checked.
 	gitSizePollInterval = 200 * time.Millisecond
+
+	// gitVersionTimeout bounds the one git --version probe made at
+	// construction (DQ-11).
+	gitVersionTimeout = 10 * time.Second
+
+	// gitStderrCapture bounds how much of git's stderr is held for the
+	// substring checks that classify a failure. It is never returned.
+	gitStderrCapture = 64 << 10
+
+	// gitReaderBuffer sizes the buffer on the cat-file --batch reader.
+	gitReaderBuffer = 64 << 10
+
+	// gitMinMajor and gitMinMinor are the oldest git this client will run:
+	// 2.32 is the first release that honours GIT_CONFIG_GLOBAL. An older git
+	// would silently read the operator's global config, so the client fails
+	// closed instead (DQ-11, RESEARCH A2, T-10-14).
+	gitMinMajor = 2
+	gitMinMinor = 32
 )
 
 // execGitClient is the real GitClient. It drives the system git binary: it
@@ -100,6 +122,8 @@ type execGitClient struct {
 	maxBlobBytes     int64
 	waitDelay        time.Duration
 	sizePollInterval time.Duration
+	versionTimeout   time.Duration
+	stderrCapture    int
 }
 
 // newExecGitClient builds the real client with production limits. A missing
@@ -119,6 +143,8 @@ func newExecGitClient() *execGitClient {
 		maxBlobBytes:     gitMaxBlobBytes,
 		waitDelay:        gitWaitDelay,
 		sizePollInterval: gitSizePollInterval,
+		versionTimeout:   gitVersionTimeout,
+		stderrCapture:    gitStderrCapture,
 	}
 	p, err := exec.LookPath("git")
 	if err != nil {
@@ -126,7 +152,39 @@ func newExecGitClient() *execGitClient {
 		return c
 	}
 	c.gitPath = p
+	c.unavailable = c.probeVersion()
 	return c
+}
+
+// reGitVersion extracts major and minor from "git version 2.50.1 (Apple
+// Git-155)" and its cousins.
+var reGitVersion = regexp.MustCompile(`^git version (\d+)\.(\d+)`)
+
+// probeVersion runs git --version once and returns nil when the binary is at
+// least the minimum, or the FailedPrecondition every method will then return
+// (DQ-11, T-10-14). An unparseable version fails closed too: not knowing the
+// version is not a reason to read the operator's global config.
+func (c *execGitClient) probeVersion() error {
+	tooOld := status.Errorf(codes.FailedPrecondition,
+		"git %d.%d or newer is required; an older git ignores GIT_CONFIG_GLOBAL and would read the operator's global git config",
+		gitMinMajor, gitMinMinor)
+	ctx, cancel := context.WithTimeout(context.Background(), c.versionTimeout)
+	defer cancel()
+	cmd := c.command(ctx, c.baseEnv(os.TempDir()), os.TempDir(), "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return status.Errorf(codes.FailedPrecondition, "git could not be run to check its version; git %d.%d or newer is required", gitMinMajor, gitMinMinor)
+	}
+	m := reGitVersion.FindStringSubmatch(strings.TrimSpace(string(out)))
+	if m == nil {
+		return tooOld
+	}
+	major, _ := strconv.Atoi(m[1])
+	minor, _ := strconv.Atoi(m[2])
+	if major < gitMinMajor || (major == gitMinMajor && minor < gitMinMinor) {
+		return tooOld
+	}
+	return nil
 }
 
 // gitCall is the per-call scratch space: one private temp directory, which is
@@ -187,24 +245,124 @@ func (c *execGitClient) command(ctx context.Context, env []string, dir string, a
 	cmd := exec.CommandContext(ctx, c.gitPath, full...)
 	cmd.Env = env
 	cmd.Dir = dir
+	// exec.CommandContext kills only the direct child, and an ssh grandchild
+	// would outlive the deadline holding the pipes. Run the child in its own
+	// process group and kill the whole group on timeout or cancellation, with
+	// WaitDelay as the backstop for a pipe that stays open (RESEARCH Pitfall
+	// 14, T-10-12).
+	setProcessGroup(cmd)
+	cmd.Cancel = func() error { return killProcessGroup(cmd) }
+	cmd.WaitDelay = c.waitDelay
 	return cmd
 }
 
-// errGitFailed is the static message for a failed git invocation. git's
-// stderr quotes the remote URL, which may carry an internal hostname the
-// caller is not otherwise entitled to confirm, so it is never echoed.
-func errGitFailed(ctxErr error) error {
-	if ctxErr != nil {
-		return status.Error(codes.Unavailable, "git operation timed out or was canceled")
+// classifyGitFailure turns a failed invocation into a host-authored static
+// error. git's stderr quotes the remote URL, which may carry an internal
+// hostname the caller is not otherwise entitled to confirm, so stderr is
+// inspected by substring comparison only and never echoed (D-02, 7 D-03,
+// T-10-11). The ladder, in order:
+//
+//	context canceled                                -> Canceled
+//	context deadline exceeded                       -> Unavailable
+//	refused transport, strange hostname, bad URL    -> InvalidArgument
+//	branch gone from the remote                     -> FailedPrecondition
+//	ssh host key not verified                       -> FailedPrecondition
+//	rejected or missing credential, repo not found  -> FailedPrecondition
+//	unreachable host, connection or TLS failure     -> Unavailable
+//	anything unexpected                             -> Internal
+func classifyGitFailure(stderr []byte, ctxErr error) error {
+	switch {
+	case errors.Is(ctxErr, context.Canceled):
+		return status.Error(codes.Canceled, "git operation was canceled")
+	case errors.Is(ctxErr, context.DeadlineExceeded):
+		return status.Error(codes.Unavailable, "git operation timed out")
+	}
+	e := strings.ToLower(string(stderr))
+	has := func(subs ...string) bool {
+		for _, s := range subs {
+			if strings.Contains(e, s) {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case (has("transport '") && has("not allowed")) || has("strange hostname", "strange pathname", "unable to find remote helper", "protocol is not allowed"):
+		return status.Error(codes.InvalidArgument, "git transport or url was refused")
+	case has("couldn't find remote ref"):
+		return status.Error(codes.FailedPrecondition, "git branch is no longer on the remote")
+	case has("host key verification failed"):
+		return status.Error(codes.FailedPrecondition, "git ssh host key could not be verified against the host's known_hosts")
+	case has("authentication failed", "could not read username", "could not read password", "terminal prompts disabled",
+		"permission denied", "invalid username or password", "error: 401", "error: 403", "access denied"):
+		return status.Error(codes.FailedPrecondition, "git remote rejected the credential or requires one")
+	case has("error: 404", "repository not found", "does not appear to be a git repository"):
+		return status.Error(codes.FailedPrecondition, "git repository was not found or is not readable with the supplied credential")
+	case has("could not resolve host", "could not resolve hostname", "connection refused", "connection timed out", "timed out",
+		"network is unreachable", "no route to host", "failed to connect", "couldn't connect", "connection reset",
+		"ssl", "tls", "unable to access", "could not read from remote repository", "early eof", "remote end hung up"):
+		return status.Error(codes.Unavailable, "git remote is unreachable (network error or timeout)")
 	}
 	return status.Error(codes.Internal, "git operation failed")
 }
 
-// run executes one git invocation and returns its stdout.
-func (c *execGitClient) run(ctx context.Context, env []string, dir string, timeout time.Duration, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
+// boundedBuffer keeps at most limit bytes of a stream and silently discards
+// the rest, so a chatty git cannot grow host memory through stderr.
+type boundedBuffer struct {
+	buf   bytes.Buffer
+	limit int
+}
+
+func (b *boundedBuffer) Write(p []byte) (int, error) {
+	if room := b.limit - b.buf.Len(); room > 0 {
+		if len(p) < room {
+			room = len(p)
+		}
+		b.buf.Write(p[:room])
+	}
+	return len(p), nil
+}
+
+// dirSize sums the sizes of the regular files under root. It never follows a
+// symlink and ignores entries that vanish mid-walk.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil && info.Mode().IsRegular() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// gitRun describes the bounds on one invocation.
+type gitRun struct {
+	// timeout bounds the whole invocation.
+	timeout time.Duration
+	// stdoutLimit bounds stdout; one byte past it is read so an oversized
+	// payload is detected rather than silently truncated.
+	stdoutLimit int64
+	// watchDir, when set, is polled while the process runs and the process
+	// group is killed once its size passes maxDirBytes. Best-effort: git
+	// fetch --depth 1 has no portable pre-flight size, so the ceiling is
+	// enforced by observation, not negotiation (RESEARCH Pitfall 12).
+	watchDir    string
+	maxDirBytes int64
+}
+
+// run executes one git invocation and returns its stdout. Every failure is
+// already classified into a static error; nothing it returns echoes the URL,
+// git's stderr or a credential.
+func (c *execGitClient) run(ctx context.Context, env []string, dir string, o gitRun, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, o.timeout)
 	defer cancel()
 	cmd := c.command(ctx, env, dir, args...)
+	stderr := &boundedBuffer{limit: c.stderrCapture}
+	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, status.Error(codes.Internal, "git operation failed")
@@ -212,11 +370,81 @@ func (c *execGitClient) run(ctx context.Context, env []string, dir string, timeo
 	if err := cmd.Start(); err != nil {
 		return nil, status.Error(codes.Internal, "git operation failed")
 	}
-	out, _ := io.ReadAll(stdout)
-	if err := cmd.Wait(); err != nil {
-		return nil, errGitFailed(ctx.Err())
+
+	var sizeTripped atomic.Bool
+	done := make(chan struct{})
+	var watchers sync.WaitGroup
+	if o.watchDir != "" {
+		watchers.Add(1)
+		go func() {
+			defer watchers.Done()
+			t := time.NewTicker(c.sizePollInterval)
+			defer t.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-t.C:
+					if dirSize(o.watchDir) > o.maxDirBytes {
+						sizeTripped.Store(true)
+						_ = killProcessGroup(cmd)
+						return
+					}
+				}
+			}
+		}()
 	}
-	return out, nil
+
+	var data []byte
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		data, _ = io.ReadAll(io.LimitReader(stdout, o.stdoutLimit+1))
+	}()
+	select {
+	case <-readDone:
+	case <-ctx.Done():
+		// The group kill closes every pipe writer; WaitDelay is the backstop
+		// for a descendant that escaped the group and still holds the pipe.
+		select {
+		case <-readDone:
+		case <-time.After(c.waitDelay):
+			_ = stdout.Close()
+			<-readDone
+		}
+	}
+	over := int64(len(data)) > o.stdoutLimit
+	if over {
+		_ = killProcessGroup(cmd)
+	}
+	waitErr := cmd.Wait()
+	close(done)
+	watchers.Wait()
+
+	switch {
+	case sizeTripped.Load():
+		return nil, status.Errorf(codes.FailedPrecondition, "git fetch exceeded the repository size limit of %d bytes", o.maxDirBytes)
+	case over:
+		return nil, status.Errorf(codes.FailedPrecondition, "git output exceeded the limit of %d bytes", o.stdoutLimit)
+	case waitErr != nil:
+		return nil, classifyGitFailure(stderr.buf.Bytes(), ctx.Err())
+	}
+	if o.watchDir != "" && dirSize(o.watchDir) > o.maxDirBytes {
+		return nil, status.Errorf(codes.FailedPrecondition, "git fetch exceeded the repository size limit of %d bytes", o.maxDirBytes)
+	}
+	return data, nil
+}
+
+// hasControlByte reports whether s holds a space, control byte or DEL, none of
+// which a real branch name can contain; a name that does came from a hostile
+// remote and is dropped from discovery.
+func hasControlByte(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] <= 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 // isHexSHA reports whether s looks like a full SHA-1 or SHA-256 object id.
@@ -247,7 +475,8 @@ func (c *execGitClient) ListBranches(ctx context.Context, r GitRemote) ([]GitBra
 	}
 	defer call.cleanup()
 
-	out, err := c.run(ctx, call.env, call.dir, c.discoveryTimeout, "ls-remote", "--heads", "--refs", "--", r.URL)
+	out, err := c.run(ctx, call.env, call.dir, gitRun{timeout: c.discoveryTimeout, stdoutLimit: c.maxLsRemoteBytes},
+		"ls-remote", "--heads", "--refs", "--", r.URL)
 	if err != nil {
 		return nil, err
 	}
@@ -255,10 +484,13 @@ func (c *execGitClient) ListBranches(ctx context.Context, r GitRemote) ([]GitBra
 	for _, line := range strings.Split(string(out), "\n") {
 		sha, ref, ok := strings.Cut(line, "\t")
 		name, isHead := strings.CutPrefix(ref, "refs/heads/")
-		if !ok || !isHead || name == "" || !isHexSHA(sha) {
+		if !ok || !isHead || name == "" || !isHexSHA(sha) || hasControlByte(name) {
 			continue
 		}
 		refs = append(refs, GitBranchRef{Name: name, Commit: sha})
+	}
+	if len(refs) > c.maxBranches {
+		return nil, status.Errorf(codes.FailedPrecondition, "git remote has more branches than the limit of %d", c.maxBranches)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
 	return refs, nil
@@ -276,6 +508,24 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 	if len(branches) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "git open needs at least one branch")
 	}
+	// Dedupe, then validate every name before any temp directory exists: a
+	// name is interpolated into a refspec, so it must not be able to change
+	// the refspec's meaning.
+	seen := make(map[string]bool, len(branches))
+	uniq := make([]string, 0, len(branches))
+	for _, b := range branches {
+		if !validGitBranchName(b) {
+			return nil, status.Error(codes.InvalidArgument, "git branch name is not valid")
+		}
+		if !seen[b] {
+			seen[b] = true
+			uniq = append(uniq, b)
+		}
+	}
+	branches = uniq
+	if len(branches) > c.maxBranches {
+		return nil, status.Errorf(codes.FailedPrecondition, "git open names more branches than the limit of %d", c.maxBranches)
+	}
 	call, err := c.newCall()
 	if err != nil {
 		return nil, err
@@ -288,7 +538,7 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 	}()
 
 	gitDir := filepath.Join(call.dir, "repo.git")
-	if _, err := c.run(ctx, call.localEnv, call.dir, c.localTimeout, "init", "--bare", "-q", "--template=", gitDir); err != nil {
+	if _, err := c.run(ctx, call.localEnv, call.dir, gitRun{timeout: c.localTimeout, stdoutLimit: c.maxLsRemoteBytes}, "init", "--bare", "-q", "--template=", gitDir); err != nil {
 		return nil, err
 	}
 
@@ -296,13 +546,15 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 	for _, b := range branches {
 		fetchArgs = append(fetchArgs, "+refs/heads/"+b+":refs/heads/"+b)
 	}
-	if _, err := c.run(ctx, call.env, call.dir, c.fetchTimeout, fetchArgs...); err != nil {
+	fetch := gitRun{timeout: c.fetchTimeout, stdoutLimit: c.maxLsRemoteBytes, watchDir: call.dir, maxDirBytes: c.maxRepoBytes}
+	if _, err := c.run(ctx, call.env, call.dir, fetch, fetchArgs...); err != nil {
 		return nil, err
 	}
 
 	commits := make(map[string]string, len(branches))
 	for _, b := range branches {
-		out, err := c.run(ctx, call.localEnv, call.dir, c.localTimeout, "--git-dir="+gitDir, "rev-parse", "--verify", "-q", "refs/heads/"+b)
+		out, err := c.run(ctx, call.localEnv, call.dir, gitRun{timeout: c.localTimeout, stdoutLimit: c.maxLsRemoteBytes},
+			"--git-dir="+gitDir, "rev-parse", "--verify", "-q", "refs/heads/"+b)
 		if err != nil {
 			return nil, err
 		}
@@ -330,7 +582,10 @@ type execGitRepo struct {
 	gitDir  string
 	commits map[string]string
 
-	mu     sync.Mutex
+	mu sync.Mutex
+	// sizes records each listed blob's size from ls-tree -l, so the per-blob
+	// ceiling refuses an oversized blob before any cat-file read.
+	sizes  map[string]int64
 	closed bool
 	broken bool
 	cancel context.CancelFunc
@@ -356,7 +611,7 @@ func (r *execGitRepo) startReader() error {
 		cancel()
 		return status.Error(codes.Internal, "git object reader could not be started")
 	}
-	r.cancel, r.batch, r.in, r.out = cancel, cmd, in, bufio.NewReaderSize(out, 64<<10)
+	r.cancel, r.batch, r.in, r.out = cancel, cmd, in, bufio.NewReaderSize(out, gitReaderBuffer)
 	return nil
 }
 
@@ -367,7 +622,10 @@ func (r *execGitRepo) Commit(branch string) (string, bool) {
 }
 
 // ListFiles implements GitRepo. -z is mandatory: without it git C-quotes an
-// unusual path and the parse would silently diverge from the real path.
+// unusual path and the parse would silently diverge from the real path. The
+// mode is surfaced verbatim: a committed symlink is 120000 and a submodule
+// pointer is 160000, and this client never follows either (T-10-10); the caller
+// decides what to do with them.
 func (r *execGitRepo) ListFiles(branch string, pathspecs ...string) ([]GitFileEntry, error) {
 	sha, ok := r.commits[branch]
 	if !ok {
@@ -384,7 +642,7 @@ func (r *execGitRepo) ListFiles(branch string, pathspecs ...string) ([]GitFileEn
 		args = append(args, "--")
 		args = append(args, pathspecs...)
 	}
-	out, err := r.c.run(context.Background(), r.call.localEnv, r.call.dir, r.c.localTimeout, args...)
+	out, err := r.c.run(context.Background(), r.call.localEnv, r.call.dir, gitRun{timeout: r.c.localTimeout, stdoutLimit: r.c.maxTreeListBytes}, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -411,6 +669,14 @@ func (r *execGitRepo) ListFiles(branch string, pathspecs ...string) ([]GitFileEn
 		}
 		files = append(files, GitFileEntry{Path: string(path), Mode: fields[0], Size: size})
 	}
+	r.mu.Lock()
+	if r.sizes == nil {
+		r.sizes = map[string]int64{}
+	}
+	for _, f := range files {
+		r.sizes[sha+"\x00"+f.Path] = f.Size
+	}
+	r.mu.Unlock()
 	return files, nil
 }
 
@@ -429,6 +695,10 @@ func (r *execGitRepo) ReadFile(branch, path string) ([]byte, error) {
 	defer r.mu.Unlock()
 	if r.closed || r.broken {
 		return nil, status.Error(codes.FailedPrecondition, "git repository is closed")
+	}
+	errTooBig := status.Errorf(codes.FailedPrecondition, "git file exceeds the per-file limit of %d bytes", r.c.maxBlobBytes)
+	if known, ok := r.sizes[sha+"\x00"+path]; ok && known > r.c.maxBlobBytes {
+		return nil, errTooBig
 	}
 	if _, err := io.WriteString(r.in, sha+":"+path+"\n"); err != nil {
 		r.broken = true
@@ -452,6 +722,14 @@ func (r *execGitRepo) ReadFile(branch, path string) ([]byte, error) {
 	if err != nil || size < 0 {
 		r.broken = true
 		return nil, status.Error(codes.Internal, "git object reader failed")
+	}
+	if size > r.c.maxBlobBytes {
+		// Skip the body so the stream stays in sync for the next read. Bounded
+		// by the repo-size ceiling the fetch already enforced.
+		if _, err := io.CopyN(io.Discard, r.out, size+1); err != nil {
+			r.broken = true
+		}
+		return nil, errTooBig
 	}
 	body := make([]byte, size)
 	if _, err := io.ReadFull(r.out, body); err != nil {

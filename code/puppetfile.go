@@ -381,11 +381,15 @@ var reGitSCP = regexp.MustCompile(`^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:.+$`)
 // additional Puppetfile attribute line), free of a ProxyCommand option or
 // an ext:: command-executing transport prefix (the two documented ways a
 // git remote can be made to execute a command — T-06-04), and shaped as
-// one of the five accepted URL transports or the SCP-style form. This
-// facet never invokes git, so nothing executes today; the rule lands now
-// because Phase 10's import will feed externally-sourced Puppetfile text
-// through this same model, and a rule added after data exists is a
-// migration.
+// one of the five accepted URL transports or the SCP-style form.
+//
+// This rule governs what the Puppetfile MODEL may store, and it is
+// deliberately wider than what the host may dial: a control repo legitimately
+// references git:// and http:// module sources, so file://, git:// and http://
+// are accepted here. It must not be reused as the import clone allowlist. The
+// clone allowlist is https and ssh only, refuses any credential in the URL,
+// and lives in host/local/git_client.go (validateGitURL); the host's git
+// client also sets GIT_ALLOW_PROTOCOL as a second line of defence.
 func gitURLOK(url string) bool {
 	if url == "" {
 		return false

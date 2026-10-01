@@ -116,9 +116,14 @@ type GitRepo interface {
 func DefaultGitClient() GitClient { return newExecGitClient() }
 
 // reGitSCPClone matches the scp-style user@host:path form accepted as the ssh
-// scheme. Its first character must be alphanumeric, so a value that begins
-// with "-" can never match and be read as an option.
+// scheme (DQ-12). Its first character must be alphanumeric, so a value that
+// begins with "-" can never match and be read as an option, and its path may
+// not begin with "-" either.
 var reGitSCPClone = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][A-Za-z0-9.-]*:[^\s:-][^\s]*$`)
+
+// reGitHelperTransport matches git's "<transport>::<address>" remote-helper
+// syntax (ext::, fd::, and any other helper), which can execute a command.
+var reGitHelperTransport = regexp.MustCompile(`^[A-Za-z0-9+.-]+::`)
 
 // errGitURL builds the static InvalidArgument every URL refusal returns. A
 // refusal never quotes the input: url.Parse's own error text does, userinfo
@@ -126,30 +131,91 @@ var reGitSCPClone = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*@[A-Za-z0-9][
 func errGitURL(msg string) error { return status.Error(codes.InvalidArgument, "git url "+msg) }
 
 // validateGitURL is the Go-side allowlist the exec client runs before any
-// subprocess: https and ssh only, plus the scp-style user@host:path form.
-// It is deliberately not code.gitURLOK, which governs what the Puppetfile
-// model may store and is wider.
+// subprocess (D-04, DQ-12, RESEARCH Pitfall 6, T-10-08). It accepts https://,
+// ssh:// and the scp-style user@host:path form, and refuses everything else:
+// an empty value, whitespace or control bytes, a leading "-", helper
+// transports (ext::, fd::), file://, git:// and http://, a dash-led host, and
+// any credential in the URL.
+//
+// A credential in a URL is a credential in a process listing (D-02), so https
+// refuses any userinfo and ssh:// refuses a password. An ssh:// URL may carry
+// a bare login name (ssh://git@host:2222/org/repo.git): it is a user name, not
+// a secret, it is the only way to name an ssh port, and it is the same thing
+// the accepted scp-style form already carries.
+//
+// This is deliberately not code.gitURLOK, which governs what the Puppetfile
+// model may store, accepts file://, git:// and http://, and must not be reused
+// as a clone allowlist. GIT_ALLOW_PROTOCOL in the child's environment is the
+// second line of defence behind this one.
 func validateGitURL(raw string) error {
 	if raw == "" {
 		return errGitURL("is empty")
 	}
-	if strings.Contains(raw, "://") {
-		u, err := url.Parse(raw)
-		if err != nil {
-			return errGitURL("is not a valid URL")
+	for i := 0; i < len(raw); i++ {
+		if c := raw[i]; c <= 0x20 || c == 0x7f {
+			return errGitURL("must not contain whitespace or control characters")
 		}
-		switch strings.ToLower(u.Scheme) {
-		case "https", "ssh":
-		default:
+	}
+	if raw[0] == '-' {
+		return errGitURL("must not start with '-'")
+	}
+	if reGitHelperTransport.MatchString(raw) {
+		return errGitURL("must not use a remote-helper transport")
+	}
+	if !strings.Contains(raw, "://") {
+		if !reGitSCPClone.MatchString(raw) {
 			return errGitURL("must use https or ssh")
-		}
-		if u.Hostname() == "" {
-			return errGitURL("must include a host")
 		}
 		return nil
 	}
-	if !reGitSCPClone.MatchString(raw) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return errGitURL("is not a valid URL")
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "https" && scheme != "ssh" {
 		return errGitURL("must use https or ssh")
 	}
+	host := u.Hostname()
+	if host == "" {
+		return errGitURL("must include a host")
+	}
+	if strings.HasPrefix(host, "-") {
+		return errGitURL("has a host that starts with '-'")
+	}
+	if u.User != nil {
+		_, hasPassword := u.User.Password()
+		name := u.User.Username()
+		if scheme == "https" || hasPassword || name == "" || strings.HasPrefix(name, "-") {
+			return errGitURL("must not embed credentials")
+		}
+	}
 	return nil
+}
+
+// validGitBranchName applies git's ref-name rules conservatively, plus a
+// refusal of a leading "-", so a branch name interpolated into a refspec can
+// never change the refspec's meaning or be read as an option.
+func validGitBranchName(n string) bool {
+	if n == "" || len(n) > 255 || n == "@" || n[0] == '-' {
+		return false
+	}
+	if strings.HasPrefix(n, "/") || strings.HasSuffix(n, "/") || strings.HasSuffix(n, ".") || strings.HasSuffix(n, ".lock") {
+		return false
+	}
+	if strings.Contains(n, "..") || strings.Contains(n, "//") || strings.Contains(n, "@{") {
+		return false
+	}
+	for i := 0; i < len(n); i++ {
+		c := n[i]
+		if c <= 0x20 || c == 0x7f || strings.IndexByte(":?[\\^~*", c) >= 0 {
+			return false
+		}
+	}
+	for _, comp := range strings.Split(n, "/") {
+		if strings.HasPrefix(comp, ".") || strings.HasSuffix(comp, ".lock") {
+			return false
+		}
+	}
+	return true
 }
