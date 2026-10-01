@@ -9,6 +9,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"regexp"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -70,11 +71,63 @@ func (s *forgeServer) resolveLLMProvider(ctx context.Context, name string) (LLMP
 	if err := json.Unmarshal(revealed.Plaintext, &sealed); err != nil {
 		return LLMProvider{}, status.Errorf(codes.Internal, "llm provider %q secret is malformed", name)
 	}
+
+	// Config ladder: a payload that decodes but cannot be used is the
+	// operator's to fix, so every row below is FailedPrecondition. Messages
+	// name the provider and the broken field, never a value (a base URL can
+	// embed credentials and the key must never be echoed).
+	switch sealed.Kind {
+	case llmKindAnthropic, llmKindOpenAICompatible:
+	default:
+		return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q has an unsupported kind (want %q or %q)", name, llmKindAnthropic, llmKindOpenAICompatible)
+	}
+	if sealed.Model == "" {
+		return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q has no model configured", name)
+	}
+
+	baseURL := sealed.BaseURL
+	switch sealed.Kind {
+	case llmKindAnthropic:
+		if baseURL == "" {
+			baseURL = defaultAnthropicBaseURL
+		}
+		if sealed.APIKey == "" {
+			return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q needs an API key for the anthropic kind", name)
+		}
+	case llmKindOpenAICompatible:
+		// A base URL is mandatory (there is no vendor default to fall back
+		// to); an empty key is fine, since a local model server needs none.
+		if baseURL == "" {
+			return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q needs a base URL for the openai_compatible kind", name)
+		}
+	}
+	if _, verr := validateLLMBaseURL(baseURL); verr != nil {
+		return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q has an unusable base URL: %v", name, verr)
+	}
+	if sealed.MaxTokensField != "" && !validLLMTokensField(sealed.MaxTokensField) {
+		return LLMProvider{}, status.Errorf(codes.FailedPrecondition, "llm provider %q has an invalid max_tokens_field", name)
+	}
+
 	return LLMProvider{
 		Kind:           sealed.Kind,
-		BaseURL:        sealed.BaseURL,
+		BaseURL:        baseURL,
 		Model:          sealed.Model,
 		APIKey:         sealed.APIKey,
 		MaxTokensField: sealed.MaxTokensField,
 	}, nil
+}
+
+// llmTokensFieldPattern is the shape of a request-body key a sealed
+// max_tokens_field may name: a plain snake_case identifier.
+var llmTokensFieldPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
+// validLLMTokensField accepts a plain identifier that does not collide with a
+// body key the client owns, so the sealed override can only rename the
+// output-budget parameter, never displace the model or the messages.
+func validLLMTokensField(field string) bool {
+	switch field {
+	case "model", "messages", "stream", "system":
+		return false
+	}
+	return llmTokensFieldPattern.MatchString(field)
 }

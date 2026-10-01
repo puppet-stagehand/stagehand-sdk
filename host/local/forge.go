@@ -75,11 +75,15 @@ type forgeServer struct {
 
 // newForgeServer wires a forgeServer. A nil client defaults to the real
 // HTTP adapter (D-01); tests and pack examples inject a fixture instead.
-// llm is stored as given: a nil LLMClient makes Recommend fail with
-// FailedPrecondition until a default client lands.
+// A nil llm defaults to the real LLM adapter (DefaultLLMClient), the same way
+// a nil client defaults to the real Forge adapter; tests and pack examples
+// inject a fixture with WithLLMClient instead.
 func newForgeServer(packID string, docs *documentsServer, secrets *secretsServer, client ForgeClient, llm LLMClient) *forgeServer {
 	if client == nil {
 		client = DefaultForgeClient()
+	}
+	if llm == nil {
+		llm = DefaultLLMClient()
 	}
 	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm}
 }
