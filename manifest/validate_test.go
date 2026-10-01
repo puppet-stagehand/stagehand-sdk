@@ -702,3 +702,80 @@ func TestCodeImportVocabulariesCarryTheLiteral(t *testing.T) {
 		}
 	})
 }
+
+// TestCodeImportIsAnExactLiteralNotAPrefix fails if the code:import branch is
+// ever widened into a prefix, a character class or a quantifier — the widening
+// that would hand a pack a clone-and-bulk-create grant it never declared
+// (T-10-05). Every spelling is written out literally; none is built from a
+// package value.
+func TestCodeImportIsAnExactLiteralNotAPrefix(t *testing.T) {
+	widened := []string{
+		"code:import:all",
+		"code:imports",
+		"code:imp",
+		"code:",
+		"code:IMPORT",
+		"code:import ",
+	}
+	for _, p := range widened {
+		t.Run(p, func(t *testing.T) {
+			if rePerm.MatchString(p) {
+				t.Errorf("rePerm must NOT match %q — code:import must be an exact literal", p)
+			}
+			m := load(t, "../examples/hello/manifest.json")
+			m.Permissions = append(m.Permissions, p)
+			fs := Validate(m)
+			var found *Finding
+			n := 0
+			for i := range fs {
+				if fs[i].Code == "permission_unknown" {
+					n++
+					found = &fs[i]
+				}
+			}
+			if n != 1 {
+				t.Fatalf("expected exactly one permission_unknown finding for %q, got %v", p, codes(fs))
+			}
+			// The Fix line is the only place a pack author learns the correct
+			// spelling (T-10-36).
+			if !strings.Contains(found.Fix, "code:import") {
+				t.Errorf("permission_unknown fix for %q must name the real literal code:import; got %q", p, found.Fix)
+			}
+		})
+	}
+}
+
+// TestCodeRWAndReadSurviveTheCodeImportAddition is the collateral-damage
+// control: adding code:import must not displace code:read or code:rw
+// (T-10-35), and must not drag code:approve in with it (T-10-06). It restates,
+// from the import side, the property TestCodeApproveScopeIsNotAManifestPermission
+// pins; it does not replace that test.
+func TestCodeRWAndReadSurviveTheCodeImportAddition(t *testing.T) {
+	for _, p := range []string{"code:read", "code:rw"} {
+		t.Run(p+" validates alone", func(t *testing.T) {
+			m := load(t, "../examples/hello/manifest.json")
+			m.Permissions = append(m.Permissions, p)
+			if fs := Validate(m); len(fs) != 0 {
+				t.Fatalf("%s must still validate clean; got %v", p, codes(fs))
+			}
+		})
+	}
+
+	t.Run("code:approve is still not a permission", func(t *testing.T) {
+		const approve = "code:approve"
+		if rePerm.MatchString(approve) {
+			t.Fatalf("rePerm must NOT match %q — it is a per-decision Auth scope, never an install-time permission", approve)
+		}
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, approve)
+		var found bool
+		for _, f := range Validate(m) {
+			if f.Code == "permission_unknown" {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("a manifest declaring %q must yield a permission_unknown finding", approve)
+		}
+	})
+}
