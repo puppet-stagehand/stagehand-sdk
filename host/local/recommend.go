@@ -102,6 +102,49 @@ func recommendKey(name, source string) string {
 // cleanReasoning cleans the LLM-authored reasoning string.
 func cleanReasoning(s string) string { return cleanText(s, recommendMaxReasoningRunes) }
 
+// resolveRecommendLimit resolves one per-request override: zero selects the
+// default, a value above the hard maximum is refused rather than clamped (the
+// forgePageParams precedent), and a negative value is invalid.
+func resolveRecommendLimit(field string, requested, def, hardMax int32) (int, error) {
+	switch {
+	case requested == 0:
+		return int(def), nil
+	case requested < 0:
+		return 0, status.Errorf(codes.InvalidArgument, "%s must not be negative", field)
+	case requested > hardMax:
+		return 0, status.Errorf(codes.InvalidArgument, "%s of %d exceeds the maximum of %d", field, requested, hardMax)
+	}
+	return int(requested), nil
+}
+
+// complete makes one provider call under its own timeout, independent of the
+// caller's context, and never retries. The LLM client's gRPC code is
+// propagated so a pack can tell a bad credential or model (FailedPrecondition)
+// from a refused or truncated reply (Internal) from an outage (Unavailable),
+// but the message is always the host's own: a client error can carry transport
+// text and a provider can quote the prompt or the key back in an error body,
+// so none of it is ever relayed.
+func (s *forgeServer) complete(ctx context.Context, p LLMProvider, req LLMRequest) (string, error) {
+	timeout := s.callTimeout
+	if timeout <= 0 {
+		timeout = llmCallTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	raw, err := s.llm.Complete(ctx, p, req)
+	if err == nil {
+		return raw, nil
+	}
+	switch status.Code(err) {
+	case codes.FailedPrecondition:
+		return "", status.Error(codes.FailedPrecondition, "the llm provider rejected the request; check the provider's API key, model and base URL")
+	case codes.Internal:
+		return "", status.Error(codes.Internal, "the llm provider's reply was unusable (refused, cut short or malformed)")
+	default:
+		return "", status.Error(codes.Unavailable, "the llm provider is unavailable, timed out or rate limited")
+	}
+}
+
 // distinctSourceNames turns the requested selections into a de-duplicated,
 // ordered name list. An unset selection, an empty name or an empty list all
 // mean the public registry (D-06); this is pure so the source cap can be
@@ -210,6 +253,18 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	if req.LlmProvider == "" {
 		return nil, status.Error(codes.InvalidArgument, "llm_provider is required")
 	}
+	maxQueries, err := resolveRecommendLimit("max_queries", req.MaxQueries, recommendDefaultMaxQueries, recommendHardMaxQueries)
+	if err != nil {
+		return nil, err
+	}
+	maxCandidates, err := resolveRecommendLimit("max_candidates", req.MaxCandidates, recommendDefaultMaxCandidates, recommendHardMaxCandidates)
+	if err != nil {
+		return nil, err
+	}
+	maxSuggestions, err := resolveRecommendLimit("max_suggestions", req.MaxSuggestions, recommendDefaultMaxSuggestions, recommendHardMaxSuggestions)
+	if err != nil {
+		return nil, err
+	}
 	sourceNames := distinctSourceNames(req.Sources)
 	if len(sourceNames) > recommendMaxSources {
 		return nil, status.Errorf(codes.InvalidArgument, "sources lists %d distinct sources; at most %d are allowed", len(sourceNames), recommendMaxSources)
@@ -234,15 +289,15 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	}
 
 	// LLM call #1: extraction. Only the caller's text leaves the process.
-	raw, err := s.llm.Complete(ctx, provider, buildExtractionRequest(text))
+	raw, err := s.complete(ctx, provider, buildExtractionRequest(text))
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "llm provider call failed: %v", err)
+		return nil, err
 	}
 	extracted, err := decodeExtractReply(raw)
 	if err != nil {
 		return nil, err
 	}
-	queries := cleanQueries(extracted.Queries, recommendDefaultMaxQueries)
+	queries := cleanQueries(extracted.Queries, maxQueries)
 	if len(queries) == 0 {
 		return nil, status.Error(codes.Internal, "llm extraction reply held no usable search query")
 	}
@@ -279,12 +334,12 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 		return nil, firstErr
 	}
 
-	kept, dropped := mergeInterleaved(lists, recommendDefaultMaxCandidates)
+	kept, dropped := mergeInterleaved(lists, maxCandidates)
 	if dropped > 0 {
 		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
 			Code: recommendWarnCandidatesTruncated,
 			Message: fmt.Sprintf("the search found %d more modules than the candidate limit of %d; the rest were not ranked",
-				dropped, recommendDefaultMaxCandidates),
+				dropped, maxCandidates),
 		})
 	}
 
@@ -306,9 +361,9 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	if err != nil {
 		return nil, err
 	}
-	raw, err = s.llm.Complete(ctx, provider, rankReq)
+	raw, err = s.complete(ctx, provider, rankReq)
 	if err != nil {
-		return nil, status.Errorf(codes.Unavailable, "llm provider call failed: %v", err)
+		return nil, err
 	}
 	ranked, err := decodeRankReply(raw)
 	if err != nil {
@@ -319,6 +374,9 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	// from output position and every module fact from the candidate.
 	seen := make(map[string]bool, len(ranked.Suggestions))
 	for _, entry := range ranked.Suggestions {
+		if len(resp.Suggestions) == maxSuggestions {
+			break
+		}
 		k := recommendKey(entry.Name, entry.Source)
 		c, ok := candidates[k]
 		switch {
