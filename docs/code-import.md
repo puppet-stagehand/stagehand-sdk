@@ -338,3 +338,397 @@ marker that makes an approval single-use. `code:import` does not make this
 better or worse; it is the sixth gated path, not an exemption and not a
 stronger one. If you need protection against a pack that acts maliciously, do
 not give that pack direct Documents access in the host that embeds this SDK.
+
+## Manual verification
+
+This section lets a person confirm import by hand. There is one walk for each
+of the three RPCs, then two walks for the two things no automated test in this
+SDK can do: an authenticated fetch of a real private repository, and an `ssh`
+fetch against a real host. You will run a small scratch test and read what it
+prints. Nothing here changes the repository; delete the scratch directory at
+the end.
+
+Never put a credential in a git address, and never pass one as a command
+argument. The implementation refuses the first, and the second would be readable
+by anyone listing processes on the machine. The walks below read secrets from
+environment variables or a file, and only ever send the **name** of a sealed
+secret in a request.
+
+### Setting up
+
+1. From the repository root, create a scratch directory:
+
+   ```
+   mkdir manualcheck
+   ```
+
+2. Save this as `manualcheck/import_test.go`. It builds a host with the
+   permissions import needs, and has helpers to seal a credential and to play
+   the approving operator:
+
+   ```go
+   package manualcheck
+
+   import (
+       "context"
+       "encoding/json"
+       "os"
+       "testing"
+
+       "github.com/puppet-stagehand/stagehand-sdk/approval"
+       "github.com/puppet-stagehand/stagehand-sdk/code"
+       hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+       "github.com/puppet-stagehand/stagehand-sdk/host"
+       "github.com/puppet-stagehand/stagehand-sdk/host/local"
+   )
+
+   var ctx = context.Background()
+
+   var kind = approval.Kind{Collection: code.OverwriteCollection, ApproveScope: code.OverwriteApproveScope}
+
+   func newHost() *host.Host {
+       return local.New([]string{"code:rw", "code:import", "secrets:rw", "tokens:issue", "documents:rw"}, "manual-check")
+   }
+
+   // publicURL is a public control repo that needs no login.
+   func publicURL() string {
+       if u := os.Getenv("STAGEHAND_TEST_GIT_URL"); u != "" {
+           return u
+       }
+       return "https://github.com/puppetlabs/control-repo.git"
+   }
+
+   // approve plays the operator: it mints a code:approve token and decides.
+   func approve(t *testing.T, h *host.Host, id string) {
+       t.Helper()
+       tok, err := h.Auth.IssueToken(ctx, &hostv1.IssueTokenRequest{
+           Scope: code.OverwriteApproveScope, Label: "operator", TtlSeconds: 300})
+       if err != nil {
+           t.Fatal(err)
+       }
+       if _, err := approval.Approve(ctx, h, approval.ApproveRequest{
+           Kind: kind, ProposalID: id, TokenSecret: tok.Secret}); err != nil {
+           t.Fatal(err)
+       }
+   }
+
+   // seal stores a credential as a sealed secret under a name.
+   func seal(t *testing.T, h *host.Host, name string, cred map[string]any) {
+       t.Helper()
+       b, err := json.Marshal(cred)
+       if err != nil {
+           t.Fatal(err)
+       }
+       if _, err := h.Secrets.Store(ctx, &hostv1.StoreSecretRequest{Name: name, Plaintext: b}); err != nil {
+           t.Fatal(err)
+       }
+   }
+   ```
+
+   Run `go vet ./manualcheck`. Expect no output. Add the walks below as new
+   test functions in the same file. Walks 1 to 3 build on each other, so put
+   them in one function, `TestPublic`.
+
+### Walk 1: `InspectImport`
+
+**Prerequisite:** the machine running the test has `git` 2.32 or newer and can
+reach `github.com` over `https`. No credential and no private infrastructure
+are needed. To use another public control repo, set `STAGEHAND_TEST_GIT_URL`.
+
+1. Add to `TestPublic`:
+
+   ```go
+   h := newHost()
+   rep, err := h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: publicURL()})
+   if err != nil {
+       t.Fatal(err)
+   }
+   for _, b := range rep.Snapshot.Branches {
+       t.Logf("branch %q commit=%s importable=%v will_overwrite=%v data_files=%d hiera=%d bytes settings=%v",
+           b.Branch, b.Commit, b.Importable, b.WillOverwrite, len(b.DataFiles), len(b.HieraYaml), b.Settings != nil)
+       for _, f := range b.Findings {
+           t.Logf("  %s %s %s:%d: %s", f.Severity, f.Kind, f.File, f.Line, f.Message)
+       }
+   }
+   envs, _ := h.Code.ListEnvironments(ctx, &hostv1.ListEnvironmentsRequest{})
+   t.Logf("environments after inspect: %v", envs)
+   docs, _ := h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: code.OverwriteCollection})
+   t.Logf("proposals after inspect: %v", docs)
+   ```
+
+2. Run `go test ./manualcheck -run TestPublic -v`.
+
+**Expected:** a line for each branch of the repository. For the default
+repository that is one branch, `production`, importable, with a commit hash, no
+overwrite, a few data files and settings present. Under it, at least one
+finding: a `WARNING puppetfile_forge_directive` on `Puppetfile:1` and a
+`WARNING hiera_unmodelled_key` for `plan_hierarchy`. Then
+`environments after inspect: page:{}` and `proposals after inspect: page:{}`:
+the lists are **empty**, so nothing was written and no proposal was filed. (A
+different repository will show different branches and findings; what must hold
+is the two empty lists.)
+
+**What this proves:** inspect reports without writing. If either list is not
+empty after inspect, stop and report it.
+
+### Walk 2: `ProposeImport`
+
+**Prerequisite:** Walk 1 passed, in the same function so the same host is used.
+
+1. Add to `TestPublic`:
+
+   ```go
+   pr, err := h.Code.ProposeImport(ctx, &hostv1.ProposeImportRequest{
+       ProposalId: "imp1", Url: publicURL(), Branches: []string{"production"},
+       ExpectedCommits: map[string]string{"production": rep.Snapshot.Branches[0].Commit},
+   })
+   if err != nil {
+       t.Fatal(err)
+   }
+   t.Logf("proposed %s with %d branches, commit %s", pr.ProposalId, len(pr.Snapshot.Branches), pr.Snapshot.Branches[0].Commit)
+   ```
+
+   If you imported a repository whose first branch is not the one you want, put
+   its name in `Branches` and use that branch's commit from Walk 1.
+
+2. Run the test again.
+
+**Expected:** `proposed imp1 with 1 branches` and the **same commit hash** that
+Walk 1 printed for that branch. The proposal is pending and holds the frozen
+snapshot. Environments are still empty: propose does not apply. To see it
+stored, list the `code-overwrites` collection and find `imp1` with status
+`pending`.
+
+Then check the staleness guard: change `ExpectedCommits` to a made-up value
+such as `"deadbeef"` and run again with a different proposal id. **Expected:**
+`FailedPrecondition` with detail code `import_branch_moved` and a message
+saying the branch "is at commit ... but the report the caller read showed
+deadbeef". The message never contains the repository address.
+
+**What this proves:** the proposal freezes exactly what the report showed, and a
+moved branch is refused instead of being filed.
+
+### Walk 3: `ApplyImport`
+
+**Prerequisite:** Walk 2 passed, same function, the proposal `imp1` still
+pending.
+
+1. Add to `TestPublic`:
+
+   ```go
+   _, err = h.Code.ApplyImport(ctx, &hostv1.ApplyImportRequest{ProposalId: "imp1"})
+   t.Logf("apply before approval: %v", err)
+
+   approve(t, h, "imp1")
+
+   done, err := h.Code.ApplyImport(ctx, &hostv1.ApplyImportRequest{ProposalId: "imp1"})
+   if err != nil {
+       t.Fatal(err)
+   }
+   t.Logf("applied: %v", done)
+   mods, _ := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "production"})
+   t.Logf("modules: %d", len(mods.GetModules()))
+   hier, _ := h.Code.GetHieraHierarchy(ctx, &hostv1.GetHieraHierarchyRequest{Environment: "production"})
+   t.Logf("hierarchy: %v", hier)
+   files, _ := h.Code.ListHieraDataFiles(ctx, &hostv1.ListHieraDataFilesRequest{Environment: "production"})
+   t.Logf("data files: %v", files.GetPaths())
+   settings, _ := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+   t.Logf("settings: %v", settings)
+
+   again, err := h.Code.ApplyImport(ctx, &hostv1.ApplyImportRequest{ProposalId: "imp1"})
+   t.Logf("applied again: %v, error: %v", again, err)
+   ```
+
+2. Run the test again.
+
+**Expected:**
+
+- `apply before approval:` shows `FailedPrecondition` saying overwrite proposal
+  `"imp1"` **is not approved**. This is the refusal half. Confirm that no
+  environment exists at this point.
+- After `approve`, `applied:` lists the environment `production`.
+- `modules:` is the number of `mod` lines the repository actually declares. The
+  default public repository has none switched on in its Puppetfile, so expect 0
+  there; a repository with active `mod` lines shows how many came in.
+- `hierarchy:` shows version 5 and the levels the repository's `hiera.yaml`
+  names, for the default repository a level called `YAML backend` with paths
+  `nodes/%{trusted.certname}.yaml` and `common.yaml`.
+- `data files:` lists the files that came in under the data folder, and
+  `settings:` shows the `environment.conf` values (for the default repository a
+  `modulepath` and a `config_version`).
+- `applied again:` shows the same environment and `error: <nil>`: a repeat after
+  a lost reply is harmless.
+
+**What this proves:** the gate refuses before approval, and after approval
+every imported resource reads back through the ordinary Code read calls.
+
+### Walk 4: an authenticated `https` fetch of a private repository
+
+**Prerequisite:** a **real private** git repository you can reach over `https`,
+and an access token for it that can read it. No automated test in this SDK can
+do this walk. It exists because research verified the token flow only against a
+reference-listing call under an isolated environment, and could not verify a
+real shallow fetch of a private repository. This walk is where that gap closes.
+Skip it if you have no such repository; do not half-run it.
+
+1. In your shell, export the settings without putting them on a command line.
+   Typing `read -s STAGEHAND_TEST_GIT_TOKEN` and pasting the token keeps it out
+   of your shell history, and an environment variable is not part of any
+   command line, so it never shows in a process listing's command column:
+
+   ```
+   export STAGEHAND_TEST_GIT_URL_PRIVATE="https://git.example.com/platform/control-repo.git"
+   export STAGEHAND_TEST_GIT_USER="your-user-name"
+   read -s STAGEHAND_TEST_GIT_TOKEN && export STAGEHAND_TEST_GIT_TOKEN
+   ```
+
+   The address is the plain address with **no login in it**.
+
+2. Add this test:
+
+   ```go
+   func TestPrivate(t *testing.T) {
+       url := os.Getenv("STAGEHAND_TEST_GIT_URL_PRIVATE")
+       if url == "" {
+           t.Skip("set STAGEHAND_TEST_GIT_URL_PRIVATE, _USER and _TOKEN")
+       }
+       h := newHost()
+
+       // 4a: the right credential, sealed and named.
+       seal(t, h, "good", map[string]any{
+           "kind": "https_token", "username": os.Getenv("STAGEHAND_TEST_GIT_USER"),
+           "token": os.Getenv("STAGEHAND_TEST_GIT_TOKEN")})
+       rep, err := h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url, Credential: "good"})
+       if err != nil {
+           t.Fatal(err)
+       }
+       for _, b := range rep.Snapshot.Branches {
+           t.Logf("branch %q commit=%s importable=%v", b.Branch, b.Commit, b.Importable)
+       }
+
+       // 4b: no credential at all.
+       _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url})
+       t.Logf("no credential: %v", err)
+
+       // 4c: a wrong credential.
+       seal(t, h, "wrong", map[string]any{
+           "kind": "https_token", "username": os.Getenv("STAGEHAND_TEST_GIT_USER"),
+           "token": "this-is-not-a-real-token"})
+       _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url, Credential: "wrong"})
+       t.Logf("wrong credential: %v", err)
+
+       // 4d: a credential name that was never sealed.
+       _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url, Credential: "never-sealed"})
+       t.Logf("unknown credential: %v", err)
+   }
+   ```
+
+3. Run `go test ./manualcheck -run TestPrivate -v`.
+
+**Expected:**
+
+- 4a: one line per branch of the private repository, with real commit hashes.
+  This is the success the walk exists to see.
+- 4b: `FailedPrecondition`, "git remote rejected the credential or requires one".
+  (Some servers answer a private repository they will not show you with "not
+  found" instead; the host then says "git repository was not found or is not
+  readable with the supplied credential". Either is a correct refusal.)
+- 4c: the **identical** `FailedPrecondition` message. The two failures read the
+  same on purpose, so a caller cannot use the difference to probe for access.
+- 4d: `NotFound`, `git credential "never-sealed" is not configured`.
+
+Check that the token appears nowhere in the output of the run, and that no
+command line shown by `ps` while it runs contains it.
+
+**What this proves:** a named, sealed credential reaches a real authenticated
+fetch, a missing or wrong one is refused with one message, and the secret does
+not leak. It is also a place to judge by eye whether those messages are clear.
+
+### Walk 5: an `ssh` fetch against a real host
+
+**Prerequisite:** a real git server reachable over `ssh`, an **unencrypted**
+private key whose public half the server accepts, and that server's host key
+already listed in your `~/.ssh/known_hosts`. No automated test in this SDK can
+do this walk. It exists because no `ssh` server was available to research, so
+this walk is the only verification of the `ssh` path beyond the arguments the
+host builds. Skip it if you have no such server.
+
+1. Set the settings in your shell. The address is the scp-style form, which
+   carries only a login name, never a password:
+
+   ```
+   export STAGEHAND_TEST_SSH_URL="git@git.example.com:platform/control-repo.git"
+   export STAGEHAND_TEST_SSH_KEY_FILE="$HOME/.ssh/id_stagehand_test"
+   export STAGEHAND_TEST_SSH_UNKNOWN_URL="git@host-not-in-known-hosts.example.org:org/repo.git"
+   ```
+
+   The key is read from the file by the test; it never goes on a command line.
+   Make sure the first host is in `known_hosts` and the third is not (check
+   with `ssh-keygen -F host-not-in-known-hosts.example.org`, which should
+   print nothing).
+
+2. Add this test:
+
+   ```go
+   func TestSSH(t *testing.T) {
+       url := os.Getenv("STAGEHAND_TEST_SSH_URL")
+       keyFile := os.Getenv("STAGEHAND_TEST_SSH_KEY_FILE")
+       if url == "" || keyFile == "" {
+           t.Skip("set STAGEHAND_TEST_SSH_URL and STAGEHAND_TEST_SSH_KEY_FILE")
+       }
+       key, err := os.ReadFile(keyFile)
+       if err != nil {
+           t.Fatal(err)
+       }
+       h := newHost()
+       seal(t, h, "key", map[string]any{"kind": "ssh_key", "username": "git", "private_key": string(key)})
+
+       // 5a: a host already in known_hosts.
+       rep, err := h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url, Credential: "key"})
+       if err != nil {
+           t.Fatal(err)
+       }
+       for _, b := range rep.Snapshot.Branches {
+           t.Logf("branch %q commit=%s importable=%v", b.Branch, b.Commit, b.Importable)
+       }
+
+       // 5b: a host whose key is not in known_hosts.
+       if unknown := os.Getenv("STAGEHAND_TEST_SSH_UNKNOWN_URL"); unknown != "" {
+           _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: unknown, Credential: "key"})
+           t.Logf("unknown host: %v", err)
+       }
+   }
+   ```
+
+3. Run `go test ./manualcheck -run TestSSH -v`.
+
+**Expected:**
+
+- 5a: one line per branch of the repository, with real commit hashes.
+- 5b: `FailedPrecondition`, "git ssh host key could not be verified against the
+  host's known_hosts". The host is **not** trusted on first use and nothing is
+  added to your `known_hosts`.
+
+**What this proves:** an `ssh` key reaches a real host under strict host-key
+checking, and an unknown host fails rather than being trusted.
+
+### One more read, by a human
+
+The finding message for a branch name that breaks the environment rule is the one
+message in this feature written for an operator to read. Against any repository
+with a branch such as `feature/x`, run an inspect and read the `branch_name_invalid`
+finding. It should say, in plain words, that the name does not match
+`^[a-z0-9_]+$`, that the branch is not imported, that real r10k would deploy it
+under a corrected name, and that the fix is to push it under a valid name. If a
+newcomer could not follow it, report that: whether it reads clearly is a
+judgment no test can make.
+
+### Clean up
+
+Delete the scratch directory with `rm -r manualcheck`, unset the environment
+variables you exported (for example `unset STAGEHAND_TEST_GIT_TOKEN`), and
+confirm `git status` shows nothing new.
+
+If Walk 1 left anything in the environment or proposal lists, or Walk 3 applied
+before approval, the gate is broken: stop and report it, because content went in
+without an approved proposal.
