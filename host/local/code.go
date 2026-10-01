@@ -63,10 +63,24 @@ type codeServer struct {
 	hostv1.UnimplementedCodeServer
 	packID string
 	docs   *documentsServer
+	// secrets is the SAME secretsServer instance backing host.Host.Secrets,
+	// held so a later import RPC can resolve a sealed git credential by name
+	// the way forgeServer resolves a private source's secret. Nothing reads it
+	// yet; it is wired now so newCodeServer's signature changes once.
+	secrets *secretsServer
+	// git is the injectable git seam the import RPCs fetch through. A nil
+	// client given to newCodeServer is replaced by DefaultGitClient().
+	git GitClient
 }
 
-func newCodeServer(packID string, docs *documentsServer) *codeServer {
-	return &codeServer{packID: packID, docs: docs}
+// newCodeServer wires a codeServer. A nil git defaults to the real
+// system-git adapter, the same way newForgeServer defaults a nil ForgeClient;
+// tests and pack examples inject a fixture with WithGitClient instead.
+func newCodeServer(packID string, docs *documentsServer, secrets *secretsServer, git GitClient) *codeServer {
+	if git == nil {
+		git = DefaultGitClient()
+	}
+	return &codeServer{packID: packID, docs: docs, secrets: secrets, git: git}
 }
 
 // envDocBody builds the code-environments collection's stored body for a

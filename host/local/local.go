@@ -29,6 +29,7 @@ type config struct {
 	groupClassesSet       bool
 	forgeClient           ForgeClient
 	llmClient             LLMClient
+	gitClient             GitClient
 }
 
 // defaultConfig returns a config seeded with a private clone of the
@@ -104,6 +105,14 @@ func WithLLMClient(client LLMClient) Option {
 	return func(c *config) { c.llmClient = client }
 }
 
+// WithGitClient injects the git implementation the Code facet's import RPCs
+// fetch through. Tests and pack examples should use a deterministic in-memory
+// fixture so none of them needs a network; production callers may leave this
+// unset for the real system-git client.
+func WithGitClient(client GitClient) Option {
+	return func(c *config) { c.gitClient = client }
+}
+
 // New builds an in-process host.Host scoped to a manifest's declared
 // permissions. Documents is always available (scoped to packID's own
 // namespace instead of permission-gated); Settings is always available;
@@ -113,7 +122,9 @@ func WithLLMClient(client LLMClient) Option {
 // a real Expansion Pack would get from the console's gRPC interceptor.
 //
 // All six in-scope facets (Documents, Settings, Secrets, Auth, Inventory,
-// Code) are real implementations as of this plan (06-01).
+// Code) are real implementations as of this plan (06-01). The Code facet now
+// also holds an injectable git client (WithGitClient), defaulting to the real
+// system-git adapter, for the import RPCs.
 func New(permissions []string, packID string, opts ...Option) *host.Host {
 	perms := make(map[string]bool, len(permissions))
 	for _, p := range permissions {
@@ -131,7 +142,7 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: secrets},
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
-		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs)},
+		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs, secrets, cfg.gitClient)},
 		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},
 	}
 }
