@@ -1468,6 +1468,9 @@ const (
 	Code_ApplyHieraDataKeyOverwrite_FullMethodName     = "/stagehand.host.v1.Code/ApplyHieraDataKeyOverwrite"
 	Code_RemoveHieraDataKey_FullMethodName             = "/stagehand.host.v1.Code/RemoveHieraDataKey"
 	Code_DeleteHieraDataFile_FullMethodName            = "/stagehand.host.v1.Code/DeleteHieraDataFile"
+	Code_InspectImport_FullMethodName                  = "/stagehand.host.v1.Code/InspectImport"
+	Code_ProposeImport_FullMethodName                  = "/stagehand.host.v1.Code/ProposeImport"
+	Code_ApplyImport_FullMethodName                    = "/stagehand.host.v1.Code/ApplyImport"
 )
 
 // CodeClient is the client API for Code service.
@@ -1477,14 +1480,19 @@ const (
 // --------------------------------------------------------------------- Code
 // Permission: code:rw (added to manifest/ in this phase) for every RPC below,
 // uniformly, including the read-only ones — the same single facet-level gate
-// Inventory uses. There is no narrower per-RPC permission.
+// Inventory uses. There is no narrower per-RPC permission: code:rw is the
+// floor for every RPC. The three import RPCs (InspectImport, ProposeImport,
+// ApplyImport) additionally require code:import, which is an additional grant
+// stacked on that floor, not a narrower substitute for it.
 //
 // Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
 // content as structured, versioned resources. It never executes r10k/g10k,
-// never shells out to git, never writes to a real filesystem, and never
-// clones a remote repo (import is a later phase). Every RPC below reads and
-// writes namespaced JSON Documents through the SAME documentsServer instance
-// host.Host.Documents holds, across four collections kept deliberately
+// never writes to a real filesystem, and never writes back to a real repo.
+// Import is the one place it reaches outside: it fetches a remote repo
+// read-only through the host's git client, never checks out a working tree,
+// and turns what it fetched into the same structured resources. Every RPC
+// below reads and writes namespaced JSON Documents through the SAME
+// documentsServer instance host.Host.Documents holds, across four collections kept deliberately
 // separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
 // code-hiera-data — because they have different write cadences, different
 // round-trip risk profiles, and different future approval-gate granularity.
@@ -1518,7 +1526,8 @@ const (
 //
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
-// Every Apply* RPC needs code:rw and nothing narrower.
+// The five Apply* RPCs for existing resource kinds need code:rw and nothing
+// narrower; ApplyImport needs code:rw plus code:import.
 //
 // What the gate is and is not. It refuses an in-place replace made through a
 // Put*, which stops accidental replacement and gives deliberate replacement a
@@ -1644,6 +1653,30 @@ type CodeClient interface {
 	ApplyHieraDataKeyOverwrite(ctx context.Context, in *ApplyHieraDataKeyOverwriteRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	RemoveHieraDataKey(ctx context.Context, in *RemoveHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDataFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// InspectImport requires code:rw and code:import. It shallow-clones the
+	// repo, parses every discovered branch and returns the full per-branch
+	// findings report. It writes nothing to the Code model and creates no
+	// proposal. It refuses an unreachable host with UNAVAILABLE, an unknown
+	// credential name with NOT_FOUND, and a URL whose scheme is outside the
+	// https/ssh allowlist with INVALID_ARGUMENT.
+	InspectImport(ctx context.Context, in *InspectImportRequest, opts ...grpc.CallOption) (*InspectImportResponse, error)
+	// ProposeImport requires code:rw and code:import. It re-fetches the repo,
+	// freezes the parsed per-branch snapshot plus each branch's commit SHA into
+	// a pending proposal in the shared code-overwrites collection, under the
+	// code:approve scope. It refuses with FAILED_PRECONDITION when a selected
+	// branch has moved against expected_commits or when no importable branch
+	// remains, and with INVALID_ARGUMENT when the explicit branch list names an
+	// unknown or non-importable branch. Nothing in this RPC can decide the
+	// proposal it files.
+	ProposeImport(ctx context.Context, in *ProposeImportRequest, opts ...grpc.CallOption) (*ProposeImportResponse, error)
+	// ApplyImport requires code:rw and code:import. It reads the referenced
+	// proposal and refuses unless its status is approved with recorded approval
+	// provenance. It makes no network call and needs no credential: it writes
+	// exactly the snapshot frozen at propose time, never anything its caller
+	// supplies. It is atomic across every selected branch (all or none), is
+	// idempotent on a repeat call, and is single-use once the content has
+	// drifted.
+	ApplyImport(ctx context.Context, in *ApplyImportRequest, opts ...grpc.CallOption) (*ApplyImportResponse, error)
 }
 
 type codeClient struct {
@@ -1924,6 +1957,36 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 	return out, nil
 }
 
+func (c *codeClient) InspectImport(ctx context.Context, in *InspectImportRequest, opts ...grpc.CallOption) (*InspectImportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(InspectImportResponse)
+	err := c.cc.Invoke(ctx, Code_InspectImport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ProposeImport(ctx context.Context, in *ProposeImportRequest, opts ...grpc.CallOption) (*ProposeImportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ProposeImportResponse)
+	err := c.cc.Invoke(ctx, Code_ProposeImport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ApplyImport(ctx context.Context, in *ApplyImportRequest, opts ...grpc.CallOption) (*ApplyImportResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApplyImportResponse)
+	err := c.cc.Invoke(ctx, Code_ApplyImport_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CodeServer is the server API for Code service.
 // All implementations must embed UnimplementedCodeServer
 // for forward compatibility.
@@ -1931,14 +1994,19 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 // --------------------------------------------------------------------- Code
 // Permission: code:rw (added to manifest/ in this phase) for every RPC below,
 // uniformly, including the read-only ones — the same single facet-level gate
-// Inventory uses. There is no narrower per-RPC permission.
+// Inventory uses. There is no narrower per-RPC permission: code:rw is the
+// floor for every RPC. The three import RPCs (InspectImport, ProposeImport,
+// ApplyImport) additionally require code:import, which is an additional grant
+// stacked on that floor, not a narrower substitute for it.
 //
 // Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
 // content as structured, versioned resources. It never executes r10k/g10k,
-// never shells out to git, never writes to a real filesystem, and never
-// clones a remote repo (import is a later phase). Every RPC below reads and
-// writes namespaced JSON Documents through the SAME documentsServer instance
-// host.Host.Documents holds, across four collections kept deliberately
+// never writes to a real filesystem, and never writes back to a real repo.
+// Import is the one place it reaches outside: it fetches a remote repo
+// read-only through the host's git client, never checks out a working tree,
+// and turns what it fetched into the same structured resources. Every RPC
+// below reads and writes namespaced JSON Documents through the SAME
+// documentsServer instance host.Host.Documents holds, across four collections kept deliberately
 // separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
 // code-hiera-data — because they have different write cadences, different
 // round-trip risk profiles, and different future approval-gate granularity.
@@ -1972,7 +2040,8 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 //
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
-// Every Apply* RPC needs code:rw and nothing narrower.
+// The five Apply* RPCs for existing resource kinds need code:rw and nothing
+// narrower; ApplyImport needs code:rw plus code:import.
 //
 // What the gate is and is not. It refuses an in-place replace made through a
 // Put*, which stops accidental replacement and gives deliberate replacement a
@@ -2098,6 +2167,30 @@ type CodeServer interface {
 	ApplyHieraDataKeyOverwrite(context.Context, *ApplyHieraDataKeyOverwriteRequest) (*HieraDataFile, error)
 	RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error)
 	DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error)
+	// InspectImport requires code:rw and code:import. It shallow-clones the
+	// repo, parses every discovered branch and returns the full per-branch
+	// findings report. It writes nothing to the Code model and creates no
+	// proposal. It refuses an unreachable host with UNAVAILABLE, an unknown
+	// credential name with NOT_FOUND, and a URL whose scheme is outside the
+	// https/ssh allowlist with INVALID_ARGUMENT.
+	InspectImport(context.Context, *InspectImportRequest) (*InspectImportResponse, error)
+	// ProposeImport requires code:rw and code:import. It re-fetches the repo,
+	// freezes the parsed per-branch snapshot plus each branch's commit SHA into
+	// a pending proposal in the shared code-overwrites collection, under the
+	// code:approve scope. It refuses with FAILED_PRECONDITION when a selected
+	// branch has moved against expected_commits or when no importable branch
+	// remains, and with INVALID_ARGUMENT when the explicit branch list names an
+	// unknown or non-importable branch. Nothing in this RPC can decide the
+	// proposal it files.
+	ProposeImport(context.Context, *ProposeImportRequest) (*ProposeImportResponse, error)
+	// ApplyImport requires code:rw and code:import. It reads the referenced
+	// proposal and refuses unless its status is approved with recorded approval
+	// provenance. It makes no network call and needs no credential: it writes
+	// exactly the snapshot frozen at propose time, never anything its caller
+	// supplies. It is atomic across every selected branch (all or none), is
+	// idempotent on a repeat call, and is single-use once the content has
+	// drifted.
+	ApplyImport(context.Context, *ApplyImportRequest) (*ApplyImportResponse, error)
 	mustEmbedUnimplementedCodeServer()
 }
 
@@ -2188,6 +2281,15 @@ func (UnimplementedCodeServer) RemoveHieraDataKey(context.Context, *RemoveHieraD
 }
 func (UnimplementedCodeServer) DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteHieraDataFile not implemented")
+}
+func (UnimplementedCodeServer) InspectImport(context.Context, *InspectImportRequest) (*InspectImportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method InspectImport not implemented")
+}
+func (UnimplementedCodeServer) ProposeImport(context.Context, *ProposeImportRequest) (*ProposeImportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ProposeImport not implemented")
+}
+func (UnimplementedCodeServer) ApplyImport(context.Context, *ApplyImportRequest) (*ApplyImportResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyImport not implemented")
 }
 func (UnimplementedCodeServer) mustEmbedUnimplementedCodeServer() {}
 func (UnimplementedCodeServer) testEmbeddedByValue()              {}
@@ -2696,6 +2798,60 @@ func _Code_DeleteHieraDataFile_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Code_InspectImport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(InspectImportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).InspectImport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_InspectImport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).InspectImport(ctx, req.(*InspectImportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ProposeImport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ProposeImportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ProposeImport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ProposeImport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ProposeImport(ctx, req.(*ProposeImportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ApplyImport_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyImportRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyImport(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyImport_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyImport(ctx, req.(*ApplyImportRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Code_ServiceDesc is the grpc.ServiceDesc for Code service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2810,6 +2966,18 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteHieraDataFile",
 			Handler:    _Code_DeleteHieraDataFile_Handler,
+		},
+		{
+			MethodName: "InspectImport",
+			Handler:    _Code_InspectImport_Handler,
+		},
+		{
+			MethodName: "ProposeImport",
+			Handler:    _Code_ProposeImport_Handler,
+		},
+		{
+			MethodName: "ApplyImport",
+			Handler:    _Code_ApplyImport_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

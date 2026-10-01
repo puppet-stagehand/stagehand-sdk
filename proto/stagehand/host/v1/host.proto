@@ -164,14 +164,19 @@ message OnboardNodeRequest { string proposal_id = 1; }
 // --------------------------------------------------------------------- Code
 // Permission: code:rw (added to manifest/ in this phase) for every RPC below,
 // uniformly, including the read-only ones — the same single facet-level gate
-// Inventory uses. There is no narrower per-RPC permission.
+// Inventory uses. There is no narrower per-RPC permission: code:rw is the
+// floor for every RPC. The three import RPCs (InspectImport, ProposeImport,
+// ApplyImport) additionally require code:import, which is an additional grant
+// stacked on that floor, not a narrower substitute for it.
 //
 // Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
 // content as structured, versioned resources. It never executes r10k/g10k,
-// never shells out to git, never writes to a real filesystem, and never
-// clones a remote repo (import is a later phase). Every RPC below reads and
-// writes namespaced JSON Documents through the SAME documentsServer instance
-// host.Host.Documents holds, across four collections kept deliberately
+// never writes to a real filesystem, and never writes back to a real repo.
+// Import is the one place it reaches outside: it fetches a remote repo
+// read-only through the host's git client, never checks out a working tree,
+// and turns what it fetched into the same structured resources. Every RPC
+// below reads and writes namespaced JSON Documents through the SAME
+// documentsServer instance host.Host.Documents holds, across four collections kept deliberately
 // separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
 // code-hiera-data — because they have different write cadences, different
 // round-trip risk profiles, and different future approval-gate granularity.
@@ -204,7 +209,8 @@ message OnboardNodeRequest { string proposal_id = 1; }
 //      at apply time; see its comment.
 // One collection and one scope cover every overwrite resource type; the
 // type is carried inside the proposal body, not in a separate collection.
-// Every Apply* RPC needs code:rw and nothing narrower.
+// The five Apply* RPCs for existing resource kinds need code:rw and nothing
+// narrower; ApplyImport needs code:rw plus code:import.
 //
 // What the gate is and is not. It refuses an in-place replace made through a
 // Put*, which stops accidental replacement and gives deliberate replacement a
@@ -334,18 +340,154 @@ service Code {
   rpc ApplyHieraDataKeyOverwrite(ApplyHieraDataKeyOverwriteRequest) returns (HieraDataFile);
   rpc RemoveHieraDataKey(RemoveHieraDataKeyRequest) returns (HieraDataFile);
   rpc DeleteHieraDataFile(DeleteHieraDataFileRequest) returns (google.protobuf.Empty);
+
+  // ------------------------------------------------------------ Import
+  // Import turns a remote git repo into environments. It is split into three
+  // calls in three separate call graphs, mirroring the overwrite gate's
+  // refuse-then-Apply shape, so nothing is committed before the findings
+  // report has been seen and approved.
+
+  // InspectImport requires code:rw and code:import. It shallow-clones the
+  // repo, parses every discovered branch and returns the full per-branch
+  // findings report. It writes nothing to the Code model and creates no
+  // proposal. It refuses an unreachable host with UNAVAILABLE, an unknown
+  // credential name with NOT_FOUND, and a URL whose scheme is outside the
+  // https/ssh allowlist with INVALID_ARGUMENT.
+  rpc InspectImport(InspectImportRequest) returns (InspectImportResponse);
+
+  // ProposeImport requires code:rw and code:import. It re-fetches the repo,
+  // freezes the parsed per-branch snapshot plus each branch's commit SHA into
+  // a pending proposal in the shared code-overwrites collection, under the
+  // code:approve scope. It refuses with FAILED_PRECONDITION when a selected
+  // branch has moved against expected_commits or when no importable branch
+  // remains, and with INVALID_ARGUMENT when the explicit branch list names an
+  // unknown or non-importable branch. Nothing in this RPC can decide the
+  // proposal it files.
+  rpc ProposeImport(ProposeImportRequest) returns (ProposeImportResponse);
+
+  // ApplyImport requires code:rw and code:import. It reads the referenced
+  // proposal and refuses unless its status is approved with recorded approval
+  // provenance. It makes no network call and needs no credential: it writes
+  // exactly the snapshot frozen at propose time, never anything its caller
+  // supplies. It is atomic across every selected branch (all or none), is
+  // idempotent on a repeat call, and is single-use once the content has
+  // drifted.
+  rpc ApplyImport(ApplyImportRequest) returns (ApplyImportResponse);
 }
 
 // ------------------------------------------------------- Overwrite approval
 // Every Apply* request carries only the proposal id. The resource payload was
 // frozen into the proposal body at propose time and is never taken from the
 // caller of Apply. (For ApplyEnvironmentDuplicate the frozen part is the source
-// and target names; the source's contents are read at apply time.)
+// and target names; the source's contents are read at apply time. For
+// ApplyImport the frozen part is the whole ImportSnapshot.) The six requests
+// are deliberately identical in shape: an Apply that accepted content from its
+// caller could write content the approver never reviewed.
 message ApplyEnvironmentDuplicateRequest { string proposal_id = 1; }
 message ApplyEnvironmentSettingsRequest { string proposal_id = 1; }
 message ApplyPuppetfileModuleOverwriteRequest { string proposal_id = 1; }
 message ApplyHieraLevelOverwriteRequest { string proposal_id = 1; }
 message ApplyHieraDataKeyOverwriteRequest { string proposal_id = 1; }
+message ApplyImportRequest { string proposal_id = 1; }
+
+// ------------------------------------------------------------------ Import
+
+// ImportFinding is one thing the importer noticed in a branch. A construct the
+// Code model cannot represent is listed as a finding instead of being silently
+// dropped.
+message ImportFinding {
+  // Severity has exactly two usable values. A WARNING means the construct was
+  // skipped and the file was otherwise imported. An ERROR means the file is
+  // absent from the snapshot. Nothing else exists, and nothing auto-blocks a
+  // branch except an invalid branch name.
+  enum Severity { SEVERITY_UNSPECIFIED = 0; WARNING = 1; ERROR = 2; }
+  string branch = 1;
+  // file is repo-relative; empty for a branch-level finding.
+  string file = 2;
+  // line is zero when the finding is not line-scoped. It is an int32, not an
+  // int64: protojson renders an int64 as a JSON string, so a line number stored
+  // in a proposal body would change type on the way back out.
+  int32 line = 3;
+  // kind is the stable catalog token, for example puppetfile_forge_directive.
+  string kind = 4;
+  Severity severity = 5;
+  // excerpt is the raw construct, truncated on a rune boundary and capped.
+  string excerpt = 6;
+  // message is the human sentence; it names the rule or decision the finding
+  // enforces.
+  string message = 7;
+}
+
+// ImportDataFile is one Hiera data file captured from a branch.
+message ImportDataFile {
+  // path is relative to the hierarchy level's declared datadir, the same path
+  // dimension HieraDataFile.path uses.
+  string path = 1;
+  string yaml = 2;
+}
+
+// ImportBranchSnapshot is everything captured from one branch, with exactly one
+// copy of each file's bytes.
+message ImportBranchSnapshot {
+  // branch is the git branch name and, by identity, the environment name it
+  // imports as (branch equals environment).
+  string branch = 1;
+  // commit is the SHA actually fetched.
+  string commit = 2;
+  bool importable = 3;
+  // will_overwrite true is the approver's record that an existing environment
+  // of this name is being replaced.
+  bool will_overwrite = 4;
+  // puppetfile_text is the canonical rendered text; empty when the branch has
+  // no Puppetfile.
+  string puppetfile_text = 5;
+  // hiera_yaml is the branch's raw hiera.yaml text; empty when absent.
+  string hiera_yaml = 6;
+  repeated ImportDataFile data_files = 7;
+  // settings is unset when environment.conf is absent or parses to all-nil.
+  EnvironmentSettings settings = 8;
+  repeated ImportFinding findings = 9;
+}
+
+// ImportSnapshot is the frozen content of one import: the repo URL and every
+// selected branch's captured content.
+message ImportSnapshot {
+  string url = 1;
+  repeated ImportBranchSnapshot branches = 2;
+}
+
+message InspectImportRequest {
+  string url = 1;
+  // credential names a sealed Secret configured through the Secrets facet.
+  // There is no default credential; unset means an anonymous fetch.
+  string credential = 2;
+  // branches filters the discovered branches; empty means every discovered
+  // branch.
+  repeated string branches = 3;
+}
+message InspectImportResponse { ImportSnapshot snapshot = 1; }
+
+message ProposeImportRequest {
+  string proposal_id = 1;
+  string url = 2;
+  // credential names a sealed Secret configured through the Secrets facet.
+  // There is no default credential; unset means an anonymous fetch.
+  string credential = 3;
+  // branches selects branches to import; empty means every importable branch.
+  repeated string branches = 4;
+  // expected_commits is an optional branch-to-SHA guard: the import refuses
+  // when a branch has moved since the report the human read.
+  map<string, string> expected_commits = 5;
+}
+// ProposeImportResponse returns the frozen snapshot alongside the proposal id,
+// so a caller can show the approver exactly what was filed without a second
+// read.
+message ProposeImportResponse {
+  string proposal_id = 1;
+  ImportSnapshot snapshot = 2;
+}
+
+message ApplyImportResponse { repeated Environment environments = 1; }
 
 // ------------------------------------------------------------ Environments
 
