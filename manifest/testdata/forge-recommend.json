@@ -1,0 +1,24 @@
+{
+  "id": "forge_advisor",
+  "name": "Forge Module Advisor",
+  "version": "0.1.0",
+  "contract_version": 1,
+  "publisher": "Example Org",
+  "publisher_key_id": "SHA256:examplekeyfingerprint0000000000000000000000",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Suggests Puppet Forge modules for a plain-language need, ranked and explained. Fixture for the Forge permission vocabulary.",
+  "nav": null,
+  "slots": [],
+  "settings_schema": {
+    "type": "object",
+    "title": "Forge advisor settings",
+    "properties": {}
+  },
+  "permissions": ["documents:rw", "secrets:rw", "forge:rw", "forge:recommend"],
+  "jobs": [],
+  "content": null,
+  "resources": { "cpu": "100m", "memory": "64Mi" }
+}
