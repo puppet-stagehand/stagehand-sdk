@@ -6,6 +6,7 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -71,6 +72,12 @@ type codeServer struct {
 	// git is the injectable git seam the import RPCs fetch through. A nil
 	// client given to newCodeServer is replaced by DefaultGitClient().
 	git GitClient
+	// importLimits and inspectTimeout are the import ceilings, copied from the
+	// named constants in the constructor so a test can shrink the field the way
+	// newForgeServer's callTimeout is shrunk. importLimits is read-only after
+	// construction.
+	importLimits   code.ImportLimits
+	inspectTimeout time.Duration
 }
 
 // newCodeServer wires a codeServer. A nil git defaults to the real
@@ -80,7 +87,14 @@ func newCodeServer(packID string, docs *documentsServer, secrets *secretsServer,
 	if git == nil {
 		git = DefaultGitClient()
 	}
-	return &codeServer{packID: packID, docs: docs, secrets: secrets, git: git}
+	return &codeServer{
+		packID:         packID,
+		docs:           docs,
+		secrets:        secrets,
+		git:            git,
+		importLimits:   code.DefaultImportLimits(),
+		inspectTimeout: importInspectTimeout,
+	}
 }
 
 // envDocBody builds the code-environments collection's stored body for a

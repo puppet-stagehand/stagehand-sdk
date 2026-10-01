@@ -11,6 +11,10 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
+
+	"github.com/puppet-stagehand/stagehand-sdk/code"
+	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
 // ------------------------------------------------- in-memory GitClient
@@ -29,25 +33,45 @@ type gitFixture struct {
 	modes    map[string]string
 	listErr  error
 	openErr  error
+	// commits optionally overrides a branch's reported commit SHA, so a test
+	// can model a branch that moved between two fetches.
+	commits map[string]string
+	// onList and onOpen, when set, run at the start of ListBranches and Open,
+	// before the fixture's own mutex is taken. They are how a test performs a
+	// lock-requiring Documents read from inside a network method.
+	onList func()
+	onOpen func()
 
 	listed int
+	opens  int
 	opened []string
+	// lastRemote is the remote the most recent ListBranches or Open was given,
+	// so a test can see which credential the host resolved.
+	lastRemote GitRemote
 }
 
 func newGitFixture(branches map[string]map[string]string) *gitFixture {
-	return &gitFixture{branches: branches, modes: map[string]string{}}
+	return &gitFixture{branches: branches, modes: map[string]string{}, commits: map[string]string{}}
 }
 
 func gitFixtureModeKey(branch, path string) string { return branch + "\x00" + path }
 
+// fixtureCommit is the branch's reported SHA. The caller must hold f.mu.
 func (f *gitFixture) fixtureCommit(branch string) string {
+	if c, ok := f.commits[branch]; ok {
+		return c
+	}
 	return fmt.Sprintf("%040x", len(branch)*7919+int(branch[0]))
 }
 
-func (f *gitFixture) ListBranches(_ context.Context, _ GitRemote) ([]GitBranchRef, error) {
+func (f *gitFixture) ListBranches(_ context.Context, r GitRemote) ([]GitBranchRef, error) {
+	if f.onList != nil {
+		f.onList()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.listed++
+	f.lastRemote = r
 	if f.listErr != nil {
 		return nil, f.listErr
 	}
@@ -63,9 +87,14 @@ func (f *gitFixture) ListBranches(_ context.Context, _ GitRemote) ([]GitBranchRe
 	return out, nil
 }
 
-func (f *gitFixture) Open(_ context.Context, _ GitRemote, branches []string) (GitRepo, error) {
+func (f *gitFixture) Open(_ context.Context, r GitRemote, branches []string) (GitRepo, error) {
+	if f.onOpen != nil {
+		f.onOpen()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.opens++
+	f.lastRemote = r
 	if f.openErr != nil {
 		return nil, f.openErr
 	}
@@ -83,6 +112,77 @@ func (f *gitFixture) openedBranches() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.opened...)
+}
+
+// The exported surface below exists so the external local_test package, which
+// cannot see this package's unexported test types, can build and steer a
+// fixture. Nothing here is compiled outside tests.
+
+// GitFixture is the in-memory GitClient the import tests inject.
+type GitFixture = gitFixture
+
+// NewGitFixture builds a fixture remote from branch name to file tree.
+func NewGitFixture(trees map[string]map[string]string) *GitFixture { return newGitFixture(trees) }
+
+// OpenedBranches returns every branch name Open was ever asked for.
+func (f *gitFixture) OpenedBranches() []string { return f.openedBranches() }
+
+// Opens returns how many times Open was called, and Listed how many times
+// ListBranches was.
+func (f *gitFixture) Opens() int  { f.mu.Lock(); defer f.mu.Unlock(); return f.opens }
+func (f *gitFixture) Listed() int { f.mu.Lock(); defer f.mu.Unlock(); return f.listed }
+
+// LastRemote returns the remote the most recent network call was given.
+func (f *gitFixture) LastRemote() GitRemote { f.mu.Lock(); defer f.mu.Unlock(); return f.lastRemote }
+
+// SetBranch replaces (or adds) one branch's whole tree, modelling a push to
+// the remote after a proposal was filed. DeleteBranch models a branch delete.
+func (f *gitFixture) SetBranch(name string, tree map[string]string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.branches[name] = tree
+}
+func (f *gitFixture) DeleteBranch(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.branches, name)
+}
+
+// SetCommit pins the SHA a branch reports, so a test can move it.
+func (f *gitFixture) SetCommit(branch, sha string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.commits[branch] = sha
+}
+
+// SetMode overrides one file's git mode (120000 symlink, 160000 gitlink).
+func (f *gitFixture) SetMode(branch, path, mode string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.modes[gitFixtureModeKey(branch, path)] = mode
+}
+
+// SetListErr and SetOpenErr make the matching network method fail.
+func (f *gitFixture) SetListErr(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.listErr = err }
+func (f *gitFixture) SetOpenErr(err error) { f.mu.Lock(); defer f.mu.Unlock(); f.openErr = err }
+
+// OnNetwork installs a hook that runs at the start of every ListBranches and
+// Open, before the fixture takes its own mutex.
+func (f *gitFixture) OnNetwork(fn func()) { f.onList = fn; f.onOpen = fn }
+
+// SetRevealHook installs a hook that sees the ref of every Secrets.Reveal on
+// the host's secrets server, the seam for counting reveals.
+func SetRevealHook(h *host.Host, fn func(ref string)) {
+	h.Code.(*gatedCode).inner.secrets.revealHook = fn
+}
+
+// SetImportLimits and SetInspectTimeout shrink the import ceilings the same
+// way the git client's limit fields are shrunk.
+func SetImportLimits(h *host.Host, lim code.ImportLimits) {
+	h.Code.(*gatedCode).inner.importLimits = lim
+}
+func SetInspectTimeout(h *host.Host, d time.Duration) {
+	h.Code.(*gatedCode).inner.inspectTimeout = d
 }
 
 type gitFixtureRepo struct {
@@ -104,6 +204,8 @@ func (r *gitFixtureRepo) Commit(branch string) (string, bool) {
 	if !r.has(branch) {
 		return "", false
 	}
+	r.f.mu.Lock()
+	defer r.f.mu.Unlock()
 	return r.f.fixtureCommit(branch), true
 }
 
