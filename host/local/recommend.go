@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
@@ -39,9 +40,27 @@ const (
 	llmMaxOutputTokensExtract = 2048
 	llmMaxOutputTokensRank    = 4096
 
-	// recommendWarnNoResults is the stable warning code returned when the
-	// search produced zero candidates; the ranker is never called.
+	// recommendMaxReasoningRunes caps the LLM-authored reasoning text.
+	recommendMaxReasoningRunes = 400
+	// recommendMaxModuleEchoRunes caps an LLM-supplied module name echoed
+	// back inside a warning.
+	recommendMaxModuleEchoRunes = 200
+)
+
+// Stable warning codes carried on RecommendResponse.warnings.
+const (
+	// recommendWarnNoResults: the search produced zero candidates; the ranker
+	// was never called.
 	recommendWarnNoResults = "recommend_no_results"
+	// recommendWarnUnknownModuleDropped: the ranker named a module that is
+	// not in the candidate set; it was dropped.
+	recommendWarnUnknownModuleDropped = "recommend_unknown_module_dropped"
+	// recommendWarnDuplicateDropped: the ranker repeated a module already
+	// emitted; the repeat was dropped.
+	recommendWarnDuplicateDropped = "recommend_duplicate_dropped"
+	// recommendWarnNoRelevantModules: the ranker validly answered that none
+	// of the candidates fit.
+	recommendWarnNoRelevantModules = "recommend_no_relevant_modules"
 )
 
 // extractReply is the strictly decoded shape of LLM call #1.
@@ -136,6 +155,29 @@ func needBlock(text string) string {
 	text = strings.ReplaceAll(text, "NEED>>>", "NEED >>>")
 	return "<<<NEED\n" + text + "\nNEED>>>"
 }
+
+// cleanText treats s as untrusted display text: control characters are
+// removed (tabs and newlines become spaces), the result is trimmed, and it is
+// capped at max runes.
+func cleanText(s string, max int) string {
+	s = strings.Map(func(r rune) rune {
+		switch {
+		case r == '\n' || r == '\t' || r == '\r':
+			return ' '
+		case unicode.IsControl(r):
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.TrimSpace(s)
+	if r := []rune(s); len(r) > max {
+		s = string(r[:max])
+	}
+	return s
+}
+
+// cleanReasoning cleans the LLM-authored reasoning string.
+func cleanReasoning(s string) string { return cleanText(s, recommendMaxReasoningRunes) }
 
 // decodeStrict decodes one JSON value into v, rejecting unknown fields and
 // any trailing content.
@@ -275,15 +317,41 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 
 	// Structural join (D-07): the key must name a real candidate; rank comes
 	// from output position and every module fact from the candidate.
+	seen := make(map[string]bool, len(ranked.Suggestions))
 	for _, entry := range ranked.Suggestions {
-		c, ok := candidates[recommendKey(entry.Name, entry.Source)]
-		if !ok {
-			continue
+		k := recommendKey(entry.Name, entry.Source)
+		c, ok := candidates[k]
+		switch {
+		case !ok:
+			resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+				Code:    recommendWarnUnknownModuleDropped,
+				Message: "the ranker named a module that is not in the search results; it was dropped",
+				Module:  cleanText(entry.Name, recommendMaxModuleEchoRunes),
+			})
+		case seen[k]:
+			resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+				Code:    recommendWarnDuplicateDropped,
+				Message: "the ranker named the same module more than once; the repeat was dropped",
+				Module:  c.Name,
+			})
+		default:
+			seen[k] = true
+			resp.Suggestions = append(resp.Suggestions, &hostv1.RecommendedModule{
+				Rank:      int32(len(resp.Suggestions) + 1),
+				Reasoning: cleanReasoning(entry.Reasoning),
+				Module:    proto.Clone(c).(*hostv1.ForgeSearchResult),
+			})
 		}
-		resp.Suggestions = append(resp.Suggestions, &hostv1.RecommendedModule{
-			Rank:      int32(len(resp.Suggestions) + 1),
-			Reasoning: strings.TrimSpace(entry.Reasoning),
-			Module:    proto.Clone(c).(*hostv1.ForgeSearchResult),
+	}
+	if len(ranked.Suggestions) > 0 && len(resp.Suggestions) == 0 {
+		// Every key was unknown: the answer is unusable. Never fall back to
+		// unranked search hits (D-09).
+		return nil, status.Error(codes.Internal, "llm ranking reply named no module from the search results")
+	}
+	if len(ranked.Suggestions) == 0 {
+		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+			Code:    recommendWarnNoRelevantModules,
+			Message: "the ranker found none of the search results relevant to the request",
 		})
 	}
 	return resp, nil
