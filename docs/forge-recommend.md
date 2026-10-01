@@ -288,3 +288,327 @@ Ideas considered and left for later: extra context from the caller (operating
 system, Puppet version, modules already in the Puppetfile), model-written
 cautions for each suggestion, a numeric relevance score, a stored default
 provider, and a search that keeps widening until it has enough results.
+
+## Scope boundary for this milestone
+
+Recommend is reachable only through the in-process host, `host.Local`, this
+milestone. It is wired into no MCP server and no other external tool surface.
+The cross-repo tool that would expose it is tracked as MCP-01 in
+`.planning/REQUIREMENTS.md` under v2, and waits on work in another repository.
+
+Two commands check that claim instead of leaving it as a sentence. Run both
+from the repository root, on the phase branch.
+
+1. List the tracked files in the commands directory:
+
+   ```
+   git ls-files cmd/
+   ```
+
+   Expect exactly one line, `cmd/pack-check/main.go`. This proves no new
+   program was added that could expose Recommend: the only command is the
+   manifest checker.
+
+2. Compare the module files with the main branch:
+
+   ```
+   git diff --exit-code main -- go.mod go.sum
+   ```
+
+   Expect no output and an exit status of 0. This proves no dependency was
+   added or changed, so no outside MCP or vendor library came in. It says
+   nothing about code you add later, and it is trivially clean if you run it on
+   `main` itself.
+
+If either check fails, a new external surface or dependency appeared. Do not
+edit the check away. Treat it as a decision that needs a person.
+
+## Testing this by hand
+
+This is for a human with their own provider API key, because a live run
+against a real provider is the one check an AI cannot do for you. You will run
+a small scratch test and read what it prints. Nothing here changes the
+repository; delete the scratch directory at the end.
+
+The numbered steps say what to expect. If a step does not match, stop and
+report which step and what you saw.
+
+1. **Set up.** From the repository root, create a scratch directory:
+
+   ```
+   mkdir manualcheck
+   ```
+
+   Save this as `manualcheck/recommend_test.go`. It builds a host with the
+   four permissions, does the two provider-setup calls from section 2, and
+   reads your provider settings from the environment so your key never sits in
+   a file:
+
+   ```go
+   package manualcheck
+
+   import (
+       "context"
+       "encoding/json"
+       "os"
+       "strings"
+       "testing"
+
+       "google.golang.org/protobuf/types/known/structpb"
+
+       hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+       "github.com/puppet-stagehand/stagehand-sdk/host"
+       "github.com/puppet-stagehand/stagehand-sdk/host/local"
+   )
+
+   var ctx = context.Background()
+
+   const need = "I need to manage security settings on my Windows servers"
+
+   func newHost() *host.Host {
+       return local.New([]string{"documents:rw", "secrets:rw", "forge:rw", "forge:recommend"}, "manual-check")
+   }
+
+   // configure does the two calls a pack makes: seal the whole provider
+   // config, then write the name-only index document that points at it.
+   func configure(t *testing.T, h *host.Host, name string, cfg map[string]any) {
+       t.Helper()
+       plaintext, err := json.Marshal(cfg)
+       if err != nil {
+           t.Fatal(err)
+       }
+       ref, err := h.Secrets.Store(ctx, &hostv1.StoreSecretRequest{Name: "llm-" + name, Plaintext: plaintext})
+       if err != nil {
+           t.Fatal(err)
+       }
+       body, err := structpb.NewStruct(map[string]any{"name": name, "label": name, "secret_ref": ref.Ref})
+       if err != nil {
+           t.Fatal(err)
+       }
+       if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+           Collection: "llm-providers", DocId: name, Body: &hostv1.Json{Value: body},
+       }); err != nil {
+           t.Fatal(err)
+       }
+   }
+
+   // realConfig reads your provider settings from the environment.
+   func realConfig(t *testing.T, key string) map[string]any {
+       t.Helper()
+       kind := os.Getenv("STAGEHAND_TEST_LLM_KIND")
+       if kind == "" {
+           t.Skip("set STAGEHAND_TEST_LLM_KIND, _MODEL, _KEY (and _BASE_URL for openai_compatible)")
+       }
+       cfg := map[string]any{"kind": kind, "model": os.Getenv("STAGEHAND_TEST_LLM_MODEL"), "api_key": key}
+       if base := os.Getenv("STAGEHAND_TEST_LLM_BASE_URL"); base != "" {
+           cfg["base_url"] = base
+       }
+       return cfg
+   }
+
+   func ask(t *testing.T, h *host.Host, provider string) (*hostv1.RecommendResponse, error) {
+       t.Helper()
+       return h.Forge.Recommend(ctx, &hostv1.RecommendRequest{Text: need, LlmProvider: provider})
+   }
+
+   // TestLive is walks 1 and 2: a real answer, then a direct registry search
+   // for the lowest-ranked suggestion.
+   func TestLive(t *testing.T) {
+       h := newHost()
+       configure(t, h, "mine", realConfig(t, os.Getenv("STAGEHAND_TEST_LLM_KEY")))
+       resp, err := ask(t, h, "mine")
+       if err != nil {
+           t.Fatal(err)
+       }
+       t.Logf("searches run: %q", resp.Queries)
+       for _, s := range resp.Suggestions {
+           t.Logf("%d. %s %s [%s]\n     reason: %s", s.Rank, s.Module.Name, s.Module.Version, s.Module.Source, s.Reasoning)
+       }
+       for _, w := range resp.Warnings {
+           t.Logf("warning %s: %s", w.Code, w.Message)
+       }
+       if len(resp.Suggestions) == 0 {
+           t.Fatal("no suggestions")
+       }
+       last := resp.Suggestions[len(resp.Suggestions)-1].Module
+       short := last.Name[strings.LastIndex(last.Name, "/")+1:]
+       found, err := h.Forge.Search(ctx, &hostv1.SearchRequest{Query: short})
+       if err != nil {
+           t.Fatal(err)
+       }
+       for _, r := range found.Results {
+           if r.Name == last.Name {
+               t.Logf("direct search found %s %s", r.Name, r.Version)
+               return
+           }
+       }
+       t.Fatalf("direct search did not find %s", last.Name)
+   }
+
+   // TestNeverConfigured is failure walk 1.
+   func TestNeverConfigured(t *testing.T) {
+       _, err := ask(t, newHost(), "never-configured")
+       t.Logf("error: %v", err)
+   }
+
+   // TestWrongKey is failure walk 2: your real provider, a deliberately wrong key.
+   func TestWrongKey(t *testing.T) {
+       h := newHost()
+       configure(t, h, "wrong", realConfig(t, "this-is-not-a-real-key"))
+       _, err := ask(t, h, "wrong")
+       t.Logf("error: %v", err)
+   }
+
+   // TestNothingListening is failure walk 3: a base URL where nothing answers.
+   func TestNothingListening(t *testing.T) {
+       h := newHost()
+       configure(t, h, "dead", map[string]any{
+           "kind": "openai_compatible", "base_url": "http://127.0.0.1:59999/v1", "model": "any",
+       })
+       _, err := ask(t, h, "dead")
+       t.Logf("error: %v", err)
+   }
+   ```
+
+   Run it with `go vet ./manualcheck`. Expect no output.
+
+### Walk 1: a live provider run
+
+2. **Pick your protocol kind and set the environment.** Use whichever you have
+   a key for; do both if you have both. In the shell you will run the tests
+   from:
+
+   - For `anthropic`: set `STAGEHAND_TEST_LLM_KIND=anthropic`,
+     `STAGEHAND_TEST_LLM_MODEL` to your model name and
+     `STAGEHAND_TEST_LLM_KEY` to your key. Leave `STAGEHAND_TEST_LLM_BASE_URL`
+     unset. The sealed value will be `{kind, model, api_key}`.
+   - For `openai_compatible`: set `STAGEHAND_TEST_LLM_KIND=openai_compatible`,
+     the model, the key, and `STAGEHAND_TEST_LLM_BASE_URL` to the URL up to
+     but not including `/chat/completions` (for example
+     `https://api.openai.com/v1`, or `http://localhost:11434/v1` for a local
+     server, where the key may be left empty). The sealed value will be
+     `{kind, base_url, model, api_key}`.
+
+   Do not paste the key into the Go file.
+
+3. **Run the live test:**
+
+   ```
+   go test ./manualcheck -run TestLive -v
+   ```
+
+   The input is the canonical one, about managing security settings on Windows
+   servers. Expect, within about two minutes (each provider call is cut off at
+   45 seconds):
+   - a `searches run:` line listing one to three short search phrases;
+   - several numbered suggestions, with ranks starting at 1 and counting up
+     with no gaps, each a name like `author/module`, with a version and
+     `[puppet-forge]`;
+   - a one-line `reason:` under each that reads as relevant to Windows
+     security settings;
+   - possibly some `warning` lines, which are not failures.
+
+   A good answer has modules you can believe a Windows administrator would
+   look at (for example ones about Windows policy, firewall, registry, user
+   rights or hardening). The test reports `PASS`.
+
+### Walk 2: the grounding check
+
+4. **Read the last line of that output.** `TestLive` takes the lowest-ranked
+   suggestion and searches the registry for it directly. Expect
+   `direct search found <name> <version>`. Then do the same by eye: open
+   `https://forge.puppet.com`, search for that module's name, and confirm it
+   exists and its page matches the reason you were given. A module can fall
+   outside the first page of a generic name, so if the test says it did not
+   find one, look it up by hand before reporting a problem.
+
+5. **Why the opposite cannot happen.** The model is only allowed to name
+   modules from the list the host gave it, and the host returns the real search
+   result for each name, not anything the model wrote. A name that is not in
+   the list is dropped with a warning, and a reply that names nothing from the
+   list is an `Internal` error rather than a fallback to unranked hits. This is
+   proved by tests that need no key and no network. Run them:
+
+   ```
+   go test ./host/local -run 'TestRecommendGrounding|TestRecommendInvalidLLMOutput' -v
+   ```
+
+   Expect `PASS` for both.
+
+### Walk 3: a live registry check with no API key
+
+6. **Search the real public registry.** This needs no provider and no key. It
+   is skipped unless you ask for it, so continuous testing stays offline:
+
+   ```
+   STAGEHAND_LIVE_FORGE=1 go test ./host/local -run TestForgeHTTPSearchLive -v
+   ```
+
+   Expect two log lines, one for `security` and one for `hardening`, each like
+   `live search "security": 20 hits, 20 with summary`, then `PASS`. A pass
+   means the real registry answers, a keyword that used to overflow now
+   decodes, and hits carry a summary. Without the variable the test prints
+   `SKIP`, which is not a pass. If your network blocks the registry you will
+   see a failure here that is not a bug in this SDK.
+
+### Walk 4: the deliberate failures
+
+7. **A provider name that was never configured.**
+
+   ```
+   go test ./manualcheck -run TestNeverConfigured -v
+   ```
+
+   Expect `code = NotFound` and `llm provider "never-configured" is not
+   configured`. No provider was called.
+
+8. **A deliberately wrong API key.** This uses your real provider with the key
+   `this-is-not-a-real-key`, so use a hosted provider; a local server that
+   needs no key will not reject it.
+
+   ```
+   go test ./manualcheck -run TestWrongKey -v
+   ```
+
+   Expect `code = FailedPrecondition` and `the llm provider rejected the
+   request; check the provider's API key, model and base URL`. The wrong key
+   itself must not appear anywhere in the message. If your provider answers a
+   bad key with a status other than 401, 403 or 404, you may see `Internal`
+   with `the llm provider's reply was unusable` instead; report which provider
+   it was.
+
+9. **A base URL with nothing listening.**
+
+   ```
+   go test ./manualcheck -run TestNothingListening -v
+   ```
+
+   Expect `code = Unavailable` and `the llm provider is unavailable, timed out
+   or rate limited`, immediately. It needs no key and no network. If something
+   on your machine answers on port 59999, change the port in the test.
+
+### Walk 5: the cost note
+
+10. **Know what a run costs.** One run makes **two provider calls**: one to
+    write search terms and one to rank the results (one call if the searches
+    found nothing). Each is one request and is never retried. It also runs one
+    real registry search per search term per source: 3 with the defaults and
+    the public registry, and up to 25 at the largest a request may ask for
+    (5 terms across 5 sources). Every limit and its maximum is in the table in
+    "The bounds" above. To spend less, lower `max_queries`,
+    `max_candidates` and `sources` in the request.
+
+11. **Clean up.** Delete the scratch directory with `rm -r manualcheck`, unset
+    the `STAGEHAND_TEST_LLM_` variables, and confirm `git status` shows nothing
+    new from you.
+
+12. **Tell us what you assumed.** Read this whole guide once more as someone
+    who has never used Puppet. Note any word, step or command it expected you
+    to already know. Also say whether the default limits (3 search terms, 20
+    candidates, 10 suggestions, a 45-second call) felt right for a first run.
+    That judgement is still open.
+
+If a real provider run in step 3 returns a suggestion that is not on the
+registry, or a step 7 to 9 failure comes back with a different code or a
+message containing your key, stop and report it: the grounding or the
+redaction rule is broken.

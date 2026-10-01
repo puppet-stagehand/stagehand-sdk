@@ -15,6 +15,11 @@ Copy `examples/hello/manifest.json` and change:
   - `puppetdb:read` — read facts and reports.
   - `bolt:run` — run a task on nodes through Bolt.
   - `secrets:rw` — keep a password safely.
+  - `forge:rw` — search the Puppet Forge for modules and look at what a
+    module depends on.
+  - `forge:recommend` — ask for ranked module suggestions from a plain
+    sentence. It is separate from `forge:rw` because it sends your text to a
+    third-party language model, which can cost money.
 - `slots` — where your pages go. `nodeDetailTab` puts a tab on every
   node's page; `page` gives you a whole page (then add `nav`).
 - `settings_schema` — the knobs an operator can turn, as a small JSON Schema.
@@ -55,6 +60,17 @@ permission: it goes on a route's `access.scope` and never in `permissions`.
 `docs/code-overwrite-gating.md` walks through the whole loop (propose,
 approve, apply) for all five kinds of write, explains each refusal, and ends
 with a checklist a human can follow to confirm it works.
+
+## Suggesting Puppet modules
+The Forge facet can turn a plain sentence ("I need to manage security
+settings on my Windows servers") into ranked Puppet module suggestions.
+Every suggestion comes from a real search of a real registry; a language
+model you configure only puts the results in order and says why. It is
+advice only and never edits a Puppetfile. It needs the `forge:recommend`
+permission and a provider whose API key is kept with `secrets:rw`.
+`docs/forge-recommend.md` walks through it from the manifest to the answer,
+lists every limit and error, and ends with a checklist a human with their own
+API key can follow.
 
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used
