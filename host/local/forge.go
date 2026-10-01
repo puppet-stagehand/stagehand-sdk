@@ -70,15 +70,18 @@ type forgeServer struct {
 	client  ForgeClient
 	docs    *documentsServer
 	secrets *secretsServer
+	llm     LLMClient
 }
 
 // newForgeServer wires a forgeServer. A nil client defaults to the real
 // HTTP adapter (D-01); tests and pack examples inject a fixture instead.
-func newForgeServer(packID string, docs *documentsServer, secrets *secretsServer, client ForgeClient) *forgeServer {
+// llm is stored as given: a nil LLMClient makes Recommend fail with
+// FailedPrecondition until a default client lands.
+func newForgeServer(packID string, docs *documentsServer, secrets *secretsServer, client ForgeClient, llm LLMClient) *forgeServer {
 	if client == nil {
 		client = DefaultForgeClient()
 	}
-	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets}
+	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm}
 }
 
 // resolveSource turns a ForgeSourceSelection into the endpoint a request
@@ -279,4 +282,13 @@ func (s *gatedForge) Resolve(ctx context.Context, req *hostv1.ResolveRequest) (*
 		return nil, ErrPermissionDenied("forge:rw")
 	}
 	return s.inner.Resolve(ctx, req)
+}
+
+// Recommend requires forge:recommend only. It is orthogonal to forge:rw: the
+// gate runs before any provider resolution, secret reveal or LLM call.
+func (s *gatedForge) Recommend(ctx context.Context, req *hostv1.RecommendRequest) (*hostv1.RecommendResponse, error) {
+	if !s.perms["forge:recommend"] {
+		return nil, ErrPermissionDenied("forge:recommend")
+	}
+	return s.inner.Recommend(ctx, req)
 }

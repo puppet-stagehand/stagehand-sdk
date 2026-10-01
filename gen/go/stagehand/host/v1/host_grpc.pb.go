@@ -2817,8 +2817,9 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Forge_Search_FullMethodName  = "/stagehand.host.v1.Forge/Search"
-	Forge_Resolve_FullMethodName = "/stagehand.host.v1.Forge/Resolve"
+	Forge_Search_FullMethodName    = "/stagehand.host.v1.Forge/Search"
+	Forge_Resolve_FullMethodName   = "/stagehand.host.v1.Forge/Resolve"
+	Forge_Recommend_FullMethodName = "/stagehand.host.v1.Forge/Recommend"
 )
 
 // ForgeClient is the client API for Forge service.
@@ -2826,9 +2827,11 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
 // ---------------------------------------------------------------------- Forge
-// Permission: forge:rw. Forge is an authoring-advisory facet: these
-// read-only RPCs inspect registry data and never modify a Puppetfile or run
-// r10k/g10k deployment work.
+// Permission: Search and Resolve require forge:rw; Recommend requires
+// forge:recommend. The two grants are orthogonal: holding one never implies
+// the other. Forge is an authoring-advisory facet: these RPCs inspect
+// registry data and never modify a Puppetfile or run r10k/g10k deployment
+// work.
 type ForgeClient interface {
 	// Search returns metadata-rich module candidates from exactly one selected
 	// registry source. It does not resolve dependencies for every result.
@@ -2836,6 +2839,14 @@ type ForgeClient interface {
 	// Resolve walks one selected module release and returns a reviewable,
 	// advisory dependency tree. It does not apply the result to a Puppetfile.
 	Resolve(ctx context.Context, in *ResolveRequest, opts ...grpc.CallOption) (*ResolveResponse, error)
+	// Recommend turns free text into ranked module suggestions. It asks the
+	// named LLM provider for search queries, runs real Forge searches, then
+	// asks the provider to rank the real candidates. Every module fact in the
+	// response is a host-owned copy of a real search result; only rank order
+	// and reasoning come from the model. PRIVACY: the caller's text and the
+	// candidate module metadata are sent to the operator-configured
+	// third-party LLM provider.
+	Recommend(ctx context.Context, in *RecommendRequest, opts ...grpc.CallOption) (*RecommendResponse, error)
 }
 
 type forgeClient struct {
@@ -2866,14 +2877,26 @@ func (c *forgeClient) Resolve(ctx context.Context, in *ResolveRequest, opts ...g
 	return out, nil
 }
 
+func (c *forgeClient) Recommend(ctx context.Context, in *RecommendRequest, opts ...grpc.CallOption) (*RecommendResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RecommendResponse)
+	err := c.cc.Invoke(ctx, Forge_Recommend_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ForgeServer is the server API for Forge service.
 // All implementations must embed UnimplementedForgeServer
 // for forward compatibility.
 //
 // ---------------------------------------------------------------------- Forge
-// Permission: forge:rw. Forge is an authoring-advisory facet: these
-// read-only RPCs inspect registry data and never modify a Puppetfile or run
-// r10k/g10k deployment work.
+// Permission: Search and Resolve require forge:rw; Recommend requires
+// forge:recommend. The two grants are orthogonal: holding one never implies
+// the other. Forge is an authoring-advisory facet: these RPCs inspect
+// registry data and never modify a Puppetfile or run r10k/g10k deployment
+// work.
 type ForgeServer interface {
 	// Search returns metadata-rich module candidates from exactly one selected
 	// registry source. It does not resolve dependencies for every result.
@@ -2881,6 +2904,14 @@ type ForgeServer interface {
 	// Resolve walks one selected module release and returns a reviewable,
 	// advisory dependency tree. It does not apply the result to a Puppetfile.
 	Resolve(context.Context, *ResolveRequest) (*ResolveResponse, error)
+	// Recommend turns free text into ranked module suggestions. It asks the
+	// named LLM provider for search queries, runs real Forge searches, then
+	// asks the provider to rank the real candidates. Every module fact in the
+	// response is a host-owned copy of a real search result; only rank order
+	// and reasoning come from the model. PRIVACY: the caller's text and the
+	// candidate module metadata are sent to the operator-configured
+	// third-party LLM provider.
+	Recommend(context.Context, *RecommendRequest) (*RecommendResponse, error)
 	mustEmbedUnimplementedForgeServer()
 }
 
@@ -2896,6 +2927,9 @@ func (UnimplementedForgeServer) Search(context.Context, *SearchRequest) (*Search
 }
 func (UnimplementedForgeServer) Resolve(context.Context, *ResolveRequest) (*ResolveResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Resolve not implemented")
+}
+func (UnimplementedForgeServer) Recommend(context.Context, *RecommendRequest) (*RecommendResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Recommend not implemented")
 }
 func (UnimplementedForgeServer) mustEmbedUnimplementedForgeServer() {}
 func (UnimplementedForgeServer) testEmbeddedByValue()               {}
@@ -2954,6 +2988,24 @@ func _Forge_Resolve_Handler(srv interface{}, ctx context.Context, dec func(inter
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Forge_Recommend_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RecommendRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ForgeServer).Recommend(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Forge_Recommend_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ForgeServer).Recommend(ctx, req.(*RecommendRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Forge_ServiceDesc is the grpc.ServiceDesc for Forge service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -2968,6 +3020,10 @@ var Forge_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Resolve",
 			Handler:    _Forge_Resolve_Handler,
+		},
+		{
+			MethodName: "Recommend",
+			Handler:    _Forge_Recommend_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

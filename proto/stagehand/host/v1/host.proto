@@ -525,9 +525,11 @@ message RemoveHieraDataKeyRequest { string environment = 1; string path = 2; str
 message DeleteHieraDataFileRequest { string environment = 1; string path = 2; }
 
 // ---------------------------------------------------------------------- Forge
-// Permission: forge:rw. Forge is an authoring-advisory facet: these
-// read-only RPCs inspect registry data and never modify a Puppetfile or run
-// r10k/g10k deployment work.
+// Permission: Search and Resolve require forge:rw; Recommend requires
+// forge:recommend. The two grants are orthogonal: holding one never implies
+// the other. Forge is an authoring-advisory facet: these RPCs inspect
+// registry data and never modify a Puppetfile or run r10k/g10k deployment
+// work.
 service Forge {
   // Search returns metadata-rich module candidates from exactly one selected
   // registry source. It does not resolve dependencies for every result.
@@ -535,6 +537,14 @@ service Forge {
   // Resolve walks one selected module release and returns a reviewable,
   // advisory dependency tree. It does not apply the result to a Puppetfile.
   rpc Resolve(ResolveRequest) returns (ResolveResponse);
+  // Recommend turns free text into ranked module suggestions. It asks the
+  // named LLM provider for search queries, runs real Forge searches, then
+  // asks the provider to rank the real candidates. Every module fact in the
+  // response is a host-owned copy of a real search result; only rank order
+  // and reasoning come from the model. PRIVACY: the caller's text and the
+  // candidate module metadata are sent to the operator-configured
+  // third-party LLM provider.
+  rpc Recommend(RecommendRequest) returns (RecommendResponse);
 }
 
 // Source identifies the registry queried by a Forge operation. The public
@@ -565,6 +575,38 @@ message ForgeSearchResult {
   google.protobuf.Timestamp release_date = 6;
   bool deprecated = 7;
   string superseded_by = 8;
+  // summary is the module's short description, when the registry supplies one.
+  string summary = 9;
+  // tags are the module's registry tags, when the registry supplies any.
+  repeated string tags = 10;
+}
+
+message RecommendRequest {
+  // text is the caller's free-text need. It is sent to the LLM provider.
+  string text = 1;
+  // llm_provider names a provider configured in the llm-providers index.
+  // There is no default provider.
+  string llm_provider = 2;
+  // sources selects the registries to search; unset means the public registry.
+  repeated ForgeSourceSelection sources = 3;
+  // Optional caps; zero means the host default. The host enforces hard maxima.
+  int32 max_queries = 4;
+  int32 max_candidates = 5;
+  int32 max_suggestions = 6;
+}
+message RecommendedModule {
+  // rank is host-assigned (1..n) from the ranker's ordering.
+  int32 rank = 1;
+  // reasoning is LLM-authored, untrusted display text.
+  string reasoning = 2;
+  // module is host-owned: a copy of a real search result.
+  ForgeSearchResult module = 3;
+}
+message RecommendResponse {
+  repeated RecommendedModule suggestions = 1;
+  // queries echoes the search queries the host actually ran.
+  repeated string queries = 2;
+  repeated ForgeAdvisoryWarning warnings = 3;
 }
 
 message ResolveRequest {

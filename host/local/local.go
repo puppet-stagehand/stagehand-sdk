@@ -28,6 +28,7 @@ type config struct {
 	groupClasses          map[string][]*hostv1.Class
 	groupClassesSet       bool
 	forgeClient           ForgeClient
+	llmClient             LLMClient
 }
 
 // defaultConfig returns a config seeded with a private clone of the
@@ -97,6 +98,12 @@ func WithForgeClient(client ForgeClient) Option {
 	return func(c *config) { c.forgeClient = client }
 }
 
+// WithLLMClient injects the LLM implementation Forge.Recommend calls. Tests
+// and pack examples should use a deterministic fixture.
+func WithLLMClient(client LLMClient) Option {
+	return func(c *config) { c.llmClient = client }
+}
+
 // New builds an in-process host.Host scoped to a manifest's declared
 // permissions. Documents is always available (scoped to packID's own
 // namespace instead of permission-gated); Settings is always available;
@@ -125,7 +132,7 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
 		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs)},
-		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient)},
+		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},
 	}
 }
 

@@ -4804,15 +4804,19 @@ func (x *SearchResponse) GetPage() *PageInfo {
 }
 
 type ForgeSearchResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
-	Version       string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
-	Source        string                 `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
-	Endorsement   string                 `protobuf:"bytes,4,opt,name=endorsement,proto3" json:"endorsement,omitempty"`
-	QualityScore  float64                `protobuf:"fixed64,5,opt,name=quality_score,json=qualityScore,proto3" json:"quality_score,omitempty"`
-	ReleaseDate   *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=release_date,json=releaseDate,proto3" json:"release_date,omitempty"`
-	Deprecated    bool                   `protobuf:"varint,7,opt,name=deprecated,proto3" json:"deprecated,omitempty"`
-	SupersededBy  string                 `protobuf:"bytes,8,opt,name=superseded_by,json=supersededBy,proto3" json:"superseded_by,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Version      string                 `protobuf:"bytes,2,opt,name=version,proto3" json:"version,omitempty"`
+	Source       string                 `protobuf:"bytes,3,opt,name=source,proto3" json:"source,omitempty"`
+	Endorsement  string                 `protobuf:"bytes,4,opt,name=endorsement,proto3" json:"endorsement,omitempty"`
+	QualityScore float64                `protobuf:"fixed64,5,opt,name=quality_score,json=qualityScore,proto3" json:"quality_score,omitempty"`
+	ReleaseDate  *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=release_date,json=releaseDate,proto3" json:"release_date,omitempty"`
+	Deprecated   bool                   `protobuf:"varint,7,opt,name=deprecated,proto3" json:"deprecated,omitempty"`
+	SupersededBy string                 `protobuf:"bytes,8,opt,name=superseded_by,json=supersededBy,proto3" json:"superseded_by,omitempty"`
+	// summary is the module's short description, when the registry supplies one.
+	Summary string `protobuf:"bytes,9,opt,name=summary,proto3" json:"summary,omitempty"`
+	// tags are the module's registry tags, when the registry supplies any.
+	Tags          []string `protobuf:"bytes,10,rep,name=tags,proto3" json:"tags,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4903,6 +4907,233 @@ func (x *ForgeSearchResult) GetSupersededBy() string {
 	return ""
 }
 
+func (x *ForgeSearchResult) GetSummary() string {
+	if x != nil {
+		return x.Summary
+	}
+	return ""
+}
+
+func (x *ForgeSearchResult) GetTags() []string {
+	if x != nil {
+		return x.Tags
+	}
+	return nil
+}
+
+type RecommendRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// text is the caller's free-text need. It is sent to the LLM provider.
+	Text string `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	// llm_provider names a provider configured in the llm-providers index.
+	// There is no default provider.
+	LlmProvider string `protobuf:"bytes,2,opt,name=llm_provider,json=llmProvider,proto3" json:"llm_provider,omitempty"`
+	// sources selects the registries to search; unset means the public registry.
+	Sources []*ForgeSourceSelection `protobuf:"bytes,3,rep,name=sources,proto3" json:"sources,omitempty"`
+	// Optional caps; zero means the host default. The host enforces hard maxima.
+	MaxQueries     int32 `protobuf:"varint,4,opt,name=max_queries,json=maxQueries,proto3" json:"max_queries,omitempty"`
+	MaxCandidates  int32 `protobuf:"varint,5,opt,name=max_candidates,json=maxCandidates,proto3" json:"max_candidates,omitempty"`
+	MaxSuggestions int32 `protobuf:"varint,6,opt,name=max_suggestions,json=maxSuggestions,proto3" json:"max_suggestions,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *RecommendRequest) Reset() {
+	*x = RecommendRequest{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecommendRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecommendRequest) ProtoMessage() {}
+
+func (x *RecommendRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecommendRequest.ProtoReflect.Descriptor instead.
+func (*RecommendRequest) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *RecommendRequest) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *RecommendRequest) GetLlmProvider() string {
+	if x != nil {
+		return x.LlmProvider
+	}
+	return ""
+}
+
+func (x *RecommendRequest) GetSources() []*ForgeSourceSelection {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+func (x *RecommendRequest) GetMaxQueries() int32 {
+	if x != nil {
+		return x.MaxQueries
+	}
+	return 0
+}
+
+func (x *RecommendRequest) GetMaxCandidates() int32 {
+	if x != nil {
+		return x.MaxCandidates
+	}
+	return 0
+}
+
+func (x *RecommendRequest) GetMaxSuggestions() int32 {
+	if x != nil {
+		return x.MaxSuggestions
+	}
+	return 0
+}
+
+type RecommendedModule struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// rank is host-assigned (1..n) from the ranker's ordering.
+	Rank int32 `protobuf:"varint,1,opt,name=rank,proto3" json:"rank,omitempty"`
+	// reasoning is LLM-authored, untrusted display text.
+	Reasoning string `protobuf:"bytes,2,opt,name=reasoning,proto3" json:"reasoning,omitempty"`
+	// module is host-owned: a copy of a real search result.
+	Module        *ForgeSearchResult `protobuf:"bytes,3,opt,name=module,proto3" json:"module,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecommendedModule) Reset() {
+	*x = RecommendedModule{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecommendedModule) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecommendedModule) ProtoMessage() {}
+
+func (x *RecommendedModule) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecommendedModule.ProtoReflect.Descriptor instead.
+func (*RecommendedModule) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *RecommendedModule) GetRank() int32 {
+	if x != nil {
+		return x.Rank
+	}
+	return 0
+}
+
+func (x *RecommendedModule) GetReasoning() string {
+	if x != nil {
+		return x.Reasoning
+	}
+	return ""
+}
+
+func (x *RecommendedModule) GetModule() *ForgeSearchResult {
+	if x != nil {
+		return x.Module
+	}
+	return nil
+}
+
+type RecommendResponse struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Suggestions []*RecommendedModule   `protobuf:"bytes,1,rep,name=suggestions,proto3" json:"suggestions,omitempty"`
+	// queries echoes the search queries the host actually ran.
+	Queries       []string                `protobuf:"bytes,2,rep,name=queries,proto3" json:"queries,omitempty"`
+	Warnings      []*ForgeAdvisoryWarning `protobuf:"bytes,3,rep,name=warnings,proto3" json:"warnings,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RecommendResponse) Reset() {
+	*x = RecommendResponse{}
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RecommendResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RecommendResponse) ProtoMessage() {}
+
+func (x *RecommendResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RecommendResponse.ProtoReflect.Descriptor instead.
+func (*RecommendResponse) Descriptor() ([]byte, []int) {
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *RecommendResponse) GetSuggestions() []*RecommendedModule {
+	if x != nil {
+		return x.Suggestions
+	}
+	return nil
+}
+
+func (x *RecommendResponse) GetQueries() []string {
+	if x != nil {
+		return x.Queries
+	}
+	return nil
+}
+
+func (x *RecommendResponse) GetWarnings() []*ForgeAdvisoryWarning {
+	if x != nil {
+		return x.Warnings
+	}
+	return nil
+}
+
 type ResolveRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -4915,7 +5146,7 @@ type ResolveRequest struct {
 
 func (x *ResolveRequest) Reset() {
 	*x = ResolveRequest{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4927,7 +5158,7 @@ func (x *ResolveRequest) String() string {
 func (*ResolveRequest) ProtoMessage() {}
 
 func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[83]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4940,7 +5171,7 @@ func (x *ResolveRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveRequest.ProtoReflect.Descriptor instead.
 func (*ResolveRequest) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{83}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{86}
 }
 
 func (x *ResolveRequest) GetName() string {
@@ -4983,7 +5214,7 @@ type ResolveResponse struct {
 
 func (x *ResolveResponse) Reset() {
 	*x = ResolveResponse{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[87]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4995,7 +5226,7 @@ func (x *ResolveResponse) String() string {
 func (*ResolveResponse) ProtoMessage() {}
 
 func (x *ResolveResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[84]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[87]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5008,7 +5239,7 @@ func (x *ResolveResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResolveResponse.ProtoReflect.Descriptor instead.
 func (*ResolveResponse) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{84}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{87}
 }
 
 func (x *ResolveResponse) GetRoot() *DependencyNode {
@@ -5057,7 +5288,7 @@ type DependencyNode struct {
 
 func (x *DependencyNode) Reset() {
 	*x = DependencyNode{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[88]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5069,7 +5300,7 @@ func (x *DependencyNode) String() string {
 func (*DependencyNode) ProtoMessage() {}
 
 func (x *DependencyNode) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[85]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[88]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5082,7 +5313,7 @@ func (x *DependencyNode) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DependencyNode.ProtoReflect.Descriptor instead.
 func (*DependencyNode) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{85}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{88}
 }
 
 func (x *DependencyNode) GetName() string {
@@ -5168,7 +5399,7 @@ type ForgeAdvisoryWarning struct {
 
 func (x *ForgeAdvisoryWarning) Reset() {
 	*x = ForgeAdvisoryWarning{}
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[89]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5180,7 +5411,7 @@ func (x *ForgeAdvisoryWarning) String() string {
 func (*ForgeAdvisoryWarning) ProtoMessage() {}
 
 func (x *ForgeAdvisoryWarning) ProtoReflect() protoreflect.Message {
-	mi := &file_stagehand_host_v1_host_proto_msgTypes[86]
+	mi := &file_stagehand_host_v1_host_proto_msgTypes[89]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5193,7 +5424,7 @@ func (x *ForgeAdvisoryWarning) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ForgeAdvisoryWarning.ProtoReflect.Descriptor instead.
 func (*ForgeAdvisoryWarning) Descriptor() ([]byte, []int) {
-	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{86}
+	return file_stagehand_host_v1_host_proto_rawDescGZIP(), []int{89}
 }
 
 func (x *ForgeAdvisoryWarning) GetCode() string {
@@ -5595,7 +5826,7 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\x04page\x18\x03 \x01(\v2\x17.stagehand.host.v1.PageR\x04page\"\x81\x01\n" +
 	"\x0eSearchResponse\x12>\n" +
 	"\aresults\x18\x01 \x03(\v2$.stagehand.host.v1.ForgeSearchResultR\aresults\x12/\n" +
-	"\x04page\x18\x02 \x01(\v2\x1b.stagehand.host.v1.PageInfoR\x04page\"\xa4\x02\n" +
+	"\x04page\x18\x02 \x01(\v2\x1b.stagehand.host.v1.PageInfoR\x04page\"\xd2\x02\n" +
 	"\x11ForgeSearchResult\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12\x16\n" +
@@ -5606,7 +5837,26 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\n" +
 	"deprecated\x18\a \x01(\bR\n" +
 	"deprecated\x12#\n" +
-	"\rsuperseded_by\x18\b \x01(\tR\fsupersededBy\"\xa1\x01\n" +
+	"\rsuperseded_by\x18\b \x01(\tR\fsupersededBy\x12\x18\n" +
+	"\asummary\x18\t \x01(\tR\asummary\x12\x12\n" +
+	"\x04tags\x18\n" +
+	" \x03(\tR\x04tags\"\xfd\x01\n" +
+	"\x10RecommendRequest\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12!\n" +
+	"\fllm_provider\x18\x02 \x01(\tR\vllmProvider\x12A\n" +
+	"\asources\x18\x03 \x03(\v2'.stagehand.host.v1.ForgeSourceSelectionR\asources\x12\x1f\n" +
+	"\vmax_queries\x18\x04 \x01(\x05R\n" +
+	"maxQueries\x12%\n" +
+	"\x0emax_candidates\x18\x05 \x01(\x05R\rmaxCandidates\x12'\n" +
+	"\x0fmax_suggestions\x18\x06 \x01(\x05R\x0emaxSuggestions\"\x83\x01\n" +
+	"\x11RecommendedModule\x12\x12\n" +
+	"\x04rank\x18\x01 \x01(\x05R\x04rank\x12\x1c\n" +
+	"\treasoning\x18\x02 \x01(\tR\treasoning\x12<\n" +
+	"\x06module\x18\x03 \x01(\v2$.stagehand.host.v1.ForgeSearchResultR\x06module\"\xba\x01\n" +
+	"\x11RecommendResponse\x12F\n" +
+	"\vsuggestions\x18\x01 \x03(\v2$.stagehand.host.v1.RecommendedModuleR\vsuggestions\x12\x18\n" +
+	"\aqueries\x18\x02 \x03(\tR\aqueries\x12C\n" +
+	"\bwarnings\x18\x03 \x03(\v2'.stagehand.host.v1.ForgeAdvisoryWarningR\bwarnings\"\xa1\x01\n" +
 	"\x0eResolveRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12?\n" +
@@ -5698,10 +5948,11 @@ const file_stagehand_host_v1_host_proto_rawDesc = "" +
 	"\x0fPutHieraDataKey\x12).stagehand.host.v1.PutHieraDataKeyRequest\x1a .stagehand.host.v1.HieraDataFile\x12t\n" +
 	"\x1aApplyHieraDataKeyOverwrite\x124.stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest\x1a .stagehand.host.v1.HieraDataFile\x12d\n" +
 	"\x12RemoveHieraDataKey\x12,.stagehand.host.v1.RemoveHieraDataKeyRequest\x1a .stagehand.host.v1.HieraDataFile\x12\\\n" +
-	"\x13DeleteHieraDataFile\x12-.stagehand.host.v1.DeleteHieraDataFileRequest\x1a\x16.google.protobuf.Empty2\xa8\x01\n" +
+	"\x13DeleteHieraDataFile\x12-.stagehand.host.v1.DeleteHieraDataFileRequest\x1a\x16.google.protobuf.Empty2\x80\x02\n" +
 	"\x05Forge\x12M\n" +
 	"\x06Search\x12 .stagehand.host.v1.SearchRequest\x1a!.stagehand.host.v1.SearchResponse\x12P\n" +
-	"\aResolve\x12!.stagehand.host.v1.ResolveRequest\x1a\".stagehand.host.v1.ResolveResponseBKZIgithub.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1b\x06proto3"
+	"\aResolve\x12!.stagehand.host.v1.ResolveRequest\x1a\".stagehand.host.v1.ResolveResponse\x12V\n" +
+	"\tRecommend\x12#.stagehand.host.v1.RecommendRequest\x1a$.stagehand.host.v1.RecommendResponseBKZIgithub.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1b\x06proto3"
 
 var (
 	file_stagehand_host_v1_host_proto_rawDescOnce sync.Once
@@ -5716,7 +5967,7 @@ func file_stagehand_host_v1_host_proto_rawDescGZIP() []byte {
 }
 
 var file_stagehand_host_v1_host_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 92)
+var file_stagehand_host_v1_host_proto_msgTypes = make([]protoimpl.MessageInfo, 95)
 var file_stagehand_host_v1_host_proto_goTypes = []any{
 	(QueryDocumentsRequest_Op)(0),                 // 0: stagehand.host.v1.QueryDocumentsRequest.Op
 	(Node_Status)(0),                              // 1: stagehand.host.v1.Node.Status
@@ -5804,201 +6055,210 @@ var file_stagehand_host_v1_host_proto_goTypes = []any{
 	(*SearchRequest)(nil),                         // 83: stagehand.host.v1.SearchRequest
 	(*SearchResponse)(nil),                        // 84: stagehand.host.v1.SearchResponse
 	(*ForgeSearchResult)(nil),                     // 85: stagehand.host.v1.ForgeSearchResult
-	(*ResolveRequest)(nil),                        // 86: stagehand.host.v1.ResolveRequest
-	(*ResolveResponse)(nil),                       // 87: stagehand.host.v1.ResolveResponse
-	(*DependencyNode)(nil),                        // 88: stagehand.host.v1.DependencyNode
-	(*ForgeAdvisoryWarning)(nil),                  // 89: stagehand.host.v1.ForgeAdvisoryWarning
-	nil,                                           // 90: stagehand.host.v1.Node.FactsEntry
-	nil,                                           // 91: stagehand.host.v1.PutFactsRequest.FactsEntry
-	nil,                                           // 92: stagehand.host.v1.HieraLevel.LookupOptionsEntry
-	nil,                                           // 93: stagehand.host.v1.HieraDataFile.ValuesEntry
-	nil,                                           // 94: stagehand.host.v1.HieraDataFile.LookupOptionsEntry
-	(*Json)(nil),                                  // 95: stagehand.host.v1.Json
-	(*timestamppb.Timestamp)(nil),                 // 96: google.protobuf.Timestamp
-	(*Page)(nil),                                  // 97: stagehand.host.v1.Page
-	(*PageInfo)(nil),                              // 98: stagehand.host.v1.PageInfo
-	(*emptypb.Empty)(nil),                         // 99: google.protobuf.Empty
+	(*RecommendRequest)(nil),                      // 86: stagehand.host.v1.RecommendRequest
+	(*RecommendedModule)(nil),                     // 87: stagehand.host.v1.RecommendedModule
+	(*RecommendResponse)(nil),                     // 88: stagehand.host.v1.RecommendResponse
+	(*ResolveRequest)(nil),                        // 89: stagehand.host.v1.ResolveRequest
+	(*ResolveResponse)(nil),                       // 90: stagehand.host.v1.ResolveResponse
+	(*DependencyNode)(nil),                        // 91: stagehand.host.v1.DependencyNode
+	(*ForgeAdvisoryWarning)(nil),                  // 92: stagehand.host.v1.ForgeAdvisoryWarning
+	nil,                                           // 93: stagehand.host.v1.Node.FactsEntry
+	nil,                                           // 94: stagehand.host.v1.PutFactsRequest.FactsEntry
+	nil,                                           // 95: stagehand.host.v1.HieraLevel.LookupOptionsEntry
+	nil,                                           // 96: stagehand.host.v1.HieraDataFile.ValuesEntry
+	nil,                                           // 97: stagehand.host.v1.HieraDataFile.LookupOptionsEntry
+	(*Json)(nil),                                  // 98: stagehand.host.v1.Json
+	(*timestamppb.Timestamp)(nil),                 // 99: google.protobuf.Timestamp
+	(*Page)(nil),                                  // 100: stagehand.host.v1.Page
+	(*PageInfo)(nil),                              // 101: stagehand.host.v1.PageInfo
+	(*emptypb.Empty)(nil),                         // 102: google.protobuf.Empty
 }
 var file_stagehand_host_v1_host_proto_depIdxs = []int32{
-	95,  // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
-	96,  // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
-	96,  // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
-	95,  // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
-	97,  // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	98,  // 0: stagehand.host.v1.Document.body:type_name -> stagehand.host.v1.Json
+	99,  // 1: stagehand.host.v1.Document.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 2: stagehand.host.v1.Document.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 3: stagehand.host.v1.PutDocumentRequest.body:type_name -> stagehand.host.v1.Json
+	100, // 4: stagehand.host.v1.ListDocumentsRequest.page:type_name -> stagehand.host.v1.Page
 	3,   // 5: stagehand.host.v1.ListDocumentsResponse.documents:type_name -> stagehand.host.v1.Document
-	98,  // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
+	101, // 6: stagehand.host.v1.ListDocumentsResponse.page:type_name -> stagehand.host.v1.PageInfo
 	0,   // 7: stagehand.host.v1.QueryDocumentsRequest.op:type_name -> stagehand.host.v1.QueryDocumentsRequest.Op
-	95,  // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
-	97,  // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
-	95,  // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
-	96,  // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
-	96,  // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
+	98,  // 8: stagehand.host.v1.QueryDocumentsRequest.value:type_name -> stagehand.host.v1.Json
+	100, // 9: stagehand.host.v1.QueryDocumentsRequest.page:type_name -> stagehand.host.v1.Page
+	98,  // 10: stagehand.host.v1.SettingsDocument.values:type_name -> stagehand.host.v1.Json
+	99,  // 11: stagehand.host.v1.SettingsChange.at:type_name -> google.protobuf.Timestamp
+	99,  // 12: stagehand.host.v1.IssuedToken.expires_at:type_name -> google.protobuf.Timestamp
 	1,   // 13: stagehand.host.v1.Node.status:type_name -> stagehand.host.v1.Node.Status
-	90,  // 14: stagehand.host.v1.Node.facts:type_name -> stagehand.host.v1.Node.FactsEntry
+	93,  // 14: stagehand.host.v1.Node.facts:type_name -> stagehand.host.v1.Node.FactsEntry
 	22,  // 15: stagehand.host.v1.DiscoverResponse.candidates:type_name -> stagehand.host.v1.Node
-	97,  // 16: stagehand.host.v1.ListNodesRequest.page:type_name -> stagehand.host.v1.Page
+	100, // 16: stagehand.host.v1.ListNodesRequest.page:type_name -> stagehand.host.v1.Page
 	22,  // 17: stagehand.host.v1.ListNodesResponse.nodes:type_name -> stagehand.host.v1.Node
-	98,  // 18: stagehand.host.v1.ListNodesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	101, // 18: stagehand.host.v1.ListNodesResponse.page:type_name -> stagehand.host.v1.PageInfo
 	2,   // 19: stagehand.host.v1.QueryNodesRequest.op:type_name -> stagehand.host.v1.QueryNodesRequest.Op
-	95,  // 20: stagehand.host.v1.QueryNodesRequest.value:type_name -> stagehand.host.v1.Json
-	97,  // 21: stagehand.host.v1.QueryNodesRequest.page:type_name -> stagehand.host.v1.Page
-	91,  // 22: stagehand.host.v1.PutFactsRequest.facts:type_name -> stagehand.host.v1.PutFactsRequest.FactsEntry
+	98,  // 20: stagehand.host.v1.QueryNodesRequest.value:type_name -> stagehand.host.v1.Json
+	100, // 21: stagehand.host.v1.QueryNodesRequest.page:type_name -> stagehand.host.v1.Page
+	94,  // 22: stagehand.host.v1.PutFactsRequest.facts:type_name -> stagehand.host.v1.PutFactsRequest.FactsEntry
 	29,  // 23: stagehand.host.v1.GroupList.groups:type_name -> stagehand.host.v1.Group
-	97,  // 24: stagehand.host.v1.ListGroupNodesRequest.page:type_name -> stagehand.host.v1.Page
-	95,  // 25: stagehand.host.v1.Class.parameters:type_name -> stagehand.host.v1.Json
+	100, // 24: stagehand.host.v1.ListGroupNodesRequest.page:type_name -> stagehand.host.v1.Page
+	98,  // 25: stagehand.host.v1.Class.parameters:type_name -> stagehand.host.v1.Json
 	35,  // 26: stagehand.host.v1.ClassList.classes:type_name -> stagehand.host.v1.Class
-	96,  // 27: stagehand.host.v1.Environment.created_at:type_name -> google.protobuf.Timestamp
-	96,  // 28: stagehand.host.v1.Environment.updated_at:type_name -> google.protobuf.Timestamp
-	97,  // 29: stagehand.host.v1.ListEnvironmentsRequest.page:type_name -> stagehand.host.v1.Page
+	99,  // 27: stagehand.host.v1.Environment.created_at:type_name -> google.protobuf.Timestamp
+	99,  // 28: stagehand.host.v1.Environment.updated_at:type_name -> google.protobuf.Timestamp
+	100, // 29: stagehand.host.v1.ListEnvironmentsRequest.page:type_name -> stagehand.host.v1.Page
 	43,  // 30: stagehand.host.v1.ListEnvironmentsResponse.environments:type_name -> stagehand.host.v1.Environment
-	98,  // 31: stagehand.host.v1.ListEnvironmentsResponse.page:type_name -> stagehand.host.v1.PageInfo
+	101, // 31: stagehand.host.v1.ListEnvironmentsResponse.page:type_name -> stagehand.host.v1.PageInfo
 	51,  // 32: stagehand.host.v1.PutEnvironmentSettingsRequest.settings:type_name -> stagehand.host.v1.EnvironmentSettings
 	55,  // 33: stagehand.host.v1.PuppetfileModule.forge:type_name -> stagehand.host.v1.ForgeSource
 	56,  // 34: stagehand.host.v1.PuppetfileModule.git:type_name -> stagehand.host.v1.GitSource
 	57,  // 35: stagehand.host.v1.GitSource.control_branch:type_name -> stagehand.host.v1.ControlBranch
 	54,  // 36: stagehand.host.v1.Puppetfile.modules:type_name -> stagehand.host.v1.PuppetfileModule
-	97,  // 37: stagehand.host.v1.ListPuppetfileModulesRequest.page:type_name -> stagehand.host.v1.Page
+	100, // 37: stagehand.host.v1.ListPuppetfileModulesRequest.page:type_name -> stagehand.host.v1.Page
 	54,  // 38: stagehand.host.v1.ListPuppetfileModulesResponse.modules:type_name -> stagehand.host.v1.PuppetfileModule
-	98,  // 39: stagehand.host.v1.ListPuppetfileModulesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	101, // 39: stagehand.host.v1.ListPuppetfileModulesResponse.page:type_name -> stagehand.host.v1.PageInfo
 	54,  // 40: stagehand.host.v1.PutPuppetfileModuleRequest.module:type_name -> stagehand.host.v1.PuppetfileModule
-	92,  // 41: stagehand.host.v1.HieraLevel.lookup_options:type_name -> stagehand.host.v1.HieraLevel.LookupOptionsEntry
+	95,  // 41: stagehand.host.v1.HieraLevel.lookup_options:type_name -> stagehand.host.v1.HieraLevel.LookupOptionsEntry
 	66,  // 42: stagehand.host.v1.HieraHierarchy.levels:type_name -> stagehand.host.v1.HieraLevel
 	66,  // 43: stagehand.host.v1.PutHieraLevelRequest.level:type_name -> stagehand.host.v1.HieraLevel
 	67,  // 44: stagehand.host.v1.PutHieraLevelResponse.hierarchy:type_name -> stagehand.host.v1.HieraHierarchy
 	68,  // 45: stagehand.host.v1.PutHieraLevelResponse.warnings:type_name -> stagehand.host.v1.LintWarning
-	93,  // 46: stagehand.host.v1.HieraDataFile.values:type_name -> stagehand.host.v1.HieraDataFile.ValuesEntry
-	94,  // 47: stagehand.host.v1.HieraDataFile.lookup_options:type_name -> stagehand.host.v1.HieraDataFile.LookupOptionsEntry
-	97,  // 48: stagehand.host.v1.ListHieraDataFilesRequest.page:type_name -> stagehand.host.v1.Page
-	98,  // 49: stagehand.host.v1.ListHieraDataFilesResponse.page:type_name -> stagehand.host.v1.PageInfo
-	95,  // 50: stagehand.host.v1.PutHieraDataKeyRequest.value:type_name -> stagehand.host.v1.Json
+	96,  // 46: stagehand.host.v1.HieraDataFile.values:type_name -> stagehand.host.v1.HieraDataFile.ValuesEntry
+	97,  // 47: stagehand.host.v1.HieraDataFile.lookup_options:type_name -> stagehand.host.v1.HieraDataFile.LookupOptionsEntry
+	100, // 48: stagehand.host.v1.ListHieraDataFilesRequest.page:type_name -> stagehand.host.v1.Page
+	101, // 49: stagehand.host.v1.ListHieraDataFilesResponse.page:type_name -> stagehand.host.v1.PageInfo
+	98,  // 50: stagehand.host.v1.PutHieraDataKeyRequest.value:type_name -> stagehand.host.v1.Json
 	81,  // 51: stagehand.host.v1.SearchRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
-	97,  // 52: stagehand.host.v1.SearchRequest.page:type_name -> stagehand.host.v1.Page
+	100, // 52: stagehand.host.v1.SearchRequest.page:type_name -> stagehand.host.v1.Page
 	85,  // 53: stagehand.host.v1.SearchResponse.results:type_name -> stagehand.host.v1.ForgeSearchResult
-	98,  // 54: stagehand.host.v1.SearchResponse.page:type_name -> stagehand.host.v1.PageInfo
-	96,  // 55: stagehand.host.v1.ForgeSearchResult.release_date:type_name -> google.protobuf.Timestamp
-	81,  // 56: stagehand.host.v1.ResolveRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
-	88,  // 57: stagehand.host.v1.ResolveResponse.root:type_name -> stagehand.host.v1.DependencyNode
-	89,  // 58: stagehand.host.v1.ResolveResponse.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
-	88,  // 59: stagehand.host.v1.DependencyNode.dependencies:type_name -> stagehand.host.v1.DependencyNode
-	89,  // 60: stagehand.host.v1.DependencyNode.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
-	95,  // 61: stagehand.host.v1.Node.FactsEntry.value:type_name -> stagehand.host.v1.Json
-	95,  // 62: stagehand.host.v1.PutFactsRequest.FactsEntry.value:type_name -> stagehand.host.v1.Json
-	95,  // 63: stagehand.host.v1.HieraDataFile.ValuesEntry.value:type_name -> stagehand.host.v1.Json
-	4,   // 64: stagehand.host.v1.Documents.Get:input_type -> stagehand.host.v1.GetDocumentRequest
-	5,   // 65: stagehand.host.v1.Documents.Put:input_type -> stagehand.host.v1.PutDocumentRequest
-	7,   // 66: stagehand.host.v1.Documents.List:input_type -> stagehand.host.v1.ListDocumentsRequest
-	9,   // 67: stagehand.host.v1.Documents.Query:input_type -> stagehand.host.v1.QueryDocumentsRequest
-	10,  // 68: stagehand.host.v1.Documents.Delete:input_type -> stagehand.host.v1.DeleteDocumentRequest
-	99,  // 69: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
-	99,  // 70: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
-	13,  // 71: stagehand.host.v1.Secrets.Store:input_type -> stagehand.host.v1.StoreSecretRequest
-	14,  // 72: stagehand.host.v1.Secrets.Reveal:input_type -> stagehand.host.v1.SecretRef
-	15,  // 73: stagehand.host.v1.Secrets.Seal:input_type -> stagehand.host.v1.SecretValue
-	16,  // 74: stagehand.host.v1.Secrets.Open:input_type -> stagehand.host.v1.Sealed
-	14,  // 75: stagehand.host.v1.Secrets.Delete:input_type -> stagehand.host.v1.SecretRef
-	17,  // 76: stagehand.host.v1.Auth.IssueToken:input_type -> stagehand.host.v1.IssueTokenRequest
-	19,  // 77: stagehand.host.v1.Auth.Verify:input_type -> stagehand.host.v1.VerifyTokenRequest
-	21,  // 78: stagehand.host.v1.Auth.Revoke:input_type -> stagehand.host.v1.TokenRef
-	23,  // 79: stagehand.host.v1.Inventory.GetNode:input_type -> stagehand.host.v1.GetNodeRequest
-	99,  // 80: stagehand.host.v1.Inventory.Discover:input_type -> google.protobuf.Empty
-	25,  // 81: stagehand.host.v1.Inventory.ListNodes:input_type -> stagehand.host.v1.ListNodesRequest
-	27,  // 82: stagehand.host.v1.Inventory.QueryNodes:input_type -> stagehand.host.v1.QueryNodesRequest
-	28,  // 83: stagehand.host.v1.Inventory.PutFacts:input_type -> stagehand.host.v1.PutFactsRequest
-	99,  // 84: stagehand.host.v1.Inventory.ListGroups:input_type -> google.protobuf.Empty
-	32,  // 85: stagehand.host.v1.Inventory.ListGroupNodes:input_type -> stagehand.host.v1.ListGroupNodesRequest
-	33,  // 86: stagehand.host.v1.Inventory.ListNodeGroups:input_type -> stagehand.host.v1.ListNodeGroupsRequest
-	34,  // 87: stagehand.host.v1.Inventory.AddNodeToGroup:input_type -> stagehand.host.v1.GroupMembershipRequest
-	30,  // 88: stagehand.host.v1.Inventory.ListClasses:input_type -> stagehand.host.v1.GroupRef
-	37,  // 89: stagehand.host.v1.Inventory.OnboardNode:input_type -> stagehand.host.v1.OnboardNodeRequest
-	44,  // 90: stagehand.host.v1.Code.ListEnvironments:input_type -> stagehand.host.v1.ListEnvironmentsRequest
-	46,  // 91: stagehand.host.v1.Code.GetEnvironment:input_type -> stagehand.host.v1.GetEnvironmentRequest
-	47,  // 92: stagehand.host.v1.Code.CreateEnvironment:input_type -> stagehand.host.v1.CreateEnvironmentRequest
-	48,  // 93: stagehand.host.v1.Code.RenameEnvironment:input_type -> stagehand.host.v1.RenameEnvironmentRequest
-	49,  // 94: stagehand.host.v1.Code.DeleteEnvironment:input_type -> stagehand.host.v1.DeleteEnvironmentRequest
-	50,  // 95: stagehand.host.v1.Code.DuplicateEnvironment:input_type -> stagehand.host.v1.DuplicateEnvironmentRequest
-	38,  // 96: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:input_type -> stagehand.host.v1.ApplyEnvironmentDuplicateRequest
-	52,  // 97: stagehand.host.v1.Code.GetEnvironmentSettings:input_type -> stagehand.host.v1.GetEnvironmentSettingsRequest
-	53,  // 98: stagehand.host.v1.Code.PutEnvironmentSettings:input_type -> stagehand.host.v1.PutEnvironmentSettingsRequest
-	39,  // 99: stagehand.host.v1.Code.ApplyEnvironmentSettings:input_type -> stagehand.host.v1.ApplyEnvironmentSettingsRequest
-	59,  // 100: stagehand.host.v1.Code.ListPuppetfileModules:input_type -> stagehand.host.v1.ListPuppetfileModulesRequest
-	61,  // 101: stagehand.host.v1.Code.PutPuppetfileModule:input_type -> stagehand.host.v1.PutPuppetfileModuleRequest
-	40,  // 102: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:input_type -> stagehand.host.v1.ApplyPuppetfileModuleOverwriteRequest
-	62,  // 103: stagehand.host.v1.Code.RemovePuppetfileModule:input_type -> stagehand.host.v1.RemovePuppetfileModuleRequest
-	63,  // 104: stagehand.host.v1.Code.SetModuledir:input_type -> stagehand.host.v1.SetModuledirRequest
-	64,  // 105: stagehand.host.v1.Code.RenderPuppetfile:input_type -> stagehand.host.v1.RenderPuppetfileRequest
-	69,  // 106: stagehand.host.v1.Code.GetHieraHierarchy:input_type -> stagehand.host.v1.GetHieraHierarchyRequest
-	70,  // 107: stagehand.host.v1.Code.PutHieraLevel:input_type -> stagehand.host.v1.PutHieraLevelRequest
-	41,  // 108: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:input_type -> stagehand.host.v1.ApplyHieraLevelOverwriteRequest
-	72,  // 109: stagehand.host.v1.Code.RemoveHieraLevel:input_type -> stagehand.host.v1.RemoveHieraLevelRequest
-	73,  // 110: stagehand.host.v1.Code.ReorderHieraLevels:input_type -> stagehand.host.v1.ReorderHieraLevelsRequest
-	75,  // 111: stagehand.host.v1.Code.ListHieraDataFiles:input_type -> stagehand.host.v1.ListHieraDataFilesRequest
-	77,  // 112: stagehand.host.v1.Code.GetHieraDataFile:input_type -> stagehand.host.v1.GetHieraDataFileRequest
-	78,  // 113: stagehand.host.v1.Code.PutHieraDataKey:input_type -> stagehand.host.v1.PutHieraDataKeyRequest
-	42,  // 114: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:input_type -> stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest
-	79,  // 115: stagehand.host.v1.Code.RemoveHieraDataKey:input_type -> stagehand.host.v1.RemoveHieraDataKeyRequest
-	80,  // 116: stagehand.host.v1.Code.DeleteHieraDataFile:input_type -> stagehand.host.v1.DeleteHieraDataFileRequest
-	83,  // 117: stagehand.host.v1.Forge.Search:input_type -> stagehand.host.v1.SearchRequest
-	86,  // 118: stagehand.host.v1.Forge.Resolve:input_type -> stagehand.host.v1.ResolveRequest
-	3,   // 119: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
-	6,   // 120: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
-	8,   // 121: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
-	8,   // 122: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
-	99,  // 123: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
-	11,  // 124: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
-	12,  // 125: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
-	14,  // 126: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
-	15,  // 127: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
-	16,  // 128: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
-	15,  // 129: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
-	99,  // 130: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
-	18,  // 131: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
-	20,  // 132: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
-	99,  // 133: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
-	22,  // 134: stagehand.host.v1.Inventory.GetNode:output_type -> stagehand.host.v1.Node
-	24,  // 135: stagehand.host.v1.Inventory.Discover:output_type -> stagehand.host.v1.DiscoverResponse
-	26,  // 136: stagehand.host.v1.Inventory.ListNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	26,  // 137: stagehand.host.v1.Inventory.QueryNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	22,  // 138: stagehand.host.v1.Inventory.PutFacts:output_type -> stagehand.host.v1.Node
-	31,  // 139: stagehand.host.v1.Inventory.ListGroups:output_type -> stagehand.host.v1.GroupList
-	26,  // 140: stagehand.host.v1.Inventory.ListGroupNodes:output_type -> stagehand.host.v1.ListNodesResponse
-	31,  // 141: stagehand.host.v1.Inventory.ListNodeGroups:output_type -> stagehand.host.v1.GroupList
-	99,  // 142: stagehand.host.v1.Inventory.AddNodeToGroup:output_type -> google.protobuf.Empty
-	36,  // 143: stagehand.host.v1.Inventory.ListClasses:output_type -> stagehand.host.v1.ClassList
-	22,  // 144: stagehand.host.v1.Inventory.OnboardNode:output_type -> stagehand.host.v1.Node
-	45,  // 145: stagehand.host.v1.Code.ListEnvironments:output_type -> stagehand.host.v1.ListEnvironmentsResponse
-	43,  // 146: stagehand.host.v1.Code.GetEnvironment:output_type -> stagehand.host.v1.Environment
-	43,  // 147: stagehand.host.v1.Code.CreateEnvironment:output_type -> stagehand.host.v1.Environment
-	43,  // 148: stagehand.host.v1.Code.RenameEnvironment:output_type -> stagehand.host.v1.Environment
-	99,  // 149: stagehand.host.v1.Code.DeleteEnvironment:output_type -> google.protobuf.Empty
-	43,  // 150: stagehand.host.v1.Code.DuplicateEnvironment:output_type -> stagehand.host.v1.Environment
-	43,  // 151: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:output_type -> stagehand.host.v1.Environment
-	51,  // 152: stagehand.host.v1.Code.GetEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
-	51,  // 153: stagehand.host.v1.Code.PutEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
-	51,  // 154: stagehand.host.v1.Code.ApplyEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
-	60,  // 155: stagehand.host.v1.Code.ListPuppetfileModules:output_type -> stagehand.host.v1.ListPuppetfileModulesResponse
-	54,  // 156: stagehand.host.v1.Code.PutPuppetfileModule:output_type -> stagehand.host.v1.PuppetfileModule
-	54,  // 157: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:output_type -> stagehand.host.v1.PuppetfileModule
-	99,  // 158: stagehand.host.v1.Code.RemovePuppetfileModule:output_type -> google.protobuf.Empty
-	58,  // 159: stagehand.host.v1.Code.SetModuledir:output_type -> stagehand.host.v1.Puppetfile
-	65,  // 160: stagehand.host.v1.Code.RenderPuppetfile:output_type -> stagehand.host.v1.RenderedPuppetfile
-	67,  // 161: stagehand.host.v1.Code.GetHieraHierarchy:output_type -> stagehand.host.v1.HieraHierarchy
-	71,  // 162: stagehand.host.v1.Code.PutHieraLevel:output_type -> stagehand.host.v1.PutHieraLevelResponse
-	71,  // 163: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:output_type -> stagehand.host.v1.PutHieraLevelResponse
-	67,  // 164: stagehand.host.v1.Code.RemoveHieraLevel:output_type -> stagehand.host.v1.HieraHierarchy
-	67,  // 165: stagehand.host.v1.Code.ReorderHieraLevels:output_type -> stagehand.host.v1.HieraHierarchy
-	76,  // 166: stagehand.host.v1.Code.ListHieraDataFiles:output_type -> stagehand.host.v1.ListHieraDataFilesResponse
-	74,  // 167: stagehand.host.v1.Code.GetHieraDataFile:output_type -> stagehand.host.v1.HieraDataFile
-	74,  // 168: stagehand.host.v1.Code.PutHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
-	74,  // 169: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:output_type -> stagehand.host.v1.HieraDataFile
-	74,  // 170: stagehand.host.v1.Code.RemoveHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
-	99,  // 171: stagehand.host.v1.Code.DeleteHieraDataFile:output_type -> google.protobuf.Empty
-	84,  // 172: stagehand.host.v1.Forge.Search:output_type -> stagehand.host.v1.SearchResponse
-	87,  // 173: stagehand.host.v1.Forge.Resolve:output_type -> stagehand.host.v1.ResolveResponse
-	119, // [119:174] is the sub-list for method output_type
-	64,  // [64:119] is the sub-list for method input_type
-	64,  // [64:64] is the sub-list for extension type_name
-	64,  // [64:64] is the sub-list for extension extendee
-	0,   // [0:64] is the sub-list for field type_name
+	101, // 54: stagehand.host.v1.SearchResponse.page:type_name -> stagehand.host.v1.PageInfo
+	99,  // 55: stagehand.host.v1.ForgeSearchResult.release_date:type_name -> google.protobuf.Timestamp
+	81,  // 56: stagehand.host.v1.RecommendRequest.sources:type_name -> stagehand.host.v1.ForgeSourceSelection
+	85,  // 57: stagehand.host.v1.RecommendedModule.module:type_name -> stagehand.host.v1.ForgeSearchResult
+	87,  // 58: stagehand.host.v1.RecommendResponse.suggestions:type_name -> stagehand.host.v1.RecommendedModule
+	92,  // 59: stagehand.host.v1.RecommendResponse.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
+	81,  // 60: stagehand.host.v1.ResolveRequest.source:type_name -> stagehand.host.v1.ForgeSourceSelection
+	91,  // 61: stagehand.host.v1.ResolveResponse.root:type_name -> stagehand.host.v1.DependencyNode
+	92,  // 62: stagehand.host.v1.ResolveResponse.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
+	91,  // 63: stagehand.host.v1.DependencyNode.dependencies:type_name -> stagehand.host.v1.DependencyNode
+	92,  // 64: stagehand.host.v1.DependencyNode.warnings:type_name -> stagehand.host.v1.ForgeAdvisoryWarning
+	98,  // 65: stagehand.host.v1.Node.FactsEntry.value:type_name -> stagehand.host.v1.Json
+	98,  // 66: stagehand.host.v1.PutFactsRequest.FactsEntry.value:type_name -> stagehand.host.v1.Json
+	98,  // 67: stagehand.host.v1.HieraDataFile.ValuesEntry.value:type_name -> stagehand.host.v1.Json
+	4,   // 68: stagehand.host.v1.Documents.Get:input_type -> stagehand.host.v1.GetDocumentRequest
+	5,   // 69: stagehand.host.v1.Documents.Put:input_type -> stagehand.host.v1.PutDocumentRequest
+	7,   // 70: stagehand.host.v1.Documents.List:input_type -> stagehand.host.v1.ListDocumentsRequest
+	9,   // 71: stagehand.host.v1.Documents.Query:input_type -> stagehand.host.v1.QueryDocumentsRequest
+	10,  // 72: stagehand.host.v1.Documents.Delete:input_type -> stagehand.host.v1.DeleteDocumentRequest
+	102, // 73: stagehand.host.v1.Settings.Current:input_type -> google.protobuf.Empty
+	102, // 74: stagehand.host.v1.Settings.Subscribe:input_type -> google.protobuf.Empty
+	13,  // 75: stagehand.host.v1.Secrets.Store:input_type -> stagehand.host.v1.StoreSecretRequest
+	14,  // 76: stagehand.host.v1.Secrets.Reveal:input_type -> stagehand.host.v1.SecretRef
+	15,  // 77: stagehand.host.v1.Secrets.Seal:input_type -> stagehand.host.v1.SecretValue
+	16,  // 78: stagehand.host.v1.Secrets.Open:input_type -> stagehand.host.v1.Sealed
+	14,  // 79: stagehand.host.v1.Secrets.Delete:input_type -> stagehand.host.v1.SecretRef
+	17,  // 80: stagehand.host.v1.Auth.IssueToken:input_type -> stagehand.host.v1.IssueTokenRequest
+	19,  // 81: stagehand.host.v1.Auth.Verify:input_type -> stagehand.host.v1.VerifyTokenRequest
+	21,  // 82: stagehand.host.v1.Auth.Revoke:input_type -> stagehand.host.v1.TokenRef
+	23,  // 83: stagehand.host.v1.Inventory.GetNode:input_type -> stagehand.host.v1.GetNodeRequest
+	102, // 84: stagehand.host.v1.Inventory.Discover:input_type -> google.protobuf.Empty
+	25,  // 85: stagehand.host.v1.Inventory.ListNodes:input_type -> stagehand.host.v1.ListNodesRequest
+	27,  // 86: stagehand.host.v1.Inventory.QueryNodes:input_type -> stagehand.host.v1.QueryNodesRequest
+	28,  // 87: stagehand.host.v1.Inventory.PutFacts:input_type -> stagehand.host.v1.PutFactsRequest
+	102, // 88: stagehand.host.v1.Inventory.ListGroups:input_type -> google.protobuf.Empty
+	32,  // 89: stagehand.host.v1.Inventory.ListGroupNodes:input_type -> stagehand.host.v1.ListGroupNodesRequest
+	33,  // 90: stagehand.host.v1.Inventory.ListNodeGroups:input_type -> stagehand.host.v1.ListNodeGroupsRequest
+	34,  // 91: stagehand.host.v1.Inventory.AddNodeToGroup:input_type -> stagehand.host.v1.GroupMembershipRequest
+	30,  // 92: stagehand.host.v1.Inventory.ListClasses:input_type -> stagehand.host.v1.GroupRef
+	37,  // 93: stagehand.host.v1.Inventory.OnboardNode:input_type -> stagehand.host.v1.OnboardNodeRequest
+	44,  // 94: stagehand.host.v1.Code.ListEnvironments:input_type -> stagehand.host.v1.ListEnvironmentsRequest
+	46,  // 95: stagehand.host.v1.Code.GetEnvironment:input_type -> stagehand.host.v1.GetEnvironmentRequest
+	47,  // 96: stagehand.host.v1.Code.CreateEnvironment:input_type -> stagehand.host.v1.CreateEnvironmentRequest
+	48,  // 97: stagehand.host.v1.Code.RenameEnvironment:input_type -> stagehand.host.v1.RenameEnvironmentRequest
+	49,  // 98: stagehand.host.v1.Code.DeleteEnvironment:input_type -> stagehand.host.v1.DeleteEnvironmentRequest
+	50,  // 99: stagehand.host.v1.Code.DuplicateEnvironment:input_type -> stagehand.host.v1.DuplicateEnvironmentRequest
+	38,  // 100: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:input_type -> stagehand.host.v1.ApplyEnvironmentDuplicateRequest
+	52,  // 101: stagehand.host.v1.Code.GetEnvironmentSettings:input_type -> stagehand.host.v1.GetEnvironmentSettingsRequest
+	53,  // 102: stagehand.host.v1.Code.PutEnvironmentSettings:input_type -> stagehand.host.v1.PutEnvironmentSettingsRequest
+	39,  // 103: stagehand.host.v1.Code.ApplyEnvironmentSettings:input_type -> stagehand.host.v1.ApplyEnvironmentSettingsRequest
+	59,  // 104: stagehand.host.v1.Code.ListPuppetfileModules:input_type -> stagehand.host.v1.ListPuppetfileModulesRequest
+	61,  // 105: stagehand.host.v1.Code.PutPuppetfileModule:input_type -> stagehand.host.v1.PutPuppetfileModuleRequest
+	40,  // 106: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:input_type -> stagehand.host.v1.ApplyPuppetfileModuleOverwriteRequest
+	62,  // 107: stagehand.host.v1.Code.RemovePuppetfileModule:input_type -> stagehand.host.v1.RemovePuppetfileModuleRequest
+	63,  // 108: stagehand.host.v1.Code.SetModuledir:input_type -> stagehand.host.v1.SetModuledirRequest
+	64,  // 109: stagehand.host.v1.Code.RenderPuppetfile:input_type -> stagehand.host.v1.RenderPuppetfileRequest
+	69,  // 110: stagehand.host.v1.Code.GetHieraHierarchy:input_type -> stagehand.host.v1.GetHieraHierarchyRequest
+	70,  // 111: stagehand.host.v1.Code.PutHieraLevel:input_type -> stagehand.host.v1.PutHieraLevelRequest
+	41,  // 112: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:input_type -> stagehand.host.v1.ApplyHieraLevelOverwriteRequest
+	72,  // 113: stagehand.host.v1.Code.RemoveHieraLevel:input_type -> stagehand.host.v1.RemoveHieraLevelRequest
+	73,  // 114: stagehand.host.v1.Code.ReorderHieraLevels:input_type -> stagehand.host.v1.ReorderHieraLevelsRequest
+	75,  // 115: stagehand.host.v1.Code.ListHieraDataFiles:input_type -> stagehand.host.v1.ListHieraDataFilesRequest
+	77,  // 116: stagehand.host.v1.Code.GetHieraDataFile:input_type -> stagehand.host.v1.GetHieraDataFileRequest
+	78,  // 117: stagehand.host.v1.Code.PutHieraDataKey:input_type -> stagehand.host.v1.PutHieraDataKeyRequest
+	42,  // 118: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:input_type -> stagehand.host.v1.ApplyHieraDataKeyOverwriteRequest
+	79,  // 119: stagehand.host.v1.Code.RemoveHieraDataKey:input_type -> stagehand.host.v1.RemoveHieraDataKeyRequest
+	80,  // 120: stagehand.host.v1.Code.DeleteHieraDataFile:input_type -> stagehand.host.v1.DeleteHieraDataFileRequest
+	83,  // 121: stagehand.host.v1.Forge.Search:input_type -> stagehand.host.v1.SearchRequest
+	89,  // 122: stagehand.host.v1.Forge.Resolve:input_type -> stagehand.host.v1.ResolveRequest
+	86,  // 123: stagehand.host.v1.Forge.Recommend:input_type -> stagehand.host.v1.RecommendRequest
+	3,   // 124: stagehand.host.v1.Documents.Get:output_type -> stagehand.host.v1.Document
+	6,   // 125: stagehand.host.v1.Documents.Put:output_type -> stagehand.host.v1.PutDocumentResponse
+	8,   // 126: stagehand.host.v1.Documents.List:output_type -> stagehand.host.v1.ListDocumentsResponse
+	8,   // 127: stagehand.host.v1.Documents.Query:output_type -> stagehand.host.v1.ListDocumentsResponse
+	102, // 128: stagehand.host.v1.Documents.Delete:output_type -> google.protobuf.Empty
+	11,  // 129: stagehand.host.v1.Settings.Current:output_type -> stagehand.host.v1.SettingsDocument
+	12,  // 130: stagehand.host.v1.Settings.Subscribe:output_type -> stagehand.host.v1.SettingsChange
+	14,  // 131: stagehand.host.v1.Secrets.Store:output_type -> stagehand.host.v1.SecretRef
+	15,  // 132: stagehand.host.v1.Secrets.Reveal:output_type -> stagehand.host.v1.SecretValue
+	16,  // 133: stagehand.host.v1.Secrets.Seal:output_type -> stagehand.host.v1.Sealed
+	15,  // 134: stagehand.host.v1.Secrets.Open:output_type -> stagehand.host.v1.SecretValue
+	102, // 135: stagehand.host.v1.Secrets.Delete:output_type -> google.protobuf.Empty
+	18,  // 136: stagehand.host.v1.Auth.IssueToken:output_type -> stagehand.host.v1.IssuedToken
+	20,  // 137: stagehand.host.v1.Auth.Verify:output_type -> stagehand.host.v1.Principal
+	102, // 138: stagehand.host.v1.Auth.Revoke:output_type -> google.protobuf.Empty
+	22,  // 139: stagehand.host.v1.Inventory.GetNode:output_type -> stagehand.host.v1.Node
+	24,  // 140: stagehand.host.v1.Inventory.Discover:output_type -> stagehand.host.v1.DiscoverResponse
+	26,  // 141: stagehand.host.v1.Inventory.ListNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	26,  // 142: stagehand.host.v1.Inventory.QueryNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	22,  // 143: stagehand.host.v1.Inventory.PutFacts:output_type -> stagehand.host.v1.Node
+	31,  // 144: stagehand.host.v1.Inventory.ListGroups:output_type -> stagehand.host.v1.GroupList
+	26,  // 145: stagehand.host.v1.Inventory.ListGroupNodes:output_type -> stagehand.host.v1.ListNodesResponse
+	31,  // 146: stagehand.host.v1.Inventory.ListNodeGroups:output_type -> stagehand.host.v1.GroupList
+	102, // 147: stagehand.host.v1.Inventory.AddNodeToGroup:output_type -> google.protobuf.Empty
+	36,  // 148: stagehand.host.v1.Inventory.ListClasses:output_type -> stagehand.host.v1.ClassList
+	22,  // 149: stagehand.host.v1.Inventory.OnboardNode:output_type -> stagehand.host.v1.Node
+	45,  // 150: stagehand.host.v1.Code.ListEnvironments:output_type -> stagehand.host.v1.ListEnvironmentsResponse
+	43,  // 151: stagehand.host.v1.Code.GetEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 152: stagehand.host.v1.Code.CreateEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 153: stagehand.host.v1.Code.RenameEnvironment:output_type -> stagehand.host.v1.Environment
+	102, // 154: stagehand.host.v1.Code.DeleteEnvironment:output_type -> google.protobuf.Empty
+	43,  // 155: stagehand.host.v1.Code.DuplicateEnvironment:output_type -> stagehand.host.v1.Environment
+	43,  // 156: stagehand.host.v1.Code.ApplyEnvironmentDuplicate:output_type -> stagehand.host.v1.Environment
+	51,  // 157: stagehand.host.v1.Code.GetEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	51,  // 158: stagehand.host.v1.Code.PutEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	51,  // 159: stagehand.host.v1.Code.ApplyEnvironmentSettings:output_type -> stagehand.host.v1.EnvironmentSettings
+	60,  // 160: stagehand.host.v1.Code.ListPuppetfileModules:output_type -> stagehand.host.v1.ListPuppetfileModulesResponse
+	54,  // 161: stagehand.host.v1.Code.PutPuppetfileModule:output_type -> stagehand.host.v1.PuppetfileModule
+	54,  // 162: stagehand.host.v1.Code.ApplyPuppetfileModuleOverwrite:output_type -> stagehand.host.v1.PuppetfileModule
+	102, // 163: stagehand.host.v1.Code.RemovePuppetfileModule:output_type -> google.protobuf.Empty
+	58,  // 164: stagehand.host.v1.Code.SetModuledir:output_type -> stagehand.host.v1.Puppetfile
+	65,  // 165: stagehand.host.v1.Code.RenderPuppetfile:output_type -> stagehand.host.v1.RenderedPuppetfile
+	67,  // 166: stagehand.host.v1.Code.GetHieraHierarchy:output_type -> stagehand.host.v1.HieraHierarchy
+	71,  // 167: stagehand.host.v1.Code.PutHieraLevel:output_type -> stagehand.host.v1.PutHieraLevelResponse
+	71,  // 168: stagehand.host.v1.Code.ApplyHieraLevelOverwrite:output_type -> stagehand.host.v1.PutHieraLevelResponse
+	67,  // 169: stagehand.host.v1.Code.RemoveHieraLevel:output_type -> stagehand.host.v1.HieraHierarchy
+	67,  // 170: stagehand.host.v1.Code.ReorderHieraLevels:output_type -> stagehand.host.v1.HieraHierarchy
+	76,  // 171: stagehand.host.v1.Code.ListHieraDataFiles:output_type -> stagehand.host.v1.ListHieraDataFilesResponse
+	74,  // 172: stagehand.host.v1.Code.GetHieraDataFile:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 173: stagehand.host.v1.Code.PutHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 174: stagehand.host.v1.Code.ApplyHieraDataKeyOverwrite:output_type -> stagehand.host.v1.HieraDataFile
+	74,  // 175: stagehand.host.v1.Code.RemoveHieraDataKey:output_type -> stagehand.host.v1.HieraDataFile
+	102, // 176: stagehand.host.v1.Code.DeleteHieraDataFile:output_type -> google.protobuf.Empty
+	84,  // 177: stagehand.host.v1.Forge.Search:output_type -> stagehand.host.v1.SearchResponse
+	90,  // 178: stagehand.host.v1.Forge.Resolve:output_type -> stagehand.host.v1.ResolveResponse
+	88,  // 179: stagehand.host.v1.Forge.Recommend:output_type -> stagehand.host.v1.RecommendResponse
+	124, // [124:180] is the sub-list for method output_type
+	68,  // [68:124] is the sub-list for method input_type
+	68,  // [68:68] is the sub-list for extension type_name
+	68,  // [68:68] is the sub-list for extension extendee
+	0,   // [0:68] is the sub-list for field type_name
 }
 
 func init() { file_stagehand_host_v1_host_proto_init() }
@@ -6025,7 +6285,7 @@ func file_stagehand_host_v1_host_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_stagehand_host_v1_host_proto_rawDesc), len(file_stagehand_host_v1_host_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   92,
+			NumMessages:   95,
 			NumExtensions: 0,
 			NumServices:   7,
 		},
