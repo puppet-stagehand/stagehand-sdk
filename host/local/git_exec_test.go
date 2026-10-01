@@ -3,7 +3,11 @@ package local
 import (
 	"context"
 	"fmt"
+	"net/http"
+	"net/http/cgi"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -785,6 +789,332 @@ done`)
 		c := newTestExecClient(t)
 		if _, err := c.ListBranches(ctx, GitRemote{URL: repo.URL}); err != nil {
 			t.Fatalf("git 2.32.0 was refused: %v", err)
+		}
+	})
+}
+
+// ------------------------------------------------ credential hygiene
+
+const (
+	hygieneUser  = "ci-bot"
+	hygieneToken = "TOKEN-SENTINEL-s3cr3t-value"
+	hygieneKey   = "-----BEGIN OPENSSH PRIVATE KEY-----\nKEYBODY-SENTINEL-AAAAB3NzaC1yc2EAAAADAQABAAABAQ\n-----END OPENSSH PRIVATE KEY-----\n"
+)
+
+// newAuthGitServer serves repoPath over real smart HTTP through git
+// http-backend, behind HTTP Basic auth, so the https credential path is
+// exercised end to end including a shallow fetch (RESEARCH A9). It is plain
+// http, so the tests that use it set allowedProtocols to "http" and bypass the
+// Go validator; the protocol allowlist itself is proven elsewhere.
+func newAuthGitServer(t *testing.T, repoPath, user, token string) *httptest.Server {
+	t.Helper()
+	gitBin := requireGit(t)
+	out, err := exec.Command(gitBin, "--exec-path").Output()
+	if err != nil {
+		t.Skipf("git --exec-path failed: %v", err)
+	}
+	backend := filepath.Join(strings.TrimSpace(string(out)), "git-http-backend")
+	if _, err := os.Stat(backend); err != nil {
+		t.Skipf("git-http-backend is not installed (%s); the authenticated smart-HTTP tests need it", backend)
+	}
+	h := &cgi.Handler{
+		Path: backend,
+		Env: []string{
+			"GIT_PROJECT_ROOT=" + filepath.Dir(repoPath),
+			"GIT_HTTP_EXPORT_ALL=1",
+			"GIT_CONFIG_GLOBAL=/dev/null",
+			"GIT_CONFIG_NOSYSTEM=1",
+			"HOME=" + t.TempDir(),
+			"PATH=" + os.Getenv("PATH"),
+		},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || u != user || p != token {
+			w.Header().Set("WWW-Authenticate", `Basic realm="stagehand-test"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newHTTPTestClient is newTestExecClient for the plain-http auth server.
+func newHTTPTestClient(t *testing.T) *execGitClient {
+	t.Helper()
+	c := newTestExecClient(t)
+	c.allowedProtocols = "http"
+	return c
+}
+
+// loggingShim installs a git shim that, for every invocation, appends a block
+// to the returned log: the argv, the askpass script's mode, the ssh key's
+// path and mode, and the full environment. It is how the credential tests
+// observe what a real invocation was actually handed.
+func loggingShim(t *testing.T) (logPath string) {
+	t.Helper()
+	logPath = filepath.Join(t.TempDir(), "git-calls.log")
+	installGitShim(t, `{
+  echo "=== ARGV: $*"
+  if [ -n "$GIT_ASKPASS" ]; then echo "ASKPASS-PATH: $GIT_ASKPASS"; echo "ASKPASS-LS: $(ls -l "$GIT_ASKPASS" 2>&1)"; fi
+  if [ -n "$GIT_SSH_COMMAND" ]; then
+    key=$(printf '%s' "$GIT_SSH_COMMAND" | sed -n "s/.* -i '\([^']*\)'.*/\1/p")
+    if [ -n "$key" ]; then echo "KEY-PATH: $key"; echo "KEY-LS: $(ls -l "$key" 2>&1)"; fi
+  fi
+  env | sort
+} >> `+shellQuote(logPath))
+	return logPath
+}
+
+// shimBlock is one logged git invocation.
+type shimBlock struct {
+	argv  string
+	lines []string
+}
+
+func (b shimBlock) has(prefix string) (string, bool) {
+	for _, l := range b.lines {
+		if v, ok := strings.CutPrefix(l, prefix); ok {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+func readShimLog(t *testing.T, path string) []shimBlock {
+	t.Helper()
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the shim logged nothing: %v", err)
+	}
+	var blocks []shimBlock
+	for _, chunk := range strings.Split(string(raw), "=== ARGV: ")[1:] {
+		lines := strings.Split(strings.TrimRight(chunk, "\n"), "\n")
+		blocks = append(blocks, shimBlock{argv: lines[0], lines: lines[1:]})
+	}
+	if len(blocks) == 0 {
+		t.Fatal("the shim log has no invocations")
+	}
+	return blocks
+}
+
+func TestGitExec_CredentialHygiene(t *testing.T) {
+	requireGit(t)
+	repo := newTempBareRepo(t)
+
+	t.Run("https token reaches git only through the environment", func(t *testing.T) {
+		srv := newAuthGitServer(t, repo.Path, hygieneUser, hygieneToken)
+		logPath := loggingShim(t)
+		c := newHTTPTestClient(t)
+		remote := GitRemote{
+			URL:        srv.URL + "/" + filepath.Base(repo.Path),
+			Credential: &GitCredential{Kind: GitCredentialHTTPSToken, Username: hygieneUser, Token: hygieneToken},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+
+		refs, err := c.ListBranches(ctx, remote)
+		if err != nil || len(refs) != 2 {
+			t.Fatalf("authenticated ListBranches = %+v, %v", refs, err)
+		}
+		r, err := c.Open(ctx, remote, []string{"production"})
+		if err != nil {
+			t.Fatalf("authenticated Open: %v", err)
+		}
+		body, err := r.ReadFile("production", "Puppetfile")
+		if err != nil || string(body) != tempRepoProdPuppetfile {
+			t.Fatalf("authenticated ReadFile = %q, %v", body, err)
+		}
+
+		blocks := readShimLog(t, logPath)
+		sawToken := false
+		for _, b := range blocks {
+			if strings.Contains(b.argv, hygieneToken) {
+				t.Fatalf("the token is in argv: %q", b.argv)
+			}
+			if strings.Contains(b.argv, hygieneUser+"@") || strings.Contains(b.argv, "://"+hygieneUser) {
+				t.Fatalf("userinfo is in the url: %q", b.argv)
+			}
+			if _, ok := b.has("STAGEHAND_GIT_TOKEN=" + hygieneToken); ok {
+				sawToken = true
+				// Only network invocations may carry it.
+				if !strings.Contains(b.argv, " fetch ") && !strings.Contains(b.argv, "ls-remote") {
+					t.Fatalf("the token reached a local-only invocation: %q", b.argv)
+				}
+				if v, _ := b.has("HOME="); strings.HasPrefix(v, os.Getenv("HOME")) && os.Getenv("HOME") != "" {
+					t.Fatalf("HOME on the https path is the real home: %q", v)
+				}
+				if v, _ := b.has("HOME="); !strings.HasPrefix(v, c.tempRoot) {
+					t.Fatalf("HOME on the https path = %q, want inside %q", v, c.tempRoot)
+				}
+				ls, ok := b.has("ASKPASS-LS: ")
+				if !ok || !strings.HasPrefix(ls, "-rwx------") {
+					t.Fatalf("askpass script listing = %q, want mode 0700", ls)
+				}
+				if v, _ := b.has("STAGEHAND_GIT_USERNAME="); v != hygieneUser {
+					t.Fatalf("username was not passed by environment: %q", v)
+				}
+				if !strings.Contains(b.argv, "--") {
+					t.Fatalf("network invocation has no -- terminator: %q", b.argv)
+				}
+			}
+		}
+		if !sawToken {
+			t.Fatal("the token never reached a git invocation, so the credential path was not exercised")
+		}
+		// The script is removed as soon as the fetch finishes, not at Close.
+		for _, b := range blocks {
+			if p, ok := b.has("ASKPASS-PATH: "); ok {
+				if _, err := os.Stat(p); !os.IsNotExist(err) {
+					t.Fatalf("askpass script survived the call: %s (%v)", p, err)
+				}
+			}
+		}
+		if err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		assertTempRootEmpty(t, c.tempRoot)
+	})
+
+	t.Run("a url carrying userinfo is refused before any credential handling", func(t *testing.T) {
+		c := newExecGitClient()
+		c.tempRoot = filepath.Join(t.TempDir(), "does-not-exist")
+		_, err := c.ListBranches(context.Background(), GitRemote{
+			URL:        "https://" + hygieneUser + ":" + hygieneToken + "@example.com/x.git",
+			Credential: &GitCredential{Kind: GitCredentialHTTPSToken, Username: hygieneUser, Token: hygieneToken},
+		})
+		wantCode(t, err, codes.InvalidArgument)
+		wantNoLeak(t, err, hygieneToken, hygieneUser)
+	})
+
+	t.Run("a credential that does not fit the url is refused", func(t *testing.T) {
+		c := newExecGitClient()
+		c.tempRoot = filepath.Join(t.TempDir(), "does-not-exist")
+		for _, remote := range []GitRemote{
+			{URL: "ssh://git@example.com/x.git", Credential: &GitCredential{Kind: GitCredentialHTTPSToken, Username: "u", Token: hygieneToken}},
+			{URL: "https://example.com/x.git", Credential: &GitCredential{Kind: GitCredentialSSHKey, PrivateKey: hygieneKey}},
+			{URL: "https://example.com/x.git", Credential: &GitCredential{Kind: GitCredentialHTTPSToken, Username: "u"}},
+			{URL: "https://example.com/x.git", Credential: &GitCredential{Kind: GitCredentialHTTPSToken, Username: "u", Token: "a\nb"}},
+			{URL: "ssh://git@example.com/x.git", Credential: &GitCredential{Kind: GitCredentialSSHKey}},
+			{URL: "ssh://git@example.com/x.git", Credential: &GitCredential{Kind: "mystery", Token: hygieneToken}},
+		} {
+			_, err := c.ListBranches(context.Background(), remote)
+			wantCode(t, err, codes.InvalidArgument)
+			wantNoLeak(t, err, hygieneToken, "KEYBODY", "a\nb")
+		}
+	})
+
+	t.Run("no credential, and a wrong credential, both read as FailedPrecondition", func(t *testing.T) {
+		srv := newAuthGitServer(t, repo.Path, hygieneUser, hygieneToken)
+		c := newHTTPTestClient(t)
+		url := srv.URL + "/" + filepath.Base(repo.Path)
+		host := strings.TrimPrefix(srv.URL, "http://")
+
+		_, errNone := c.ListBranches(context.Background(), GitRemote{URL: url})
+		wantCode(t, errNone, codes.FailedPrecondition)
+		wantNoLeak(t, errNone, url, host, "terminal prompts", "Username", "fatal")
+
+		wrong := &GitCredential{Kind: GitCredentialHTTPSToken, Username: hygieneUser, Token: "not-the-token"}
+		_, errWrong := c.ListBranches(context.Background(), GitRemote{URL: url, Credential: wrong})
+		wantCode(t, errWrong, codes.FailedPrecondition)
+		wantNoLeak(t, errWrong, url, host, "not-the-token", "Authentication failed", "fatal")
+
+		r, errOpen := c.Open(context.Background(), GitRemote{URL: url, Credential: wrong}, []string{"production"})
+		if r != nil {
+			r.Close()
+		}
+		wantCode(t, errOpen, codes.FailedPrecondition)
+		if errNone.Error() != errWrong.Error() {
+			t.Fatalf("the two rejections read differently (%q vs %q)", errNone, errWrong)
+		}
+		assertTempRootEmpty(t, c.tempRoot)
+	})
+
+	t.Run("ssh key is a 0600 file named by GIT_SSH_COMMAND under a strict host-key policy", func(t *testing.T) {
+		if _, err := exec.LookPath("ssh"); err != nil {
+			t.Skip("ssh is not on PATH; the ssh credential path needs it to be invoked")
+		}
+		logPath := loggingShim(t)
+		c := newExecGitClient()
+		c.tempRoot = t.TempDir()
+		remote := GitRemote{
+			URL:        "ssh://git@127.0.0.1:1/org/repo.git",
+			Credential: &GitCredential{Kind: GitCredentialSSHKey, PrivateKey: hygieneKey},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		_, err := c.ListBranches(ctx, remote)
+		if err == nil {
+			t.Fatal("a fetch from a closed port succeeded")
+		}
+		wantNoLeak(t, err, "127.0.0.1", "KEYBODY", "BEGIN OPENSSH")
+
+		var net shimBlock
+		found := false
+		for _, b := range readShimLog(t, logPath) {
+			if strings.Contains(b.argv, "ls-remote") {
+				net, found = b, true
+			}
+		}
+		if !found {
+			t.Fatal("the ls-remote invocation was not logged")
+		}
+		cmdline, ok := net.has("GIT_SSH_COMMAND=")
+		if !ok {
+			t.Fatal("GIT_SSH_COMMAND was not set on the ssh path")
+		}
+		keyPath, _ := net.has("KEY-PATH: ")
+		if keyPath == "" || !strings.Contains(cmdline, keyPath) {
+			t.Fatalf("GIT_SSH_COMMAND %q does not name the key file %q", cmdline, keyPath)
+		}
+		for _, want := range []string{"StrictHostKeyChecking=yes", "IdentitiesOnly=yes", "BatchMode=yes"} {
+			if !strings.Contains(cmdline, want) {
+				t.Fatalf("GIT_SSH_COMMAND %q lacks %s", cmdline, want)
+			}
+		}
+		if ls, _ := net.has("KEY-LS: "); !strings.HasPrefix(ls, "-rw-------") {
+			t.Fatalf("key file listing = %q, want mode 0600", ls)
+		}
+		if v, _ := net.has("HOME="); v != os.Getenv("HOME") {
+			t.Fatalf("HOME on the ssh path = %q, want the operator's %q so known_hosts is readable", v, os.Getenv("HOME"))
+		}
+		if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
+			t.Fatalf("the key file survived the call: %s (%v)", keyPath, err)
+		}
+		raw, _ := os.ReadFile(logPath)
+		if strings.Contains(string(raw), "KEYBODY") {
+			t.Fatal("key material appears in argv or the environment")
+		}
+		assertTempRootEmpty(t, c.tempRoot)
+	})
+
+	t.Run("an anonymous ssh fetch still gets the strict policy and no key", func(t *testing.T) {
+		if _, err := exec.LookPath("ssh"); err != nil {
+			t.Skip("ssh is not on PATH; the ssh path needs it to be invoked")
+		}
+		logPath := loggingShim(t)
+		c := newExecGitClient()
+		c.tempRoot = t.TempDir()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if _, err := c.ListBranches(ctx, GitRemote{URL: "git@127.0.0.1:org/repo.git"}); err == nil {
+			t.Fatal("a fetch from an unreachable host succeeded")
+		}
+		var cmdline string
+		for _, b := range readShimLog(t, logPath) {
+			if strings.Contains(b.argv, "ls-remote") {
+				cmdline, _ = b.has("GIT_SSH_COMMAND=")
+			}
+		}
+		for _, want := range []string{"StrictHostKeyChecking=yes", "BatchMode=yes"} {
+			if !strings.Contains(cmdline, want) {
+				t.Fatalf("GIT_SSH_COMMAND %q lacks %s", cmdline, want)
+			}
+		}
+		if strings.Contains(cmdline, " -i ") {
+			t.Fatalf("an anonymous fetch named a key: %q", cmdline)
 		}
 	})
 }
