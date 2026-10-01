@@ -92,6 +92,12 @@ func describeOverwriteTarget(t code.OverwriteTarget) string {
 		return "environment " + t.Environment + " already exists and would be replaced by a copy of " + t.Source
 	case code.OverwriteResourceHieraDataKey:
 		return "environment " + t.Environment + " already has hiera data key " + t.Name + " in " + t.Path
+	case code.OverwriteResourceImport:
+		// No Put* path ever builds an import target, so the requires-approval
+		// refusals this describer feeds never fire for import. The arm exists so
+		// an unexpected import target cannot produce a sentence that misdescribes
+		// the world as an environment that already has something.
+		return "an import of branches " + t.Name + " from " + t.Source + " would replace the environments it names"
 	default:
 		return "environment " + t.Environment + " already has " + t.Resource + " " + t.Name
 	}
@@ -275,8 +281,16 @@ func (s *codeServer) resolveApplyProposalLocked(proposalID, wantResource string)
 			"overwrite proposal %q targets a %q, not a %q; use the matching Apply RPC",
 			proposalID, target.Resource, wantResource)
 	}
-	if err := validateEnvName(target.Environment); err != nil {
-		return nil, code.OverwriteTarget{}, err
+	// An import target's Environment is deliberately empty because an import
+	// spans environments: the names it will write live in the frozen snapshot,
+	// where ApplyImport's first pass validates each of them with this same
+	// validateEnvName before any write happens (D-07, D-14). Every other
+	// resource kind derives the environment it writes from this field, so it is
+	// checked here.
+	if wantResource != code.OverwriteResourceImport {
+		if err := validateEnvName(target.Environment); err != nil {
+			return nil, code.OverwriteTarget{}, err
+		}
 	}
 	return body, target, nil
 }
