@@ -1,0 +1,23 @@
+# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# "globs: (plural), uri/uris, data_dig, hiera3_backend, top-level
+# default_hierarchy". Strict parsing silently drops every one of these keys
+# (each level survives with only its name); the lenient path flags one
+# unmodelled-key warning per occurrence.
+version: 5
+default_hierarchy:
+  - name: "Fallback"
+    path: "fallback.yaml"
+hierarchy:
+  - name: "Globbed"
+    globs:
+      - "conf.d/*.yaml"
+  - name: "Single uri"
+    uri: "https://example.invalid/hiera.json"
+  - name: "Several uris"
+    uris:
+      - "https://example.invalid/a.json"
+      - "https://example.invalid/b.json"
+  - name: "Dig"
+    data_dig: my_data_dig
+  - name: "Legacy backend"
+    hiera3_backend: mysql

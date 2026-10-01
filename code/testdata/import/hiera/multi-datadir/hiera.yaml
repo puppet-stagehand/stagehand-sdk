@@ -1,0 +1,17 @@
+# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# "multiple distinct effective datadirs". The Code model has one path
+# namespace and no datadir dimension, so each file is imported by its
+# datadir-relative path and a path collision keeps the first in hierarchy
+# order. Both "data/common.yaml" and "site-data/common.yaml" map to the
+# relative path common.yaml.
+version: 5
+defaults:
+  datadir: data
+hierarchy:
+  - name: "Per-node data"
+    path: "nodes/%{trusted.certname}.yaml"
+  - name: "Site data"
+    datadir: site-data
+    path: "common.yaml"
+  - name: "Common data"
+    path: "common.yaml"

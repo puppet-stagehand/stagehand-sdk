@@ -1,0 +1,17 @@
+# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# "eyaml level (lookup_key, options, .eyaml path)". Strict parsing imports the
+# level with lookup_key and options silently dropped; the lenient path keeps
+# the raw text and flags both keys as unmodelled.
+version: 5
+defaults:
+  datadir: data
+  data_hash: yaml_data
+hierarchy:
+  - name: "Secrets"
+    lookup_key: eyaml_lookup_key
+    path: "secrets.eyaml"
+    options:
+      pkcs7_private_key: /etc/puppetlabs/puppet/eyaml/private_key.pkcs7.pem
+      pkcs7_public_key: /etc/puppetlabs/puppet/eyaml/public_key.pkcs7.pem
+  - name: "Common"
+    path: "common.yaml"

@@ -1,0 +1,14 @@
+# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# "Hiera v3 (:backends:, :hierarchy:)". The strict ParseHierarchy accepts this
+# file as version=0, levels=0 (a silent drop); the lenient path must refuse it
+# with one version error and import nothing.
+---
+:backends:
+  - yaml
+  - eyaml
+:yaml:
+  :datadir: /etc/puppetlabs/code/environments/%{::environment}/hieradata
+:hierarchy:
+  - "nodes/%{::trusted.certname}"
+  - "role/%{::role}"
+  - common
