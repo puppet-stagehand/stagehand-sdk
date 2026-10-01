@@ -54,6 +54,9 @@ const (
 	llmMaxOutputTokensExtract = 2048
 	llmMaxOutputTokensRank    = 4096
 
+	// recommendMaxCandidateSummaryRunes caps one candidate's summary before it
+	// enters the ranking prompt.
+	recommendMaxCandidateSummaryRunes = 300
 	// recommendMaxReasoningRunes caps the LLM-authored reasoning text.
 	recommendMaxReasoningRunes = 400
 	// recommendMaxModuleEchoRunes caps an LLM-supplied module name echoed
@@ -303,6 +306,16 @@ func mergeInterleaved(lists [][]*hostv1.ForgeSearchResult, max int) (kept []*hos
 			return kept, dropped
 		}
 	}
+}
+
+func decodeExtractReply(raw string) (extractReply, error) {
+	var r extractReply
+	return r, decodeStrict(raw, &r)
+}
+
+func decodeRankReply(raw string) (rankReply, error) {
+	var r rankReply
+	return r, decodeStrict(raw, &r)
 }
 
 // Recommend implements the Forge.Recommend RPC.
