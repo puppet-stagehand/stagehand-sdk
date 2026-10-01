@@ -188,9 +188,13 @@ func (c *execGitClient) probeVersion() error {
 }
 
 // gitCall is the per-call scratch space: one private temp directory, which is
-// also the child's working directory and HOME, and the child's environment.
+// also the child's working directory and HOME (except on the ssh path, see
+// newCall), and the child's environments. env is the network environment and
+// may carry a credential; localEnv never does and is the only environment the
+// long-lived repo reader keeps.
 type gitCall struct {
 	dir      string
+	credDir  string
 	env      []string
 	localEnv []string
 }
@@ -199,15 +203,162 @@ type gitCall struct {
 // at the point of creation, so it also runs on an error return and a panic.
 func (g *gitCall) cleanup() error { return os.RemoveAll(g.dir) }
 
-// newCall creates the per-call temp directory (0700, from os.MkdirTemp) and
-// builds the scrubbed child environment.
-func (c *execGitClient) newCall() (*gitCall, error) {
+// dropCredentials removes the askpass script and the key file and forgets the
+// network environment, so a credential exists for the duration of one network
+// invocation and not for the lifetime of an opened repo.
+func (g *gitCall) dropCredentials() {
+	if g.credDir != "" {
+		_ = os.RemoveAll(g.credDir)
+	}
+	g.env = nil
+}
+
+// isSSHRemote reports whether raw would be dialled over ssh: an ssh:// URL or
+// the scp-style user@host:path form.
+func isSSHRemote(raw string) bool {
+	if strings.Contains(raw, "://") {
+		return strings.HasPrefix(strings.ToLower(raw), "ssh://")
+	}
+	return true
+}
+
+// checkCredential refuses a credential that cannot be used safely with the
+// URL it accompanies, before any temp directory or file exists. Messages are
+// static and never quote a credential field (D-02, T-10-11).
+func checkCredential(r GitRemote) error {
+	cred := r.Credential
+	if cred == nil {
+		return nil
+	}
+	bad := func(why string) error { return status.Error(codes.InvalidArgument, "git credential "+why) }
+	if strings.ContainsAny(cred.Username, "\x00\r\n") || strings.ContainsAny(cred.Token, "\x00\r\n") || strings.Contains(cred.PrivateKey, "\x00") {
+		return bad("is not usable")
+	}
+	ssh := isSSHRemote(r.URL)
+	switch cred.Kind {
+	case GitCredentialHTTPSToken:
+		if ssh {
+			return bad("does not fit an ssh url")
+		}
+		if cred.Token == "" {
+			return bad("is not usable")
+		}
+	case GitCredentialSSHKey:
+		if !ssh {
+			return bad("does not fit an https url")
+		}
+		if cred.PrivateKey == "" {
+			return bad("is not usable")
+		}
+	default:
+		return bad("is not usable")
+	}
+	return nil
+}
+
+// askpassScript is the static GIT_ASKPASS helper. It holds no secret: it
+// prints the username or token from the child's environment depending on
+// which prompt git passes it. git asks "Username for ..." first and
+// "Password for ..." second.
+const askpassScript = `#!/bin/sh
+case "$1" in
+  [Uu]sername*) printf '%s\n' "$STAGEHAND_GIT_USERNAME" ;;
+  *) printf '%s\n' "$STAGEHAND_GIT_TOKEN" ;;
+esac
+`
+
+// sshCommand builds GIT_SSH_COMMAND. The key is named by path, never by
+// content. StrictHostKeyChecking=yes checks the host against the operator's
+// existing known_hosts and BatchMode=yes forbids any prompt; IdentitiesOnly
+// stops ssh offering other keys when one is supplied (DQ-7, T-10-37).
+func sshCommand(keyPath string) string {
+	cmd := "ssh"
+	if keyPath != "" {
+		cmd += " -i " + shellSingleQuote(keyPath) + " -o IdentitiesOnly=yes"
+	}
+	return cmd + " -o BatchMode=yes -o StrictHostKeyChecking=yes"
+}
+
+// shellSingleQuote quotes s for the POSIX shell git runs GIT_SSH_COMMAND with.
+func shellSingleQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+
+// newCall creates the per-call temp directory (0700, from os.MkdirTemp), the
+// scrubbed child environments, and any credential files. A credential reaches
+// git by exactly two routes and no others: an https token through a GIT_ASKPASS
+// script in a 0700 directory that reads STAGEHAND_GIT_USERNAME and
+// STAGEHAND_GIT_TOKEN from the child's environment, and an ssh key through a
+// 0600 file named by GIT_SSH_COMMAND -i. Never argv, never the URL, never
+// persisted (D-02, RESEARCH Pitfall 7, T-10-11).
+//
+// HOME is the temp directory on every path except ssh. The ssh path needs the
+// operator's real HOME for exactly one reason: StrictHostKeyChecking=yes reads
+// the operator's ~/.ssh/known_hosts. That single passthrough is what the
+// host-key policy costs (DQ-7, T-10-37); nothing else reads it, and the
+// operator's git config is still ignored through GIT_CONFIG_GLOBAL.
+//
+// Documented fallback, not used: git >= 2.31 can carry an https token as
+// GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0=http.<url>.extraHeader. It would need URL
+// scoping so the header is not re-sent after a redirect, which is why askpass,
+// where git itself decides which host receives the secret, is the chosen route.
+func (c *execGitClient) newCall(r GitRemote) (*gitCall, error) {
 	dir, err := os.MkdirTemp(c.tempRoot, "stagehand-git-")
 	if err != nil {
 		return nil, status.Error(codes.Internal, "git scratch directory could not be created")
 	}
-	env := c.baseEnv(dir)
-	return &gitCall{dir: dir, env: env, localEnv: env}, nil
+	call := &gitCall{dir: dir, localEnv: c.baseEnv(dir)}
+	ssh := isSSHRemote(r.URL)
+	home := dir
+	if ssh {
+		if h := os.Getenv("HOME"); h != "" {
+			home = h
+		}
+	}
+	call.env = c.baseEnv(home)
+
+	fail := func() (*gitCall, error) {
+		call.cleanup()
+		return nil, status.Error(codes.Internal, "git credential could not be prepared")
+	}
+	keyPath := ""
+	if cred := r.Credential; cred != nil {
+		call.credDir = filepath.Join(dir, "cred")
+		if err := os.Mkdir(call.credDir, 0o700); err != nil {
+			return fail()
+		}
+		switch cred.Kind {
+		case GitCredentialHTTPSToken:
+			script := filepath.Join(call.credDir, "askpass.sh")
+			if err := writeFileMode(script, []byte(askpassScript), 0o700); err != nil {
+				return fail()
+			}
+			call.env = append(call.env,
+				"GIT_ASKPASS="+script,
+				"STAGEHAND_GIT_USERNAME="+cred.Username,
+				"STAGEHAND_GIT_TOKEN="+cred.Token,
+			)
+		case GitCredentialSSHKey:
+			keyPath = filepath.Join(call.credDir, "id_key")
+			key := cred.PrivateKey
+			if !strings.HasSuffix(key, "\n") {
+				key += "\n" // ssh refuses a key without a trailing newline
+			}
+			if err := writeFileMode(keyPath, []byte(key), 0o600); err != nil {
+				return fail()
+			}
+		}
+	}
+	if ssh {
+		call.env = append(call.env, "GIT_SSH_COMMAND="+sshCommand(keyPath))
+	}
+	return call, nil
+}
+
+// writeFileMode writes data with exactly mode, whatever the umask.
+func writeFileMode(path string, data []byte, mode os.FileMode) error {
+	if err := os.WriteFile(path, data, mode); err != nil {
+		return err
+	}
+	return os.Chmod(path, mode)
 }
 
 // baseEnv is the scrubbed environment every git child runs under: no operator
@@ -469,7 +620,10 @@ func (c *execGitClient) ListBranches(ctx context.Context, r GitRemote) ([]GitBra
 	if err := c.validateURL(r.URL); err != nil {
 		return nil, err
 	}
-	call, err := c.newCall()
+	if err := checkCredential(r); err != nil {
+		return nil, err
+	}
+	call, err := c.newCall(r)
 	if err != nil {
 		return nil, err
 	}
@@ -505,6 +659,9 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 	if err := c.validateURL(r.URL); err != nil {
 		return nil, err
 	}
+	if err := checkCredential(r); err != nil {
+		return nil, err
+	}
 	if len(branches) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "git open needs at least one branch")
 	}
@@ -526,7 +683,7 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 	if len(branches) > c.maxBranches {
 		return nil, status.Errorf(codes.FailedPrecondition, "git open names more branches than the limit of %d", c.maxBranches)
 	}
-	call, err := c.newCall()
+	call, err := c.newCall(r)
 	if err != nil {
 		return nil, err
 	}
@@ -547,8 +704,11 @@ func (c *execGitClient) Open(ctx context.Context, r GitRemote, branches []string
 		fetchArgs = append(fetchArgs, "+refs/heads/"+b+":refs/heads/"+b)
 	}
 	fetch := gitRun{timeout: c.fetchTimeout, stdoutLimit: c.maxLsRemoteBytes, watchDir: call.dir, maxDirBytes: c.maxRepoBytes}
-	if _, err := c.run(ctx, call.env, call.dir, fetch, fetchArgs...); err != nil {
-		return nil, err
+	_, fetchErr := c.run(ctx, call.env, call.dir, fetch, fetchArgs...)
+	// The credential has done its one job; do not hold it for the repo's life.
+	call.dropCredentials()
+	if fetchErr != nil {
+		return nil, fetchErr
 	}
 
 	commits := make(map[string]string, len(branches))
