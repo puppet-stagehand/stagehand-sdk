@@ -478,14 +478,14 @@ func TestAnalyzeBranch_DataBudget(t *testing.T) {
 
 	t.Run("total_snapshot_cap_is_enforced_the_same_way", func(t *testing.T) {
 		m := dataBranch(4)
-		lim := ImportLimits{MaxSnapshotBytes: 45} // 26 bytes of hiera.yaml leave room for one 10-byte file
+		lim := ImportLimits{MaxSnapshotBytes: 40} // 25 bytes of hiera.yaml leave room for one 10-byte file
 		snap, fs := AnalyzeBranch("production", m, lim)
 		wantKindSev(t, fs, ks(FindingBranchDataCapExceeded, sevW))
 		if !strings.Contains(fs[0].GetMessage(), "MaxSnapshotBytes") {
 			t.Errorf("the warning must name the total cap: %q", fs[0].GetMessage())
 		}
-		if got := snapshotBytes(snap); got > 45 {
-			t.Fatalf("snapshot is %d bytes, over the 45-byte total cap", got)
+		if got := snapshotBytes(snap); got > 40 {
+			t.Fatalf("snapshot is %d bytes, over the 40-byte total cap", got)
 		}
 		if len(snap.GetDataFiles()) != 1 {
 			t.Fatalf("data files = %v", dataPaths(snap))

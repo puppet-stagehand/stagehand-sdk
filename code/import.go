@@ -286,6 +286,11 @@ type branchAnalyzer struct {
 	lim    ImportLimits
 	fl     *findingList
 	snap   *hostv1.ImportBranchSnapshot
+	// usedBytes is the stored size of every text in the snapshot so far, and
+	// dataBytes the part of it that is data files: the two budgets the data
+	// walk enforces from the sizes ImportFS reports (D-12, DQ-8).
+	usedBytes int64
+	dataBytes int64
 }
 
 // add stamps fs with the branch and file and adds each under the branch's
@@ -438,6 +443,7 @@ func (a *branchAnalyzer) importPuppetfile(text string) {
 		return
 	}
 	a.snap.PuppetfileText = rendered
+	a.usedBytes += int64(len(rendered))
 }
 
 // hierarchyReadPath requires strict ParseHierarchy to read the retained text
@@ -467,6 +473,7 @@ func (a *branchAnalyzer) importHiera(text string) (*hostv1.HieraHierarchy, bool)
 		return nil, false
 	}
 	a.snap.HieraYaml = raw
+	a.usedBytes += int64(len(raw))
 	return h, true
 }
 
@@ -549,51 +556,92 @@ func (a *branchAnalyzer) importData(h *hostv1.HieraHierarchy) {
 		}
 	}
 
-	claimed := map[string]string{} // relative path -> repo path imported under it
+	type candidate struct {
+		dd string
+		e  ImportFile
+	}
+	var work []candidate
 	for i, dd := range dirs {
 		for _, e := range owned[i] {
-			a.importDataFile(dd, e, claimed)
+			work = append(work, candidate{dd, e})
+		}
+	}
+	claimed := map[string]string{} // relative path -> repo path imported under it
+	for i, c := range work {
+		if !a.importDataFile(c.dd, c.e, claimed, len(work)-i) {
+			return
 		}
 	}
 }
 
-// importDataFile applies the per-file checks to one entry under datadir dd.
-func (a *branchAnalyzer) importDataFile(dd string, e ImportFile, claimed map[string]string) {
+// stopAtBudget records the one warning that ends the data walk: importing e
+// would take a stored total past a byte budget, so e and every later
+// candidate are left out, and the files already imported are kept. Importing
+// fewer files with a visible warning is the correct behaviour; returning an
+// oversized snapshot that the proposal write then rejects is not.
+func (a *branchAnalyzer) stopAtBudget(e ImportFile, which string, limit, total int64, remaining int) bool {
+	a.warn(e.Path, FindingBranchDataCapExceeded, fmt.Sprintf(
+		"importing this file would take the %s to %d bytes, over the cap of %d bytes (ImportLimits.%s), so the data-file walk stopped here and up to %d data files from this one on were not imported",
+		budgetNoun(which), total, limit, which, remaining))
+	return false
+}
+
+func budgetNoun(which string) string {
+	if which == "MaxSnapshotBytes" {
+		return "total snapshot size"
+	}
+	return "branch's data-file total"
+}
+
+// importDataFile applies the per-file checks to one entry under datadir dd. It
+// returns false when the walk must stop because a byte budget was reached;
+// remaining is the number of candidates from this one on.
+func (a *branchAnalyzer) importDataFile(dd string, e ImportFile, claimed map[string]string, remaining int) bool {
 	switch e.Mode {
 	case modeSymlink:
 		a.warn(e.Path, FindingDataFileSymlink, "the entry is a symlink and is never read through, so it was not imported")
-		return
+		return true
 	case modeGitlink:
 		a.warn(e.Path, FindingDataFileGitlink, "the entry is a gitlink (a submodule), not a file, so it was not imported")
-		return
+		return true
 	}
 	if !isYAMLPath(e.Path) {
 		a.warn(e.Path, FindingDataFileNotYAML, "the file is not YAML (only .yaml and .yml are imported), so it was not imported")
-		return
+		return true
 	}
 	if e.Size > a.lim.MaxFileBytes {
 		a.warn(e.Path, FindingDataFileTooLarge, fmt.Sprintf("the file is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not read or imported", e.Size, a.lim.MaxFileBytes))
-		return
+		return true
 	}
 	rel := strings.TrimPrefix(e.Path, dd+"/")
 	if first, dup := claimed[rel]; dup {
 		a.warn(e.Path, FindingDataFileCollision, fmt.Sprintf("the datadir-relative path %q is already imported from %s and the first file in hierarchy order is kept; the Code model stores a data file by a path relative to the datadir and has no datadir dimension, so this second file cannot be represented", rel, first))
-		return
+		return true
+	}
+	// The byte budgets, from the size ImportFS reports and before any read.
+	if t := a.dataBytes + e.Size; t > a.lim.MaxBranchBytes {
+		return a.stopAtBudget(e, "MaxBranchBytes", a.lim.MaxBranchBytes, t, remaining)
+	}
+	if t := a.usedBytes + e.Size; t > a.lim.MaxSnapshotBytes {
+		return a.stopAtBudget(e, "MaxSnapshotBytes", a.lim.MaxSnapshotBytes, t, remaining)
 	}
 	b, err := a.fs.Read(e.Path)
 	if err != nil {
 		a.fail(e.Path, FindingDataFileUnparseable, fmt.Sprintf("the file could not be read, so it was not imported: %v", err))
-		return
+		return true
 	}
 	if int64(len(b)) > a.lim.MaxFileBytes {
 		a.warn(e.Path, FindingDataFileTooLarge, fmt.Sprintf("the file is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not imported", len(b), a.lim.MaxFileBytes))
-		return
+		return true
 	}
 	df, fs := ParseDataFileLenient(rel, string(b), a.lim)
 	a.add(e.Path, fs)
 	if df == nil {
-		return
+		return true
 	}
 	claimed[rel] = e.Path
 	a.snap.DataFiles = append(a.snap.DataFiles, df)
+	a.dataBytes += int64(len(df.GetYaml()))
+	a.usedBytes += int64(len(df.GetYaml()))
+	return true
 }
