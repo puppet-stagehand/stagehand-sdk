@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -709,4 +710,52 @@ func TestValidateForgeBaseURL_ErrorsDoNotEchoTheRawURL(t *testing.T) {
 			}
 		}
 	}
+}
+
+// WR-04: a registry that never stops paging, or keeps repeating a page, must
+// end in a bounded error rather than loop until the caller's context expires.
+func TestForgeHTTPClient_ListReleasesPaginationIsBounded(t *testing.T) {
+	t.Run("endless_distinct_pages_hit_the_cap", func(t *testing.T) {
+		var calls atomic.Int32
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			n := int(calls.Add(1))
+			var sb strings.Builder
+			sb.WriteString(`{"pagination":{"total":1000000000},"results":[`)
+			for i := 0; i < 100; i++ {
+				if i > 0 {
+					sb.WriteString(",")
+				}
+				sb.WriteString(`{"version":"1.`)
+				sb.WriteString(strconv.Itoa(n))
+				sb.WriteString(`.`)
+				sb.WriteString(strconv.Itoa(i))
+				sb.WriteString(`"}`)
+			}
+			sb.WriteString(`]}`)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(sb.String()))
+		})
+		_, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal once the release cap is exceeded, got %v", err)
+		}
+		if n := calls.Load(); n > forgeMaxReleases/100+2 {
+			t.Fatalf("made %d requests; the cap should stop paging near %d", n, forgeMaxReleases/100+1)
+		}
+	})
+	t.Run("repeated_page_is_rejected", func(t *testing.T) {
+		var calls atomic.Int32
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"pagination":{"total":1000000000},"results":[{"version":"1.0.0"}]}`))
+		})
+		_, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal for a repeating registry, got %v", err)
+		}
+		if n := calls.Load(); n > 3 {
+			t.Fatalf("made %d requests for a repeating page; expected it to stop at the second", n)
+		}
+	})
 }

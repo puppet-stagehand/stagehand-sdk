@@ -74,6 +74,13 @@ const forgeModuleExcludeFields = "current_release"
 // calls one Search issues (T-08-22).
 const forgeEnrichConcurrency = 6
 
+// forgeMaxReleases bounds how many release versions ListReleases will
+// accumulate for one module. The page count, total and results all come from
+// the registry, so without a cap a hostile or buggy private registry that keeps
+// answering "one more result" would hold the loop (and memory) until the
+// caller's context ended (WR-04). Real modules have a few hundred releases.
+const forgeMaxReleases = 5000
+
 // ForgeEndpoint identifies where a Forge v3 request goes and, for a private
 // source, the credential to send. BaseURL must be an absolute https:// URL
 // with no embedded userinfo (T-07-05). An empty Auth means "no
@@ -319,6 +326,7 @@ func (c *httpForgeClient) ListReleases(ctx context.Context, ep ForgeEndpoint, na
 
 	const pageSize = 100
 	var versions []string
+	seen := make(map[string]struct{})
 	offset := 0
 	for {
 		if err := ctx.Err(); err != nil {
@@ -343,11 +351,24 @@ func (c *httpForgeClient) ListReleases(ctx context.Context, ep ForgeEndpoint, na
 			}
 			break
 		}
+		added := 0
 		for _, r := range payload.Results {
 			if r.Version == "" {
 				return nil, status.Error(codes.Internal, "forge: malformed release (missing version)")
 			}
 			versions = append(versions, r.Version)
+			if _, dup := seen[r.Version]; !dup {
+				seen[r.Version] = struct{}{}
+				added++
+			}
+		}
+		// A page that contributes no new version is the registry repeating
+		// itself; keep paging and it would never end.
+		if added == 0 {
+			return nil, status.Error(codes.Internal, "forge: release list repeats itself")
+		}
+		if len(versions) > forgeMaxReleases {
+			return nil, status.Error(codes.Internal, "forge: release list exceeds the adapter's limit")
 		}
 		offset += len(payload.Results)
 		if offset >= payload.Pagination.Total {
