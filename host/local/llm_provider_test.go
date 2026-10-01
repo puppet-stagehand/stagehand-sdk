@@ -155,6 +155,18 @@ func TestLLMProviderResolutionLadder(t *testing.T) {
 			f.seal("p", `{"kind":"openai_compatible","base_url":"https://x.example.test/v1","model":"m","max_tokens_field":"model"}`)
 			return "p"
 		}, codes.FailedPrecondition},
+		{"max_tokens_field that would inject another body key", func(f *llmResolveFixture) string {
+			f.seal("p", `{"kind":"openai_compatible","base_url":"https://x.example.test/v1","model":"m","max_tokens_field":"n"}`)
+			return "p"
+		}, codes.FailedPrecondition},
+		{"max_tokens_field that is a sibling budget name but not allowed", func(f *llmResolveFixture) string {
+			f.seal("p", `{"kind":"openai_compatible","base_url":"https://x.example.test/v1","model":"m","max_tokens_field":"max_tokens_to_sample"}`)
+			return "p"
+		}, codes.FailedPrecondition},
+		{"max_tokens_field max_output_tokens resolves", func(f *llmResolveFixture) string {
+			f.seal("p", `{"kind":"openai_compatible","base_url":"https://x.example.test/v1","model":"m","max_tokens_field":"max_output_tokens"}`)
+			return "p"
+		}, codes.OK},
 		{"valid anthropic payload resolves", func(f *llmResolveFixture) string { f.seal("p", okAnthropic); return "p" }, codes.OK},
 		{"valid loopback http compatible payload resolves", func(f *llmResolveFixture) string {
 			f.seal("p", `{"kind":"openai_compatible","base_url":"http://localhost:11434/v1","model":"llama"}`)

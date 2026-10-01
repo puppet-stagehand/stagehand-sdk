@@ -85,7 +85,7 @@ JSON object:
 | `model` | always | The model name your provider gave you. |
 | `api_key` | `anthropic`: yes. `openai_compatible`: optional | The provider's key. A model server on your own machine usually needs none. |
 | `base_url` | `openai_compatible`: yes. `anthropic`: optional | Where the provider lives. For `anthropic` it defaults to `https://api.anthropic.com`. |
-| `max_tokens_field` | never | Only for an older OpenAI-compatible server. The name of its output-length field, if it does not understand the default `max_completion_tokens` (for example `max_tokens`). |
+| `max_tokens_field` | never | Only for an older OpenAI-compatible server. The name of its output-length field, if it does not understand the default `max_completion_tokens`. Only `max_completion_tokens`, `max_tokens` and `max_output_tokens` are accepted. |
 
 `base_url` must be `https`. Plain `http` is accepted only when the host is
 `localhost` or a loopback address such as `127.0.0.1`, which is what a model

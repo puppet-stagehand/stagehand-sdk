@@ -9,7 +9,6 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"regexp"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -117,17 +116,15 @@ func (s *forgeServer) resolveLLMProvider(ctx context.Context, name string) (LLMP
 	}, nil
 }
 
-// llmTokensFieldPattern is the shape of a request-body key a sealed
-// max_tokens_field may name: a plain snake_case identifier.
-var llmTokensFieldPattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
-
-// validLLMTokensField accepts a plain identifier that does not collide with a
-// body key the client owns, so the sealed override can only rename the
-// output-budget parameter, never displace the model or the messages.
+// validLLMTokensField accepts only the real output-budget parameter names an
+// OpenAI-compatible server uses. An allow-list, not a pattern plus deny-list:
+// any other body key (n, top_k, tool_choice, ...) would be sent with an integer
+// value and could change the provider's behaviour or cost, so the sealed
+// override can rename the output-budget parameter and nothing else (WR-09).
 func validLLMTokensField(field string) bool {
 	switch field {
-	case "model", "messages", "stream", "system":
-		return false
+	case "max_completion_tokens", "max_tokens", "max_output_tokens":
+		return true
 	}
-	return llmTokensFieldPattern.MatchString(field)
+	return false
 }
