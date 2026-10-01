@@ -1,0 +1,29 @@
+---
+# Canonical control-repo branch fixture (RESEARCH "Real-World Fixture Catalog",
+# row "the canonical control-repo hiera.yaml"). Modelled on the puppetlabs/
+# control-repo production hiera.yaml: version 5, defaults.datadir "data", one
+# level with paths:, the Bolt-only top-level plan_hierarchy key (which the
+# Code model does not carry, so it must be flagged), and the commented eyaml
+# instructions. The text is reproduced and trimmed, not fetched byte for byte.
+version: 5
+
+defaults:  # Used for any hierarchy level that omits these keys.
+  datadir: data         # This path is relative to hiera.yaml's directory.
+  data_hash: yaml_data  # Use the built-in YAML backend.
+
+hierarchy:
+  - name: "Other YAML hierarchy levels"
+    paths: # Can specify an array of paths instead of one path.
+      - "common.yaml"
+
+# To use eyaml, uncomment a level like this (and keep .eyaml files in data/):
+#  - name: "Secrets"
+#    lookup_key: eyaml_lookup_key
+#    path: "secrets.eyaml"
+#    options:
+#      pkcs7_private_key: /etc/puppetlabs/puppet/eyaml/private_key.pkcs7.pem
+
+# Bolt reads this key; the Code facet has no model for it.
+plan_hierarchy:
+  - name: "Common plan data"
+    path: "common.yaml"

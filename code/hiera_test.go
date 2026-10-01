@@ -652,6 +652,46 @@ func TestHiera_ExistenceHelpersDoNotConvertValues(t *testing.T) {
 	}
 }
 
+// TestDecodeDocEmptyDocument pins the one boundary decodeDoc has: a document
+// with no content (whitespace only, a bare "---", comments only, a null root)
+// is the legitimately-empty state, and a sequence root or a scalar root is
+// still a parse error. Both halves sit side by side so the relaxation cannot
+// widen unnoticed (RESEARCH Pitfall 4, DQ-6).
+func TestDecodeDocEmptyDocument(t *testing.T) {
+	for _, tc := range []struct{ name, text string }{
+		{"empty", ""},
+		{"whitespace_only", "   \n"},
+		{"bare_document_marker", "---\n"},
+		{"comment_only", "# just a comment\n"},
+		{"document_marker_and_comments", "---\n# a placeholder\n"},
+		{"null_tilde", "~\n"},
+		{"null_word", "null\n"},
+	} {
+		t.Run("empty/"+tc.name, func(t *testing.T) {
+			doc, err := decodeDoc(tc.text)
+			if err != nil || doc != nil {
+				t.Fatalf("decodeDoc(%q) = %v, %v; want nil, nil", tc.text, doc, err)
+			}
+			df, err := ParseDataFile(tc.text)
+			if err != nil || df == nil || len(df.GetValues()) != 0 {
+				t.Fatalf("ParseDataFile(%q) = %v, %v; want an empty data file", tc.text, df, err)
+			}
+		})
+	}
+	for _, tc := range []struct{ name, text string }{
+		{"sequence_root", "- a\n- b\n"},
+		{"scalar_root", "scalar\n"},
+		{"quoted_null_is_a_string", "\"null\"\n"},
+		{"number_root", "42\n"},
+	} {
+		t.Run("still_rejected/"+tc.name, func(t *testing.T) {
+			if _, err := decodeDoc(tc.text); !errors.Is(err, ErrHieraParse) {
+				t.Fatalf("decodeDoc(%q) err = %v, want ErrHieraParse", tc.text, err)
+			}
+		})
+	}
+}
+
 func TestHiera_LevelExistsIgnoresUnrelatedLevels(t *testing.T) {
 	// A non-mapping element makes ParseHierarchy fail for the whole file.
 	text := "version: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml\n  - just-a-string\n  - name: common\n    path: common.yaml\n"

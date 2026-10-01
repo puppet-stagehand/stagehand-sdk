@@ -1,0 +1,4 @@
+---
+# The commonest real placeholder in a control repo: a data file with no
+# content at all, only the document marker and comments. Strict ParseDataFile
+# used to reject it as "expected a YAML mapping document" (RESEARCH Pitfall 4).

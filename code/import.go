@@ -118,6 +118,75 @@ const (
 	FindingBranchNameInvalid = "branch_name_invalid"
 )
 
+// Hiera finding kinds (IMP-03). The version and unparseable kinds are errors
+// and leave the hierarchy out of the snapshot; the rest are warnings.
+const (
+	// FindingHieraVersionUnsupported: error; the hierarchy is absent. The
+	// strict parser accepts a Hiera v3 file as an empty hierarchy, which would
+	// be written over a real one, so the version is checked explicitly.
+	FindingHieraVersionUnsupported = "hiera_version_unsupported"
+	// FindingHieraUnparseable: error; the hierarchy is absent because the
+	// facet's own read path could not read it back.
+	FindingHieraUnparseable = "hiera_unparseable"
+	// FindingHieraUnmodelledKey: warning; the key is kept in the stored text
+	// but the Code model has no field for it.
+	FindingHieraUnmodelledKey = "hiera_unmodelled_key"
+	// FindingHieraLevelUnnamed: warning; levels are matched by name.
+	FindingHieraLevelUnnamed = "hiera_level_unnamed"
+	// FindingHieraDuplicateLevel: warning; levels are matched by name.
+	FindingHieraDuplicateLevel = "hiera_duplicate_level"
+	// FindingHieraDatadirUnresolvable: warning; no files are imported for the
+	// level (or defaults) that declared the datadir.
+	FindingHieraDatadirUnresolvable = "hiera_datadir_unresolvable"
+)
+
+// Data-file finding kinds (IMP-03, D-12). Only the unparseable kind is an
+// error; every other one skips a file with a warning.
+const (
+	// FindingDataFileUnparseable: error; the facet could not read the file
+	// back, so it is absent from the snapshot.
+	FindingDataFileUnparseable = "data_file_unparseable"
+	// FindingDataFileNotYAML: warning; not imported.
+	FindingDataFileNotYAML = "data_file_not_yaml"
+	// FindingDataFileSymlink: warning; never read through.
+	FindingDataFileSymlink = "data_file_symlink"
+	// FindingDataFileGitlink: warning; never read through.
+	FindingDataFileGitlink = "data_file_gitlink"
+	// FindingDataFileCollision: warning; the first file in hierarchy order is kept.
+	FindingDataFileCollision = "data_file_collision"
+	// FindingDataFileTooLarge: warning; not read.
+	FindingDataFileTooLarge = "data_file_too_large"
+	// FindingDataFileExtraDocuments: warning; only the first document counts.
+	FindingDataFileExtraDocuments = "data_file_extra_documents"
+	// FindingDataFileOutsideDatadir: warning; not imported.
+	FindingDataFileOutsideDatadir = "data_file_outside_datadir"
+)
+
+// environment.conf finding kinds (IMP-04). All are warnings: the file is
+// never unparseable as a whole, the offending line is skipped.
+const (
+	// FindingEnvConfUnrecognizedKey: an unknown key.
+	FindingEnvConfUnrecognizedKey = "envconf_unrecognized_key"
+	// FindingEnvConfMalformedLine: a line with no equals sign (a section
+	// header is one), or a value that cannot be stored faithfully.
+	FindingEnvConfMalformedLine = "envconf_malformed_line"
+	// FindingEnvConfInvalidBoolean: a boolean key with a non-boolean value.
+	FindingEnvConfInvalidBoolean = "envconf_invalid_boolean"
+)
+
+// Branch-level finding kinds raised by AnalyzeBranch itself.
+const (
+	// FindingBranchDataCapExceeded: warning; the data-file walk stopped at a
+	// byte budget and the files already imported are kept.
+	FindingBranchDataCapExceeded = "branch_data_cap_exceeded"
+	// FindingBranchFileUnreadable: error; one of the three root files
+	// (Puppetfile, hiera.yaml, environment.conf) is a symlink, a gitlink,
+	// over the per-file cap, unreadable, or failed the facet's own read path,
+	// so it is absent from the snapshot. Not in the plan's catalog: the
+	// catalog gives the three root files no kind for these cases.
+	FindingBranchFileUnreadable = "branch_file_unreadable"
+)
+
 // truncateExcerpt returns s made valid UTF-8 and cut to at most max bytes on
 // a rune boundary. An invalid sequence cannot be held by a structpb.Struct
 // and would fail the proposal write late (T-10-39), so the result is always
@@ -187,4 +256,9 @@ func stampFindings(fs []*hostv1.ImportFinding, branch, file string) {
 		f.Branch = branch
 		f.File = file
 	}
+}
+
+// AnalyzeBranch is a compile-only stub for the RED commit.
+func AnalyzeBranch(branch string, fs ImportFS, lim ImportLimits) (*hostv1.ImportBranchSnapshot, []*hostv1.ImportFinding) {
+	return &hostv1.ImportBranchSnapshot{Branch: branch}, nil
 }
