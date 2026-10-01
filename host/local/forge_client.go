@@ -145,11 +145,22 @@ type httpForgeClient struct {
 // newHTTPForgeClient builds an httpForgeClient. A nil hc gets a default
 // client bounded by forgeHTTPTimeout; tests pass httptest's server.Client()
 // so the TLS trust root matches the test server's self-signed certificate.
+//
+// Either way the client never follows a redirect (WR-01): Go would re-send the
+// Authorization header to a same-host plaintext or subdomain target and would
+// fetch an arbitrary internal host unauthenticated, and validateForgeBaseURL
+// only vets the base URL, never a redirect target. A supplied client is
+// shallow-copied so the caller's value is not mutated and keeps its transport
+// and trust roots.
 func newHTTPForgeClient(hc *http.Client) *httpForgeClient {
-	if hc == nil {
-		hc = &http.Client{Timeout: forgeHTTPTimeout}
+	var c http.Client
+	if hc != nil {
+		c = *hc
+	} else {
+		c.Timeout = forgeHTTPTimeout
 	}
-	return &httpForgeClient{httpClient: hc}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &httpForgeClient{httpClient: &c}
 }
 
 // DefaultForgeClient returns the real HTTP-backed ForgeClient host.Local
@@ -387,7 +398,7 @@ func (c *httpForgeClient) GetRelease(ctx context.Context, ep ForgeEndpoint, name
 
 // doJSON performs a GET against rawURL, applies ep's auth header, classifies
 // the response per D-03 (network/timeout/429/5xx -> Unavailable, a 404 ->
-// ErrForgeNotFound, any other non-2xx or a malformed body -> Internal), and
+// ErrForgeNotFound, any 3xx -> FailedPrecondition (never followed), any other non-2xx or a malformed body -> Internal), and
 // decodes a 2xx body into out.
 func (c *httpForgeClient) doJSON(ctx context.Context, ep ForgeEndpoint, rawURL string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
@@ -418,6 +429,10 @@ func (c *httpForgeClient) doJSON(ctx context.Context, ep ForgeEndpoint, rawURL s
 	}
 
 	switch {
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Never followed (WR-01); the Location target is deliberately not
+		// echoed.
+		return status.Errorf(codes.FailedPrecondition, "forge: registry answered with a redirect (%d), which the adapter does not follow", resp.StatusCode)
 	case resp.StatusCode == http.StatusNotFound:
 		return ErrForgeNotFound
 	case resp.StatusCode == http.StatusTooManyRequests:

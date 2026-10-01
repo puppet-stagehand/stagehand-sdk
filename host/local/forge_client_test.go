@@ -614,3 +614,53 @@ func TestForgeHTTPSearchToleratesThinSource(t *testing.T) {
 		t.Fatalf("expected nothing fabricated for a thin source, got %+v", r)
 	}
 }
+
+// WR-01: the Forge transport must never follow a redirect, so a private
+// source's Authorization value is not re-sent in clear and an internal host is
+// not fetched on a registry's say-so.
+func TestForgeHTTPClient_DoesNotFollowRedirects(t *testing.T) {
+	var targetHits int
+	var mu sync.Mutex
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		targetHits++
+		mu.Unlock()
+		_, _ = w.Write([]byte(`{"pagination":{"total":0},"results":[]}`))
+	}))
+	t.Cleanup(target.Close)
+
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/v3/modules", http.StatusFound)
+	})
+	ep.Auth = "Bearer sealed-token"
+
+	for name, call := range map[string]func() error{
+		"search": func() error {
+			_, _, err := client.Search(context.Background(), ep, "internal", "apache", nil)
+			return err
+		},
+		"list_releases": func() error {
+			_, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+			return err
+		},
+		"get_release": func() error {
+			_, err := client.GetRelease(context.Background(), ep, "puppetlabs/apache", "1.0.0")
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := call()
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("expected FailedPrecondition for a redirect, got %v", err)
+			}
+			if strings.Contains(err.Error(), target.URL) {
+				t.Fatalf("redirect target leaked into the error: %v", err)
+			}
+		})
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if targetHits != 0 {
+		t.Fatalf("redirect target was contacted %d times; redirects must not be followed", targetHits)
+	}
+}
