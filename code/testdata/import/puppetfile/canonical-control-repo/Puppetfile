@@ -1,0 +1,37 @@
+forge 'https://forge.puppet.com'
+
+# Modules from the Puppet Forge
+# Versions should be updated to be the latest at the time you start
+#mod 'puppetlabs/inifile', '5.0.1'
+#mod 'puppetlabs/stdlib',  '7.0.1'
+#mod 'puppetlabs/concat',  '7.0.1'
+
+# Modules from Git
+# Examples: https://github.com/puppetlabs/r10k/blob/master/doc/puppetfile.mkd#examples
+#mod 'apache',
+#  git:    'https://github.com/puppetlabs/puppetlabs-apache',
+#  commit: '1b6f89afdde0df7f9433a163d5c4b5328eac5779'
+
+#mod 'apache',
+#  git:    'https://github.com/puppetlabs/puppetlabs-apache',
+#  branch: 'docs_experiment'
+
+# ---------------------------------------------------------------------------
+# stagehand-sdk fixture addition (everything above this line is the upstream
+# puppetlabs/control-repo production Puppetfile, verbatim; its module examples
+# are all commented out, so the declarations below are the same examples
+# uncommented, plus the two Forge shapes the upstream text only describes).
+# The import test needs real module statements in the file whose first line
+# strict ParsePuppetfile refuses.
+# ---------------------------------------------------------------------------
+mod 'puppetlabs/inifile', '5.0.1'
+mod 'puppetlabs/stdlib',  '7.0.1'
+mod 'puppetlabs/concat', :latest
+
+mod 'apache',
+  git:    'https://github.com/puppetlabs/puppetlabs-apache',
+  commit: '1b6f89afdde0df7f9433a163d5c4b5328eac5779'
+
+mod 'apache_docs',
+  git:    'https://github.com/puppetlabs/puppetlabs-apache',
+  branch: 'docs_experiment'
