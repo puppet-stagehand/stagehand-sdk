@@ -36,16 +36,23 @@ The governing decisions are named so you can find them in the phase notes:
 D-01 (deletes stay ungated), D-02 (gate a write per item, only when it
 replaces something), D-03 (settings are gated on every call).
 
+There are six gated paths. Five are the content writes in the table below. The
+sixth is **import**: adopting an existing control repo, where the whole import
+is one proposal that covers every selected branch. It has its own three RPCs
+(`InspectImport`, `ProposeImport`, `ApplyImport`) and its own loop, with a
+report step at the front, so it is described in
+[`docs/code-import.md`](code-import.md) rather than here.
+
 | Write RPC | When it is refused | Apply RPC that finishes it | Decision |
 |---|---|---|---|
 | `CreateEnvironment` | never | none | new content |
-| `RenameEnvironment` | never (a name clash still gives a plain already-exists error) | none | not one of the five gated paths |
+| `RenameEnvironment` | never (a name clash still gives a plain already-exists error) | none | not one of the six gated paths |
 | `DeleteEnvironment` | never | none | D-01 |
 | `DuplicateEnvironment` | only when the target name already exists | `ApplyEnvironmentDuplicate` | D-02 |
 | `PutEnvironmentSettings` | on every call once the environment exists, including the first write | `ApplyEnvironmentSettings` | D-03 |
 | `PutPuppetfileModule` | only when a module of that name is already listed | `ApplyPuppetfileModuleOverwrite` | D-02 |
 | `RemovePuppetfileModule` | never | none | D-01 |
-| `SetModuledir` | never | none | not one of the five gated paths |
+| `SetModuledir` | never | none | not one of the six gated paths |
 | `PutHieraLevel` | only when a level of that name already exists | `ApplyHieraLevelOverwrite` | D-02 |
 | `RemoveHieraLevel`, `ReorderHieraLevels` | never | none | D-01 / not gated |
 | `PutHieraDataKey` | only when that key already exists in that file | `ApplyHieraDataKeyOverwrite` | D-02 |
@@ -144,7 +151,12 @@ is not approved. An unknown proposal id returns the store's `NotFound`.
 ## 5. Permissions and scopes
 
 - `code:rw` is the standing permission every Code RPC needs, and that includes
-  all five Apply RPCs. It is listed in the manifest's `permissions`.
+  all five content Apply RPCs. The five content paths need `code:rw` alone. It
+  is listed in the manifest's `permissions`.
+- The three import RPCs need `code:rw` **plus** `code:import`. `code:import` is
+  a second permission, also listed in `permissions`, because import reaches a
+  git host outside the console. A pack with `code:rw` but not `code:import` is
+  refused on all three. See [`docs/code-import.md`](code-import.md).
 - `code:approve` is **not a permission**. It must never appear in a
   manifest's `permissions` list. It appears only as a route's `access.scope`,
   on the route your operator uses to approve. A route that names a scope also
@@ -190,6 +202,9 @@ permission.
   facet has no access control, so a pack that can call `Documents.Put`
   directly can write a complete approval record into `code-overwrites` (or
   write the Code collections themselves) and bypass the gate on `host.Local`.
+  This holds for all six gated paths, import included: `code:import` is not a
+  stronger lock, and the import proposal sits in the same `code-overwrites`
+  collection as the others.
   `TestCodeOverwriteApprovalProvenance` pins that. The same goes for the
   `code-overwrite-applied` marker collection that makes an approval
   single-use: a caller with `Documents` access can delete a marker to allow a

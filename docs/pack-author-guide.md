@@ -15,6 +15,11 @@ Copy `examples/hello/manifest.json` and change:
   - `puppetdb:read` — read facts and reports.
   - `bolt:run` — run a task on nodes through Bolt.
   - `secrets:rw` — keep a password safely.
+  - `code:rw` — read and write environments, Puppetfile modules and Hiera
+    data in the Code facet.
+  - `code:import` — read an existing control repo from a git address and
+    propose importing it. It is separate from `code:rw` because it reaches a
+    git host outside the console, and you need both to import.
   - `forge:rw` — search the Puppet Forge for modules and look at what a
     module depends on.
   - `forge:recommend` — ask for ranked module suggestions from a plain
@@ -59,7 +64,10 @@ turns this off. Note that the approval scope, `code:approve`, is not a
 permission: it goes on a route's `access.scope` and never in `permissions`.
 `docs/code-overwrite-gating.md` walks through the whole loop (propose,
 approve, apply) for all five kinds of write, explains each refusal, and ends
-with a checklist a human can follow to confirm it works.
+with a checklist a human can follow to confirm it works. Importing an existing
+control repo from a git address is a sixth gated path: it needs `code:import`
+as well as `code:rw`, and `docs/code-import.md` walks through it, including
+what it cannot bring in.
 
 ## Suggesting Puppet modules
 The Forge facet can turn a plain sentence ("I need to manage security
