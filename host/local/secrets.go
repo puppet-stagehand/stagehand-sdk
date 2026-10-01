@@ -23,6 +23,11 @@ type secretsServer struct {
 	key    [32]byte
 	mu     sync.Mutex
 	store  map[string][]byte // ref -> plaintext
+
+	// revealHook, when non-nil, is called with the ref of every Reveal before
+	// the secrets lock is taken. It is a test seam (counting reveals, probing
+	// lock discipline); production code never sets it.
+	revealHook func(ref string)
 }
 
 func newSecretsServer(packID string) *secretsServer {
@@ -52,6 +57,9 @@ func (s *secretsServer) Store(ctx context.Context, req *hostv1.StoreSecretReques
 }
 
 func (s *secretsServer) Reveal(ctx context.Context, req *hostv1.SecretRef) (*hostv1.SecretValue, error) {
+	if s.revealHook != nil {
+		s.revealHook(req.Ref)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	pt, ok := s.store[req.Ref]

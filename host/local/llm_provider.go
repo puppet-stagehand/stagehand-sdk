@@ -21,6 +21,10 @@ import (
 // body {name, label, secret_ref}.
 const llmProviderCollection = "llm-providers"
 
+// defaultAnthropicBaseURL is the vendor's public API base, used when an
+// anthropic-kind provider seals no base URL of its own.
+const defaultAnthropicBaseURL = "https://api.anthropic.com"
+
 // llmProviderSecret is the sealed JSON shape an llm-providers index entry's
 // secret_ref resolves to via Secrets.Reveal. It is an internal host.Local
 // convention a pack must follow when configuring a provider, not part of the
