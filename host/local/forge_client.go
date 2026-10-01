@@ -27,6 +27,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -54,7 +55,23 @@ const forgeMaxResponseBytes = 8 << 20 // 8 MiB
 // forgeExcludeFields trims the large prose fields (readme/changelog/
 // license/reference/docs) Forge's Release representation otherwise embeds,
 // since ListReleases/GetRelease only need version and dependency metadata.
+//
+// Forge's exclude_fields is TOP-LEVEL ONLY (verified live: nested paths such
+// as "current_release.readme" have no effect), so this value is meaningful on
+// /v3/releases and does nothing on /v3/modules; see forgeModuleExcludeFields.
 const forgeExcludeFields = "readme changelog license reference docs"
+
+// forgeModuleExcludeFields is the single top-level key that shrinks a
+// /v3/modules page: current_release embeds each hit's whole readme,
+// reference and changelog (13,947,541 bytes for a 20-hit "security" page
+// measured live, versus 96,429 bytes without it). The slim module object
+// still carries endorsement, deprecation, supersession and a newest-first
+// releases array; per-hit enrichment supplies the rest.
+const forgeModuleExcludeFields = "current_release"
+
+// forgeEnrichConcurrency bounds the in-flight per-hit release enrichment
+// calls one Search issues (T-08-22).
+const forgeEnrichConcurrency = 6
 
 // ForgeEndpoint identifies where a Forge v3 request goes and, for a private
 // source, the credential to send. BaseURL must be an absolute https:// URL
@@ -156,6 +173,7 @@ func (c *httpForgeClient) Search(ctx context.Context, ep ForgeEndpoint, source, 
 	q.Set("query", query)
 	q.Set("limit", strconv.Itoa(limit))
 	q.Set("offset", strconv.Itoa(offset))
+	q.Set("exclude_fields", forgeModuleExcludeFields)
 	u.RawQuery = q.Encode()
 
 	var payload forgeModuleCollectionJSON
@@ -169,9 +187,20 @@ func (c *httpForgeClient) Search(ctx context.Context, ep ForgeEndpoint, source, 
 		return nil, nil, err
 	}
 
-	results := make([]*hostv1.ForgeSearchResult, 0, len(payload.Results))
 	for _, m := range payload.Results {
-		r, err := mapForgeSearchResult(m, source)
+		if err := validateForgeModule(m); err != nil {
+			return nil, nil, err
+		}
+	}
+
+	enrichments, err := c.enrichHits(ctx, ep, base, payload.Results)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	results := make([]*hostv1.ForgeSearchResult, 0, len(payload.Results))
+	for i, m := range payload.Results {
+		r, err := mapForgeSearchResult(m, enrichments[i], source)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -184,6 +213,84 @@ func (c *httpForgeClient) Search(ctx context.Context, ep ForgeEndpoint, source, 
 		pageInfo.NextCursor = strconv.Itoa(next)
 	}
 	return results, pageInfo, nil
+}
+
+// enrichHits fetches each hit's newest release (summary, tags, validation
+// score, date) from /v3/releases under bounded concurrency. The returned slice
+// is index-aligned with hits; a nil entry means that hit's enrichment failed
+// or the source had none, and the hit degrades to its slim-page fields. Each
+// goroutine writes only its own slot, so no lock is needed. An error is
+// returned only when the page had hits and every enrichment call failed at
+// the transport level: that is an unreachable endpoint, not thin metadata, and
+// returning a page of empty metadata would mislead a ranker.
+func (c *httpForgeClient) enrichHits(ctx context.Context, ep ForgeEndpoint, base *url.URL, hits []forgeModuleJSON) ([]*forgeReleaseSummaryJSON, error) {
+	rels := make([]*forgeReleaseSummaryJSON, len(hits))
+	errs := make([]error, len(hits))
+
+	sem := make(chan struct{}, forgeEnrichConcurrency)
+	var wg sync.WaitGroup
+dispatch:
+	for i := range hits {
+		select {
+		case sem <- struct{}{}:
+		case <-ctx.Done():
+			for j := i; j < len(hits); j++ {
+				errs[j] = newForgeTransportError("forge: request failed (network error, timeout, or canceled context)")
+			}
+			break dispatch
+		}
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			rels[i], errs[i] = c.fetchNewestRelease(ctx, ep, base, hits[i])
+		}(i)
+	}
+	wg.Wait()
+
+	if len(hits) > 0 {
+		allTransport := true
+		for _, err := range errs {
+			if err == nil || !isForgeTransportError(err) {
+				allTransport = false
+				break
+			}
+		}
+		if allTransport {
+			return nil, status.Error(codes.Unavailable, "forge: release enrichment endpoint unreachable")
+		}
+	}
+	for i, err := range errs {
+		if err != nil {
+			rels[i] = nil
+		}
+	}
+	return rels, nil
+}
+
+// fetchNewestRelease returns one module's newest release from /v3/releases
+// with the prose fields excluded, or nil with no error when the source
+// reports none.
+func (c *httpForgeClient) fetchNewestRelease(ctx context.Context, ep ForgeEndpoint, base *url.URL, m forgeModuleJSON) (*forgeReleaseSummaryJSON, error) {
+	slug, err := forgeModuleSlug(m.Owner.Slug + "/" + m.Name)
+	if err != nil {
+		return nil, err
+	}
+	u := base.JoinPath("v3", "releases")
+	q := u.Query()
+	q.Set("module", slug)
+	q.Set("limit", "1")
+	q.Set("exclude_fields", forgeExcludeFields)
+	u.RawQuery = q.Encode()
+
+	var payload forgeReleaseCollectionJSON
+	if err := c.doJSON(ctx, ep, u.String(), &payload); err != nil {
+		return nil, err
+	}
+	if len(payload.Results) == 0 {
+		return nil, nil
+	}
+	return &payload.Results[0], nil
 }
 
 // ------------------------------------------------------------ ListReleases
@@ -298,13 +405,16 @@ func (c *httpForgeClient) doJSON(ctx context.Context, ep ForgeEndpoint, rawURL s
 		// full request URL (and, historically, redirected URLs), which is
 		// exactly the credential/URL leakage T-07-04 forbids even though
 		// this adapter never puts auth in the URL itself.
-		return status.Error(codes.Unavailable, "forge: request failed (network error, timeout, or canceled context)")
+		return newForgeTransportError("forge: request failed (network error, timeout, or canceled context)")
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, forgeMaxResponseBytes))
+	// Read one byte past the cap so an oversized body is detectable: a plain
+	// LimitReader would truncate silently and the cut JSON would then be
+	// misreported as a malformed body (T-08-21).
+	body, err := io.ReadAll(io.LimitReader(resp.Body, forgeMaxResponseBytes+1))
 	if err != nil {
-		return status.Error(codes.Unavailable, "forge: reading response failed")
+		return newForgeTransportError("forge: reading response failed")
 	}
 
 	switch {
@@ -318,10 +428,33 @@ func (c *httpForgeClient) doJSON(ctx context.Context, ep ForgeEndpoint, rawURL s
 		return status.Errorf(codes.Internal, "forge: unexpected status %d", resp.StatusCode)
 	}
 
+	if len(body) > forgeMaxResponseBytes {
+		return status.Error(codes.Internal, "forge: response exceeds the adapter's size limit")
+	}
 	if err := json.Unmarshal(body, out); err != nil {
 		return status.Error(codes.Internal, "forge: malformed response body")
 	}
 	return nil
+}
+
+// forgeTransportError marks a failure to obtain any HTTP response (network
+// error, timeout, canceled context, broken body read). It maps to
+// codes.Unavailable exactly as before, but unlike a 429/5xx status it lets
+// Search tell "the endpoint is unreachable" from "the endpoint answered with
+// an error" when deciding whether enrichment failure is fatal. Its text is
+// static: never the request URL or credentials (T-07-04/T-08-23).
+type forgeTransportError struct{ st *status.Status }
+
+func newForgeTransportError(msg string) error {
+	return &forgeTransportError{st: status.New(codes.Unavailable, msg)}
+}
+
+func (e *forgeTransportError) Error() string              { return e.st.Err().Error() }
+func (e *forgeTransportError) GRPCStatus() *status.Status { return e.st }
+
+func isForgeTransportError(err error) bool {
+	var te *forgeTransportError
+	return errors.As(err, &te)
 }
 
 // ------------------------------------------------------------- validation
@@ -431,9 +564,17 @@ type forgeModuleSupersededByJSON struct {
 // forgeReleaseSummaryJSON models the subset of Module.current_release this
 // adapter reads: version, quality/validation score, and the release date.
 type forgeReleaseSummaryJSON struct {
-	Version         string `json:"version"`
-	ValidationScore *int   `json:"validation_score"`
-	CreatedAt       string `json:"created_at"`
+	Version         string                  `json:"version"`
+	ValidationScore *int                    `json:"validation_score"`
+	CreatedAt       string                  `json:"created_at"`
+	Metadata        forgeReleaseSummaryMeta `json:"metadata"`
+	Tags            []string                `json:"tags"`
+}
+
+// forgeReleaseSummaryMeta is the slice of a release's metadata.json that
+// describes the module to a ranker.
+type forgeReleaseSummaryMeta struct {
+	Summary string `json:"summary"`
 }
 
 type forgeModuleJSON struct {
@@ -444,6 +585,9 @@ type forgeModuleJSON struct {
 	SupersededBy   *forgeModuleSupersededByJSON `json:"superseded_by"`
 	Endorsement    *string                      `json:"endorsement"`
 	CurrentRelease *forgeReleaseSummaryJSON     `json:"current_release"`
+	// Releases is the newest-first release list a slim (current_release
+	// excluded) page still carries; entries hold version and created_at.
+	Releases []forgeReleaseSummaryJSON `json:"releases"`
 }
 
 type forgeModuleCollectionJSON struct {
@@ -471,14 +615,31 @@ type forgeReleaseJSON struct {
 	Metadata forgeReleaseMetadataJSON `json:"metadata"`
 }
 
-// mapForgeSearchResult maps one Module JSON object to the proto
-// ForgeSearchResult FORGE-01/02 requires, preserving endorsement, quality,
-// release date, deprecation and supersession — never reducing to
-// slug/version. source is stamped by the caller (D-08): this adapter has
-// no source identity of its own, only the endpoint it was told to call.
-func mapForgeSearchResult(m forgeModuleJSON, source string) (*hostv1.ForgeSearchResult, error) {
+// validateForgeModule reports a module result missing the identity fields
+// every hit must carry. It runs before enrichment so a malformed page is
+// rejected without spending any enrichment calls.
+func validateForgeModule(m forgeModuleJSON) error {
 	if m.Slug == "" || m.Name == "" || m.Owner.Slug == "" {
-		return nil, status.Error(codes.Internal, "forge: malformed module result (missing slug, name, or owner)")
+		return status.Error(codes.Internal, "forge: malformed module result (missing slug, name, or owner)")
+	}
+	return nil
+}
+
+// mapForgeSearchResult maps one Module JSON object plus its optional
+// enrichment (the module's newest release fetched from /v3/releases) to the
+// proto ForgeSearchResult FORGE-01/02 and REC-02 require, preserving
+// endorsement, quality, release date, deprecation and supersession and adding
+// summary and tags — never reducing to slug/version. source is stamped by the
+// caller (D-08): this adapter has no source identity of its own, only the
+// endpoint it was told to call.
+//
+// Per-field precedence is enrichment, then the slim page's newest releases
+// entry, then a current_release object (only a source that ignored
+// exclude_fields returns one). A field no source supplies stays empty; nothing
+// is fabricated.
+func mapForgeSearchResult(m forgeModuleJSON, enrich *forgeReleaseSummaryJSON, source string) (*hostv1.ForgeSearchResult, error) {
+	if err := validateForgeModule(m); err != nil {
+		return nil, err
 	}
 	r := &hostv1.ForgeSearchResult{
 		Name:   m.Owner.Slug + "/" + m.Name,
@@ -493,18 +654,46 @@ func mapForgeSearchResult(m forgeModuleJSON, source string) (*hostv1.ForgeSearch
 	if m.SupersededBy != nil {
 		r.SupersededBy = m.SupersededBy.Slug
 	}
+
+	var sources []*forgeReleaseSummaryJSON
+	if enrich != nil {
+		sources = append(sources, enrich)
+	}
+	if len(m.Releases) > 0 {
+		sources = append(sources, &m.Releases[0])
+	}
 	if m.CurrentRelease != nil {
-		r.Version = m.CurrentRelease.Version
-		if m.CurrentRelease.ValidationScore != nil {
-			r.QualityScore = float64(*m.CurrentRelease.ValidationScore)
+		sources = append(sources, m.CurrentRelease)
+	}
+
+	createdAt := ""
+	for _, rel := range sources {
+		if r.Version == "" {
+			r.Version = rel.Version
 		}
-		if m.CurrentRelease.CreatedAt != "" {
-			t, err := parseForgeTime(m.CurrentRelease.CreatedAt)
-			if err != nil {
-				return nil, status.Errorf(codes.Internal, "forge: malformed release date: %v", err)
+		if r.QualityScore == 0 && rel.ValidationScore != nil {
+			r.QualityScore = float64(*rel.ValidationScore)
+		}
+		if createdAt == "" {
+			createdAt = rel.CreatedAt
+		}
+		if r.Summary == "" {
+			r.Summary = strings.TrimSpace(rel.Metadata.Summary)
+		}
+		if len(r.Tags) == 0 {
+			for _, tag := range rel.Tags {
+				if tag != "" {
+					r.Tags = append(r.Tags, tag)
+				}
 			}
-			r.ReleaseDate = timestamppb.New(t)
 		}
+	}
+	if createdAt != "" {
+		t, err := parseForgeTime(createdAt)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "forge: malformed release date: %v", err)
+		}
+		r.ReleaseDate = timestamppb.New(t)
 	}
 	return r, nil
 }
