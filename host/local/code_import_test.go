@@ -431,3 +431,348 @@ func TestImport_Tracer_Permissions(t *testing.T) {
 		}
 	}
 }
+
+// ------------------------------------------------------------ Task 2 matrix
+
+// mixedRemote is a remote with one importable branch and four whose names
+// violate ^[a-z0-9_]+$.
+func mixedRemote() map[string]tree {
+	return map[string]tree{
+		"production": canonicalTree(),
+		"feature-x":  canonicalTree(),
+		"Production": canonicalTree(),
+		"prod.1":     canonicalTree(),
+		"with space": canonicalTree(),
+	}
+}
+
+func TestImport_Inspect(t *testing.T) {
+	t.Run("a branch violating the name rule is reported, explained and never fetched", func(t *testing.T) {
+		h, fx := newImportHost(t, mixedRemote())
+		snap := mustInspect(t, h)
+		if len(snap.Branches) != 5 {
+			t.Fatalf("branches = %d, want 5", len(snap.Branches))
+		}
+		for _, name := range []string{"feature-x", "Production", "prod.1", "with space"} {
+			b := branchByName(snap, name)
+			if b == nil {
+				t.Fatalf("branch %q missing from the report", name)
+			}
+			if b.Importable || b.WillOverwrite {
+				t.Fatalf("%q must not be importable: %+v", name, b)
+			}
+			if len(b.Findings) != 1 || b.Findings[0].Kind != code.FindingBranchNameInvalid || b.Findings[0].Severity != hostv1.ImportFinding_ERROR {
+				t.Fatalf("%q findings = %v, want one branch_name_invalid error", name, b.Findings)
+			}
+			msg := b.Findings[0].Message
+			for _, want := range []string{"^[a-z0-9_]+$", "lowercase letters, digits and underscore", "r10k", "corrected name"} {
+				if !strings.Contains(msg, want) {
+					t.Fatalf("%q message %q does not mention %q", name, msg, want)
+				}
+			}
+			if b.Commit != "" || b.PuppetfileText != "" {
+				t.Fatalf("%q was analysed: %+v", name, b)
+			}
+		}
+		if opened := fx.OpenedBranches(); strings.Join(opened, ",") != "production" {
+			t.Fatalf("opened branches = %v, want only [production]: a refused name must never be fetched", opened)
+		}
+		if b := branchByName(snap, "production"); b == nil || !b.Importable {
+			t.Fatalf("production should be importable: %+v", b)
+		}
+	})
+
+	t.Run("a remote of only invalid names fetches nothing at all", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"feature-x": canonicalTree()})
+		mustInspect(t, h)
+		if fx.Opens() != 0 {
+			t.Fatal("Open was called although no branch was importable")
+		}
+	})
+
+	t.Run("the git client's branch cap refusal passes through and nothing is fetched", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		fx.SetListErr(status.Error(codes.FailedPrecondition, "git remote has more branches than the limit of 100"))
+		_, err := inspectImport(h)
+		wantCode(t, err, codes.FailedPrecondition)
+		if !strings.Contains(err.Error(), "more branches than the limit of 100") {
+			t.Fatalf("error = %v, want the client's cap message unchanged", err)
+		}
+		if fx.Opens() != 0 {
+			t.Fatal("a capped remote was fetched")
+		}
+	})
+
+	t.Run("an unknown credential is NotFound naming the credential and no value", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		_, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: importURL, Credential: "no-such-cred"})
+		wantCode(t, err, codes.NotFound)
+		if !strings.Contains(err.Error(), "no-such-cred") {
+			t.Fatalf("error = %v, want it to name the credential", err)
+		}
+		if fx.Listed() != 0 {
+			t.Fatal("the remote was contacted without a usable credential")
+		}
+		_, err = h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{ProposalId: "p", Url: importURL, Credential: "no-such-cred"})
+		wantCode(t, err, codes.NotFound)
+	})
+
+	t.Run("a malformed credential is Internal naming the field and no value", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		storeCredential(t, h, "broken", `{"kind":"https_token","username":"u","token":""}`)
+		_, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: importURL, Credential: "broken"})
+		wantCode(t, err, codes.Internal)
+		if !strings.Contains(err.Error(), `"broken"`) || !strings.Contains(err.Error(), `"token"`) {
+			t.Fatalf("error = %v, want the credential and the broken field named", err)
+		}
+	})
+
+	t.Run("an unreachable remote is Unavailable without the URL", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		fx.SetListErr(status.Error(codes.Unavailable, "git remote could not be reached"))
+		_, err := inspectImport(h)
+		wantCode(t, err, codes.Unavailable)
+		if strings.Contains(err.Error(), "git.example.test") {
+			t.Fatalf("error %q echoes the URL", err)
+		}
+	})
+
+	t.Run("a URL outside the scheme allowlist is InvalidArgument without the URL", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		for _, bad := range []string{"http://secret-host.example/x.git", "file:///etc/passwd", "ext::sh -c id", "git://secret-host.example/x"} {
+			_, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: bad})
+			wantCode(t, err, codes.InvalidArgument)
+			if strings.Contains(err.Error(), "secret-host") || strings.Contains(err.Error(), "passwd") {
+				t.Fatalf("error %q echoes the URL", err)
+			}
+		}
+		if fx.Listed() != 0 {
+			t.Fatal("a refused URL reached the git client")
+		}
+	})
+
+	t.Run("a branch filter naming an unknown branch is InvalidArgument", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		_, err := inspectImport(h, "production", "ghost")
+		wantCode(t, err, codes.InvalidArgument)
+		if !strings.Contains(err.Error(), "ghost") {
+			t.Fatalf("error = %v, want it to name the unknown branch", err)
+		}
+	})
+}
+
+func TestImport_Propose(t *testing.T) {
+	proposals := func(t *testing.T, h *host.Host) int {
+		t.Helper()
+		docs, err := h.Documents.List(context.Background(), &hostv1.ListDocumentsRequest{Collection: code.OverwriteCollection})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(docs.Documents)
+	}
+
+	t.Run("an explicit branch the remote does not have is InvalidArgument", func(t *testing.T) {
+		h, _ := newImportHost(t, mixedRemote())
+		_, err := proposeImport(h, "p1", "production", "ghost")
+		wantCode(t, err, codes.InvalidArgument)
+		if !strings.Contains(err.Error(), "ghost") {
+			t.Fatalf("error = %v, want it to name the branch", err)
+		}
+		if proposals(t, h) != 0 {
+			t.Fatal("a refused ProposeImport filed a proposal")
+		}
+	})
+
+	t.Run("an explicit branch that is not importable is InvalidArgument", func(t *testing.T) {
+		h, fx := newImportHost(t, mixedRemote())
+		_, err := proposeImport(h, "p1", "production", "feature-x")
+		wantCode(t, err, codes.InvalidArgument)
+		if !strings.Contains(err.Error(), "feature-x") {
+			t.Fatalf("error = %v, want it to name the branch", err)
+		}
+		if proposals(t, h) != 0 {
+			t.Fatal("a refused ProposeImport filed a proposal")
+		}
+		if strings.Contains(strings.Join(fx.OpenedBranches(), ","), "feature-x") {
+			t.Fatal("a refused name was fetched")
+		}
+	})
+
+	t.Run("a remote whose every branch is unimportable is FailedPrecondition", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"feature-x": canonicalTree(), "Prod": canonicalTree()})
+		_, err := proposeImport(h, "p1")
+		wantCode(t, err, codes.FailedPrecondition)
+		if proposals(t, h) != 0 {
+			t.Fatal("a refused ProposeImport filed a proposal")
+		}
+	})
+
+	t.Run("an empty list selects every importable branch and keeps the refused ones' findings", func(t *testing.T) {
+		trees := mixedRemote()
+		trees["staging"] = canonicalTree()
+		h, _ := newImportHost(t, trees)
+		resp := mustPropose(t, h, "p1")
+		for _, name := range []string{"production", "staging"} {
+			if b := branchByName(resp.Snapshot, name); b == nil || !b.Importable {
+				t.Fatalf("%s should be in the frozen snapshot as importable: %+v", name, b)
+			}
+		}
+		fx := branchByName(resp.Snapshot, "feature-x")
+		if fx == nil || fx.Importable || len(fx.Findings) != 1 {
+			t.Fatalf("feature-x should be carried as not importable with its finding: %+v", fx)
+		}
+		approveOverwrite(t, h, "p1")
+		applied := mustApply(t, h, "p1")
+		if strings.Join(envNames(applied), ",") != "production,staging" {
+			t.Fatalf("applied environments = %v, want only the importable ones", envNames(applied))
+		}
+		if _, err := h.Code.GetEnvironment(context.Background(), &hostv1.GetEnvironmentRequest{Name: "feature-x"}); status.Code(err) != codes.NotFound {
+			t.Fatalf("a refused branch became an environment: %v", err)
+		}
+	})
+
+	t.Run("an explicit subset is the only thing fetched and frozen", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+		resp := mustPropose(t, h, "p1", "staging")
+		if len(resp.Snapshot.Branches) != 1 || resp.Snapshot.Branches[0].Branch != "staging" {
+			t.Fatalf("frozen branches = %v, want only staging", resp.Snapshot.Branches)
+		}
+		if strings.Join(fx.OpenedBranches(), ",") != "staging" {
+			t.Fatalf("opened = %v, want only staging", fx.OpenedBranches())
+		}
+	})
+
+	t.Run("an expected_commits mismatch is import_branch_moved and files nothing", func(t *testing.T) {
+		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		report := mustInspect(t, h)
+		fx.SetCommit("production", strings.Repeat("a", 40))
+		_, err := h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{
+			ProposalId: "p1", Url: importURL,
+			ExpectedCommits: map[string]string{"production": report.Branches[0].Commit},
+		})
+		wantCode(t, err, codes.FailedPrecondition)
+		if !local.IsCodeImportBranchMoved(err) {
+			t.Fatalf("error = %v, want IsCodeImportBranchMoved", err)
+		}
+		if d := errorDetail(err); d == nil || d.Code != "import_branch_moved" {
+			t.Fatalf("detail = %+v, want import_branch_moved", d)
+		}
+		if strings.Contains(err.Error(), "git.example.test") {
+			t.Fatalf("error %q echoes the URL", err)
+		}
+		if proposals(t, h) != 0 {
+			t.Fatal("a moved branch still filed a proposal")
+		}
+	})
+
+	t.Run("an expected_commits map matching every selected branch succeeds", func(t *testing.T) {
+		h, _ := newImportHost(t, mixedRemote())
+		report := mustInspect(t, h)
+		resp, err := h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{
+			ProposalId: "p1", Url: importURL,
+			ExpectedCommits: map[string]string{"production": branchByName(report, "production").Commit},
+		})
+		if err != nil {
+			t.Fatalf("ProposeImport: %v", err)
+		}
+		if resp.ProposalId != "p1" {
+			t.Fatalf("proposal id = %q", resp.ProposalId)
+		}
+	})
+
+	t.Run("an expected_commits map that omits a selected branch is InvalidArgument", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+		report := mustInspect(t, h)
+		_, err := h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{
+			ProposalId: "p1", Url: importURL,
+			ExpectedCommits: map[string]string{"production": branchByName(report, "production").Commit},
+		})
+		wantCode(t, err, codes.InvalidArgument)
+		if !strings.Contains(err.Error(), "staging") {
+			t.Fatalf("error = %v, want it to name the unpinned branch", err)
+		}
+	})
+
+	t.Run("a missing proposal id is InvalidArgument", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		_, err := proposeImport(h, "")
+		wantCode(t, err, codes.InvalidArgument)
+	})
+}
+
+// seedOldEnvironment gives env a Puppetfile, hierarchy, two data files and
+// settings through the Documents facet, plus a data file the import's snapshot
+// will not contain.
+func seedOldEnvironment(t *testing.T, h *host.Host, env string) {
+	t.Helper()
+	seedFullEnvironment(t, h, context.Background(), env)
+}
+
+func TestImport_Overwrite(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("a flagged overwrite replaces every owned document and leaves no stale data file", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		seedOldEnvironment(t, h, "production") // owns common.yaml, nodes/web01.yaml, apache module, settings
+		report := mustInspect(t, h)
+		if b := branchByName(report, "production"); !b.WillOverwrite {
+			t.Fatal("the report did not flag the existing environment as an overwrite")
+		}
+		resp := mustPropose(t, h, "ow-1")
+		if !branchByName(resp.Snapshot, "production").WillOverwrite {
+			t.Fatal("the frozen snapshot did not record the overwrite")
+		}
+		approveOverwrite(t, h, "ow-1")
+		mustApply(t, h, "ow-1")
+
+		// Read back only through the facet's own RPCs: the old nodes/web01.yaml
+		// and the old apache module must be gone, the imported content present.
+		assertReadable(t, h, "production", 1, []string{"common.yaml"})
+		mods, _ := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "production"})
+		if mods.Modules[0].Name != "stdlib" && mods.Modules[0].Name != "puppetlabs-stdlib" {
+			t.Fatalf("module = %q, want the imported stdlib", mods.Modules[0].Name)
+		}
+		if _, err := h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: "production", Path: "nodes/web01.yaml"}); status.Code(err) != codes.NotFound {
+			t.Fatalf("a data file only the old environment had is still readable: %v", err)
+		}
+		s, err := h.Code.GetEnvironmentSettings(ctx, &hostv1.GetEnvironmentSettingsRequest{Environment: "production"})
+		if err != nil || s.GetModulepath() != "site-modules:modules:$basemodulepath" {
+			t.Fatalf("settings = %v, %v; want the imported modulepath", s, err)
+		}
+	})
+
+	t.Run("a collision on a branch the snapshot did not flag refuses the whole import", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree(), "staging": canonicalTree()})
+		mustPropose(t, h, "ow-2")
+		approveOverwrite(t, h, "ow-2")
+		mustCreateEnv(t, h, "staging") // appears after the proposal was filed
+		before := dumpStore(t, h)
+
+		_, err := applyImport(h, "ow-2")
+		wantCode(t, err, codes.FailedPrecondition)
+		if !local.IsCodeImportUnflaggedCollision(err) {
+			t.Fatalf("error = %v, want IsCodeImportUnflaggedCollision", err)
+		}
+		if d := errorDetail(err); d == nil || d.Code != "import_unflagged_collision" {
+			t.Fatalf("detail = %+v, want import_unflagged_collision", d)
+		}
+		if !storesEqual(before, dumpStore(t, h)) {
+			t.Fatal("a refused ApplyImport changed the store")
+		}
+		if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "production"}); status.Code(err) != codes.NotFound {
+			t.Fatalf("production was created although the whole import must be refused: %v", err)
+		}
+	})
+
+	t.Run("a flagged overwrite whose environment has since been deleted is simply created", func(t *testing.T) {
+		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
+		seedOldEnvironment(t, h, "production")
+		mustPropose(t, h, "ow-3")
+		approveOverwrite(t, h, "ow-3")
+		if _, err := h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "production"}); err != nil {
+			t.Fatal(err)
+		}
+		mustApply(t, h, "ow-3")
+		assertReadable(t, h, "production", 1, []string{"common.yaml"})
+	})
+}

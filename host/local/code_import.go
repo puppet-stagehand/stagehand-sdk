@@ -37,6 +37,57 @@ import (
 // bounds; this is the ceiling over all of them together.
 const importInspectTimeout = 3 * time.Minute
 
+// Detail codes attached to the two import refusals, read back by
+// IsCodeImportBranchMoved and IsCodeImportUnflaggedCollision.
+const (
+	detailCodeImportBranchMoved        = "import_branch_moved"
+	detailCodeImportUnflaggedCollision = "import_unflagged_collision"
+)
+
+// importRefusal builds a FailedPrecondition carrying a structured ErrorDetail.
+// The detail is best-effort: the status itself must never fail to construct.
+func importRefusal(detailCode, msg, fix string) error {
+	st := status.New(codes.FailedPrecondition, msg)
+	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{Code: detailCode, Message: msg, Fix: fix})
+	if err != nil {
+		return st.Err()
+	}
+	return withDetails.Err()
+}
+
+// ErrCodeImportBranchMoved is the refusal ProposeImport returns when a selected
+// branch's fetched SHA differs from the one the caller expected, so a proposal
+// can never be filed against content different from the report the human read
+// (D-06, DQ-3). It never echoes the repo URL.
+func ErrCodeImportBranchMoved(branch, expected, actual string) error {
+	return importRefusal(detailCodeImportBranchMoved,
+		"branch "+quoteName(branch)+" is at commit "+actual+" but the report the caller read showed "+expected+"; it moved after that report",
+		"run InspectImport again, have the new report reviewed, and propose against its commits")
+}
+
+// ErrCodeImportUnflaggedCollision is the refusal ApplyImport returns when a
+// branch's environment now exists but the frozen snapshot did not flag the
+// branch as an overwrite: the approver was never shown that environment being
+// replaced (D-15). The whole import is refused. It never echoes the repo URL.
+func ErrCodeImportUnflaggedCollision(branch string) error {
+	return importRefusal(detailCodeImportUnflaggedCollision,
+		"environment "+quoteName(branch)+" appeared after this import was proposed, so the approver never saw it being replaced; nothing was imported",
+		"run InspectImport again so the report marks the overwrite, propose the import again and have it approved")
+}
+
+// IsCodeImportBranchMoved reports whether err is (or wraps) an
+// ErrCodeImportBranchMoved error. It compares the ErrorDetail code and does
+// not branch on codes.FailedPrecondition alone, which many refusals produce.
+func IsCodeImportBranchMoved(err error) bool {
+	return overwriteDetailCode(err) == detailCodeImportBranchMoved
+}
+
+// IsCodeImportUnflaggedCollision reports whether err is (or wraps) an
+// ErrCodeImportUnflaggedCollision error.
+func IsCodeImportUnflaggedCollision(err error) bool {
+	return overwriteDetailCode(err) == detailCodeImportUnflaggedCollision
+}
+
 // ------------------------------------------------------------ adapter
 
 // importRepoFS adapts one branch of a GitRepo onto the pure format layer's

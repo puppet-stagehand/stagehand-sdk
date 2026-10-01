@@ -1155,3 +1155,75 @@ func TestCode_DuplicateConcurrentIsExactlyOnce(t *testing.T) {
 	assertEnvDocsPresent(t, h, ctx, "staging")
 	assertEnvDocsPresent(t, h, ctx, "production")
 }
+
+// TestImport_Permissions is the denial table for the three import RPCs. It is
+// separate from codeCallsTable on purpose: the import RPCs need two grants, so
+// the table asserts each direction. Because gatedCode embeds
+// UnimplementedCodeServer, a forgotten forwarder compiles and returns
+// Unimplemented rather than PermissionDenied, so this table is the only thing
+// that proves each forwarder exists.
+func TestImport_Permissions(t *testing.T) {
+	calls := []struct {
+		name string
+		call func(h *host.Host) error
+	}{
+		{"InspectImport", func(h *host.Host) error {
+			_, err := h.Code.InspectImport(context.Background(), &hostv1.InspectImportRequest{Url: "https://git.example.test/org/control.git"})
+			return err
+		}},
+		{"ProposeImport", func(h *host.Host) error {
+			_, err := h.Code.ProposeImport(context.Background(), &hostv1.ProposeImportRequest{ProposalId: "p", Url: "https://git.example.test/org/control.git"})
+			return err
+		}},
+		{"ApplyImport", func(h *host.Host) error {
+			_, err := h.Code.ApplyImport(context.Background(), &hostv1.ApplyImportRequest{ProposalId: "no-such-proposal"})
+			return err
+		}},
+	}
+	rows := []struct {
+		label  string
+		perms  []string
+		denied bool
+		names  string // the permission the refusal must name
+	}{
+		{"no permissions", nil, true, "code:rw"},
+		{"code:import only", []string{"code:import"}, true, "code:rw"},
+		{"code:rw only", []string{"code:rw"}, true, "code:import"},
+		{"both", []string{"code:rw", "code:import"}, false, ""},
+	}
+	for _, c := range calls {
+		for _, r := range rows {
+			fx := local.NewGitFixture(map[string]map[string]string{"production": {"Puppetfile": ""}})
+			h := local.New(r.perms, "controlrepo", local.WithGitClient(fx))
+			err := c.call(h)
+			if !r.denied {
+				if status.Code(err) == codes.PermissionDenied || status.Code(err) == codes.Unimplemented {
+					t.Fatalf("%s/%s: %v, want the gate to pass the call through to the inner method", c.name, r.label, err)
+				}
+				continue
+			}
+			if status.Code(err) != codes.PermissionDenied {
+				t.Fatalf("%s/%s: error = %v, want PermissionDenied (Unimplemented means the forwarder is missing)", c.name, r.label, err)
+			}
+			var detail *hostv1.ErrorDetail
+			for _, d := range status.Convert(err).Details() {
+				if ed, ok := d.(*hostv1.ErrorDetail); ok {
+					detail = ed
+					break
+				}
+			}
+			if detail == nil || detail.Code != "facet_not_declared" {
+				t.Fatalf("%s/%s: detail = %+v, want facet_not_declared", c.name, r.label, detail)
+			}
+			if !strings.Contains(detail.Message, `"`+r.names+`"`) {
+				t.Fatalf("%s/%s: message %q does not name %s", c.name, r.label, detail.Message, r.names)
+			}
+			if r.names == "code:rw" && strings.Contains(detail.Message, "code:import") {
+				t.Fatalf("%s/%s: code:rw is checked first, but the message names code:import", c.name, r.label)
+			}
+			if fx.Listed() != 0 || fx.Opens() != 0 {
+				t.Fatalf("%s/%s: a refused call reached the git client", c.name, r.label)
+			}
+		}
+	}
+}
