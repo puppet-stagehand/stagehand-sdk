@@ -514,6 +514,113 @@ func TestPermissionVocabulariesAgree(t *testing.T) {
 	}
 }
 
+// TestForgePermissionsAreAcceptedExactly pins that both Forge permissions a
+// real Recommend consumer declares validate clean, and that a widened spelling
+// of either is refused with a fix line that offers a real Forge literal.
+func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
+	realForge := []string{"forge:read", "forge:rw", "forge:recommend"}
+	for _, real := range []string{"forge:rw", "forge:recommend"} {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, real)
+		if fs := Validate(m); len(fs) != 0 {
+			t.Fatalf("%s must validate clean; got %v", real, codes(fs))
+		}
+	}
+
+	for _, widened := range []string{"forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"} {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, widened)
+		fs := Validate(m)
+		var found *Finding
+		for i := range fs {
+			if fs[i].Code == "permission_unknown" {
+				found = &fs[i]
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("expected a permission_unknown finding for %q, got %v", widened, codes(fs))
+		}
+		var offers bool
+		for _, real := range realForge {
+			if strings.Contains(found.Fix, real) {
+				offers = true
+				break
+			}
+		}
+		if !offers {
+			t.Fatalf("permission_unknown fix line for %q must offer a real Forge literal; got %q", widened, found.Fix)
+		}
+	}
+}
+
+// TestForgePermissionVocabulariesCarryBothLiterals pins forge:rw and
+// forge:recommend as exact literals on all three independently maintained
+// vocabularies, and pins the survival of forge:read, which names a different,
+// dormant read-only content rule and was added alongside, never replaced
+// (the Phase 6 code:read precedent). It is the positive-control counterpart to
+// TestCodeApproveScopeIsNotAManifestPermission: forge:recommend IS a facet
+// permission, where code:approve is not.
+//
+// The literals are declared locally so the pin holds whatever any Go package
+// later renames.
+func TestForgePermissionVocabulariesCarryBothLiterals(t *testing.T) {
+	const (
+		forgeRead      = "forge:read"
+		forgeRW        = "forge:rw"
+		forgeRecommend = "forge:recommend"
+	)
+	real := []string{forgeRead, forgeRW, forgeRecommend}
+	widened := []string{"forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"}
+
+	t.Run("rePerm is an exact-literal match", func(t *testing.T) {
+		for _, p := range real {
+			if !rePerm.MatchString(p) {
+				t.Errorf("rePerm must match %q", p)
+			}
+		}
+		for _, p := range widened {
+			if rePerm.MatchString(p) {
+				t.Errorf("rePerm must NOT match %q: the forge branches must be exact literals, not a widened prefix", p)
+			}
+		}
+	})
+
+	t.Run("Permissions slice carries all three, including the pre-existing read literal", func(t *testing.T) {
+		for _, want := range real {
+			var found bool
+			for _, p := range Permissions {
+				if p == want {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Permissions slice must contain %q", want)
+			}
+		}
+	})
+
+	t.Run("schema.json carries all three", func(t *testing.T) {
+		raw, err := os.ReadFile("schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range real {
+			if !strings.Contains(string(raw), want) {
+				t.Errorf("schema.json must contain the literal %q", want)
+			}
+		}
+	})
+
+	t.Run("fixture declaring both new permissions validates", func(t *testing.T) {
+		m := load(t, "testdata/forge-recommend.json")
+		if fs := Validate(m); len(fs) != 0 {
+			t.Fatalf("forge-recommend fixture must validate; got %v", codes(fs))
+		}
+	})
+}
+
 func TestUnknownFieldIsAFinding(t *testing.T) {
 	raw, _ := json.Marshal(map[string]any{"id": "x", "sneaky": true})
 	if _, fs := Parse(raw); len(fs) == 0 || fs[0].Code != "manifest_unparseable" {
