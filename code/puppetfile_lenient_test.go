@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"google.golang.org/protobuf/proto"
 
@@ -574,4 +575,224 @@ func TestParsePuppetfileLenient_BOMCRLFFixture(t *testing.T) {
 	if _, err := ParsePuppetfile(text); err == nil {
 		t.Fatal("strict must refuse the BOM fixture (U+FEFF before mod)")
 	}
+}
+
+// ---------------------------------------------------------------------------
+// One grammar, proven: strict and lenient agree, rendered models round-trip,
+// and the lenient output is always renderable and strict-re-parseable.
+// ---------------------------------------------------------------------------
+
+// strictCorpusAccepted is every input the strict tests in puppetfile_test.go
+// accept, plus the rendered form of its roundTripFixtures. That file's inline
+// inputs are not exported as a list and the file is the strict-behaviour
+// contract that must stay unmodified (T-10-16), so the inline ones are
+// mirrored here; roundTripFixtures is the one list shared by reference, so the
+// two files cannot drift on it.
+func strictCorpusAccepted(t *testing.T) []string {
+	t.Helper()
+	out := []string{
+		"mod 'puppetlabs/ntp'\n",
+		"mod 'puppetlabs/apache', '0.10.0'\n",
+		"mod 'puppetlabs/stdlib', :latest\n",
+		"moduledir 'thirdparty'\n",
+		"moduledir \"thirdparty\"\n",
+		"",
+		"# just a comment\n\n# another\n",
+		"mod 'puppetlabs/ntp'\nmod 'puppetlabs/apache'\nmod 'puppetlabs/apache_extra'\nmod 'puppetlabs/stdlib'\n",
+		"mod 'puppetlabs/ntp', '1.0.0'\n",
+		"mod \"puppetlabs/ntp\", \"1.0.0\"\n",
+		"mod 'apache',\n  :git => 'https://github.com/puppetlabs/puppetlabs-apache'\n",
+		"mod 'apache',\n  :git => 'url',\n  :ref => 'docs_experiment'\n",
+		"mod 'apache',\n  :git => 'url',\n  :tag => '0.9.0'\n",
+		"mod 'apache',\n  :git => 'url',\n  :branch => 'docs_experiment'\n",
+		"mod 'apache',\n  :git => 'url',\n  :commit => '83401079053dca11d61945bd9beef9ecf7576cbf'\n",
+		"mod 'apache',\n  :git => 'url',\n  :branch => :control_branch\n",
+		"mod 'apache',\n  :git => 'url',\n  :default_branch => 'main'\n",
+		"mod 'apache',\n  :git => 'url',\n  :branch => :control_branch,\n  :default_branch => 'main'\n",
+	}
+	for i, m := range roundTripFixtures {
+		rendered, err := RenderPuppetfile(m)
+		if err != nil {
+			t.Fatalf("roundTripFixtures[%d]: %v", i, err)
+		}
+		out = append(out, rendered)
+	}
+	return out
+}
+
+// strictCorpusRejected mirrors the inputs the strict tests reject.
+func strictCorpusRejected() []string {
+	return []string{
+		"mod 'puppetlabs/apache',\n  :type => 'forge'\n",
+		"mod 'apache',\n  :git => 'url',\n  :tag => '0.9.0',\n  :branch => 'main'\n",
+		"mod 'apache',\n  :git => 'url',\n  :ref => 'x',\n  :commit => 'y'\n",
+		"moduledir 'a'\nmoduledir 'b'\n",
+		"forge 'https://forge.puppet.com'\n",
+	}
+}
+
+// TestLenientAgreesWithStrict is what makes "one grammar" (D-11) a checked
+// property rather than a design intention: on every strict-valid text the
+// lenient parse returns the same model with zero findings. The one carve-out
+// is a module strict accepts but ValidateModule refuses (the strict tests use
+// the placeholder url 'url'); lenient then reports puppetfile_invalid_module
+// and drops exactly that module, which is the point of the lenient validation
+// (RESEARCH Pitfall 2).
+func TestLenientAgreesWithStrict(t *testing.T) {
+	lim := DefaultImportLimits()
+	t.Run("strict_valid_text_agrees", func(t *testing.T) {
+		for i, text := range strictCorpusAccepted(t) {
+			strict, err := ParsePuppetfile(text)
+			if err != nil {
+				t.Fatalf("corpus[%d] %q is not strict-valid: %v", i, text, err)
+			}
+			lenient, fs := ParsePuppetfileLenient(text, lim)
+			allRenderable := true
+			for _, m := range strict.GetModules() {
+				if ValidateModule(m) != nil {
+					allRenderable = false
+				}
+			}
+			if allRenderable {
+				if len(fs) != 0 {
+					t.Errorf("corpus[%d] %q: lenient findings %v, want none", i, text, findingKinds(fs))
+				}
+				if !proto.Equal(strict, lenient) {
+					t.Errorf("corpus[%d] %q: strict and lenient differ:\n%v\n%v", i, text, strict, lenient)
+				}
+				continue
+			}
+			if len(fs) == 0 {
+				t.Errorf("corpus[%d] %q holds a module ValidateModule refuses but lenient reported nothing", i, text)
+			}
+			for _, f := range fs {
+				if f.GetKind() != FindingPuppetfileInvalidModule {
+					t.Errorf("corpus[%d] %q: finding %s, want only %s", i, text, f.GetKind(), FindingPuppetfileInvalidModule)
+				}
+			}
+			if len(lenient.GetModules()) >= len(strict.GetModules()) {
+				t.Errorf("corpus[%d] %q: lenient kept %d modules of %d despite an invalid one", i, text, len(lenient.GetModules()), len(strict.GetModules()))
+			}
+		}
+	})
+	t.Run("strict_rejected_text_yields_findings", func(t *testing.T) {
+		for i, text := range strictCorpusRejected() {
+			if _, err := ParsePuppetfile(text); err == nil {
+				t.Fatalf("corpus[%d] %q is not strict-rejected", i, text)
+			}
+			_, fs := ParsePuppetfileLenient(text, lim)
+			if len(fs) == 0 {
+				t.Errorf("corpus[%d] %q: strict refuses it but lenient reported no finding", i, text)
+			}
+		}
+	})
+}
+
+// TestLenientRoundTripsRenderedModels is the PF-05 property Phase 6
+// established, inherited by whatever import produces: lenient(Render(m)) == m
+// with zero findings.
+func TestLenientRoundTripsRenderedModels(t *testing.T) {
+	git := func(name string, g *hostv1.GitSource) *hostv1.PuppetfileModule {
+		return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Git{Git: g}}
+	}
+	forge := func(name string, f *hostv1.ForgeSource) *hostv1.PuppetfileModule {
+		return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Forge{Forge: f}}
+	}
+	const u = "https://example.com/m.git"
+	models := map[string]*hostv1.Puppetfile{
+		"forge_explicit_version": {Modules: []*hostv1.PuppetfileModule{forge("puppetlabs/apache", &hostv1.ForgeSource{Version: "0.10.0"})}},
+		"forge_latest":           {Modules: []*hostv1.PuppetfileModule{forge("puppetlabs/stdlib", &hostv1.ForgeSource{Latest: true})}},
+		"git_ref":                {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u, RefKind: &hostv1.GitSource_Ref{Ref: "r"}})}},
+		"git_tag":                {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u, RefKind: &hostv1.GitSource_Tag{Tag: "v1"}})}},
+		"git_branch":             {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u, RefKind: &hostv1.GitSource_Branch{Branch: "main"}})}},
+		"git_commit":             {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u, RefKind: &hostv1.GitSource_Commit{Commit: "83401079053dca11d61945bd9beef9ecf7576cbf"}})}},
+		"git_control_branch": {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u,
+			RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}})}},
+		"git_default_branch_only": {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u, DefaultBranch: "main"})}},
+		"git_control_branch_with_default_branch": {Modules: []*hostv1.PuppetfileModule{git("m", &hostv1.GitSource{Url: u,
+			RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}}, DefaultBranch: "main"})}},
+		"moduledir_set": {Moduledir: "thirdparty", Modules: []*hostv1.PuppetfileModule{forge("puppetlabs/ntp", &hostv1.ForgeSource{})}},
+		// Phase 6 proved the non-ASCII guarantee on git-sourced modules: Forge
+		// names are an ASCII slug.
+		"git_non_ascii_name": {Modules: []*hostv1.PuppetfileModule{git("ntp-café", &hostv1.GitSource{Url: "https://example.com/ntp-café.git"})}},
+	}
+	for i, m := range roundTripFixtures {
+		models["phase6_fixture_"+string(rune('a'+i))] = m
+	}
+	for name, m := range models {
+		t.Run(name, func(t *testing.T) {
+			rendered, err := RenderPuppetfile(m)
+			if err != nil {
+				t.Fatalf("RenderPuppetfile: %v", err)
+			}
+			got, fs := ParsePuppetfileLenient(rendered, DefaultImportLimits())
+			if len(fs) != 0 {
+				t.Fatalf("findings = %v for rendered %q, want none", findingKinds(fs), rendered)
+			}
+			if !proto.Equal(got, m) {
+				t.Fatalf("lenient(Render(m)) != m:\n%v\n%v", got, m)
+			}
+		})
+	}
+}
+
+func FuzzParsePuppetfileLenient(f *testing.F) {
+	seed := func(dir string) string {
+		b, err := os.ReadFile(filepath.Join("testdata", "import", "puppetfile", dir, "Puppetfile"))
+		if err != nil {
+			f.Fatalf("seed fixture %s: %v", dir, err)
+		}
+		return string(b)
+	}
+	f.Add(seed("canonical-control-repo"))
+	f.Add(seed("ruby19"))
+	f.Add(seed("constructs"))
+	f.Add(seed("bom-crlf"))
+	f.Add("")
+	f.Add("\xef\xbb\xbf")
+	f.Add("# only a comment")
+	f.Add("mod 'unterminated")
+	f.Add("mod 'a',\n  git: 'https://example.com/a.git',\n  branch: :control_branch\n")
+	f.Add("moduledir 'x'\nmoduledir 'y'\nmod 'puppetlabs/ntp', '1.0'\nmod 'puppetlabs/ntp'\n")
+
+	lim := DefaultImportLimits()
+	f.Fuzz(func(t *testing.T, text string) {
+		pf, fs := ParsePuppetfileLenient(text, lim)
+		if pf == nil {
+			t.Fatal("nil model")
+		}
+
+		// Invariant 2: finding lines stay inside the input (the findings cap
+		// is not exercised by line, so the terminal finding obeys it too).
+		nLines := strings.Count(text, "\n") + 1
+		for _, fd := range fs {
+			if fd.GetLine() < 1 || int(fd.GetLine()) > nLines {
+				t.Fatalf("finding %s line %d outside 1..%d", fd.GetKind(), fd.GetLine(), nLines)
+			}
+			if !utf8.ValidString(fd.GetExcerpt()) || len(fd.GetExcerpt()) > lim.ExcerptBytes {
+				t.Fatalf("finding %s excerpt invalid or over the cap: %q", fd.GetKind(), fd.GetExcerpt())
+			}
+			if fd.GetSeverity() != hostv1.ImportFinding_WARNING {
+				t.Fatalf("finding %s has severity %v; a Puppetfile construct is never an error", fd.GetKind(), fd.GetSeverity())
+			}
+		}
+		if len(fs) > lim.MaxFindingsPerBranch+1 {
+			t.Fatalf("%d findings exceeds the cap %d plus one terminal", len(fs), lim.MaxFindingsPerBranch)
+		}
+
+		// Invariant 3: the load-bearing one. Every model the lenient parser
+		// can produce renders, and the rendering strict-re-parses to the same
+		// model, so ApplyImport's second pass can be infallible.
+		rendered, err := RenderPuppetfile(pf)
+		if err != nil {
+			t.Fatalf("lenient output does not render: %v\ninput: %q", err, text)
+		}
+		back, err := ParsePuppetfile(rendered)
+		if err != nil {
+			t.Fatalf("rendered lenient output does not strict-parse: %v\nrendered: %q\ninput: %q", err, rendered, text)
+		}
+		if !proto.Equal(pf, back) {
+			t.Fatalf("strict re-parse differs:\n%v\n%v\ninput: %q", pf, back, text)
+		}
+	})
 }
