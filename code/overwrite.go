@@ -22,6 +22,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -40,14 +42,17 @@ const OverwriteCollection = "code-overwrites"
 // and no manifest vocabulary mentions it.
 const OverwriteApproveScope = "code:approve"
 
-// The five overwrite resource kinds an OverwriteTarget can name.
+// The six overwrite resource kinds an OverwriteTarget can name.
 const (
 	OverwriteResourceEnvironment      = "environment"
 	OverwriteResourceSettings         = "settings"
 	OverwriteResourcePuppetfileModule = "puppetfile_module"
 	OverwriteResourceHieraLevel       = "hiera_level"
 	OverwriteResourceHieraDataKey     = "hiera_data_key"
-	OverwriteResourceImport           = "import"
+	// OverwriteResourceImport targets a whole repo import. An import spans
+	// environments, so its Environment is deliberately empty: the environments
+	// it will write are listed in its payload. Its Source is the repo URL.
+	OverwriteResourceImport = "import"
 )
 
 // ErrOverwriteBodyInvalid is returned (wrapped) when a proposal body cannot
@@ -60,12 +65,14 @@ var ErrOverwriteBodyInvalid = errors.New("code: overwrite proposal body is inval
 // are equal; the gate compares them by plain struct equality with no prefix,
 // substring or case-insensitive matching anywhere.
 //
-// Environment is always the environment whose content is overwritten. Resource
+// Environment is the environment whose content is overwritten; it is empty only
+// for an import target, which spans environments. Resource
 // is one of the OverwriteResource* constants. Name carries the module name,
 // the Hiera level name or the Hiera data key, depending on Resource, and is
 // empty for a whole-environment or settings overwrite. Path carries the Hiera
 // data file's relative path and is empty otherwise. Source carries the
-// source environment for an environment duplicate and is empty otherwise.
+// source environment for an environment duplicate, or the repo URL for an
+// import, and is empty otherwise.
 type OverwriteTarget struct {
 	Environment string
 	Resource    string
@@ -92,7 +99,8 @@ func validOverwriteResource(r string) bool {
 		OverwriteResourceSettings,
 		OverwriteResourcePuppetfileModule,
 		OverwriteResourceHieraLevel,
-		OverwriteResourceHieraDataKey:
+		OverwriteResourceHieraDataKey,
+		OverwriteResourceImport:
 		return true
 	}
 	return false
@@ -156,11 +164,18 @@ func ParseOverwriteTarget(body map[string]any) (OverwriteTarget, error) {
 	if t.Source, err = field(overwriteKeySource); err != nil {
 		return OverwriteTarget{}, err
 	}
-	if t.Environment == "" {
-		return OverwriteTarget{}, fmt.Errorf("%w: target has no environment", ErrOverwriteBodyInvalid)
-	}
+	// The resource is validated before the environment rule branches on it, so
+	// an unknown resource can never reach the import relaxation.
 	if !validOverwriteResource(t.Resource) {
-		return OverwriteTarget{}, fmt.Errorf("%w: target resource %q is not one of the five overwrite resource kinds", ErrOverwriteBodyInvalid, t.Resource)
+		return OverwriteTarget{}, fmt.Errorf("%w: target resource %q is not one of the six overwrite resource kinds", ErrOverwriteBodyInvalid, t.Resource)
+	}
+	if t.Environment == "" {
+		if t.Resource != OverwriteResourceImport {
+			return OverwriteTarget{}, fmt.Errorf("%w: target has no environment", ErrOverwriteBodyInvalid)
+		}
+		if t.Source == "" {
+			return OverwriteTarget{}, fmt.Errorf("%w: import target has no source", ErrOverwriteBodyInvalid)
+		}
 	}
 	return t, nil
 }
@@ -458,12 +473,52 @@ func OverwritePayloadHieraDataKey(body map[string]any) (*hostv1.Json, error) {
 	return v, nil
 }
 
-// OverwriteBodyForImport is a skeleton awaiting its implementation.
+// OverwriteBodyForImport builds the body of a proposal to import the frozen
+// snapshot s. The target is fixed by construction: Environment is empty (an
+// import spans environments), Resource is OverwriteResourceImport, Source is the
+// repo URL, Name is the sorted selected branch names joined with a comma, and
+// Path is empty. A branch name that passes the environment-name rule cannot
+// contain a comma, which is what makes the join unambiguous. The payload is
+// protojson's rendering of the snapshot, never a hand-built map, so int, UTF-8
+// and field-presence behaviour is protojson's. The result carries no status key.
 func OverwriteBodyForImport(s *hostv1.ImportSnapshot) (map[string]any, error) {
-	return nil, errors.New("not implemented")
+	if s == nil || s.GetUrl() == "" {
+		return nil, fmt.Errorf("%w: an import snapshot with a url is required", ErrOverwriteBodyInvalid)
+	}
+	if len(s.GetBranches()) == 0 {
+		return nil, fmt.Errorf("%w: an import snapshot with at least one branch is required", ErrOverwriteBodyInvalid)
+	}
+	names := make([]string, 0, len(s.GetBranches()))
+	for _, b := range s.GetBranches() {
+		n := b.GetBranch()
+		if n == "" || strings.Contains(n, ",") {
+			return nil, fmt.Errorf("%w: import branch name %q must be non-empty and contain no comma", ErrOverwriteBodyInvalid, n)
+		}
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	payload, err := protoToMap(s)
+	if err != nil {
+		return nil, fmt.Errorf("%w: rendering import payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return overwriteBody(OverwriteTarget{
+		Resource: OverwriteResourceImport,
+		Source:   s.GetUrl(),
+		Name:     strings.Join(names, ","),
+	}, payload), nil
 }
 
-// OverwritePayloadImport is a skeleton awaiting its implementation.
+// OverwritePayloadImport is the exact inverse of OverwriteBodyForImport: it
+// decodes the frozen snapshot out of a proposal body. It refuses a body whose
+// target is not an import target.
 func OverwritePayloadImport(body map[string]any) (*hostv1.ImportSnapshot, error) {
-	return nil, errors.New("not implemented")
+	_, obj, err := overwritePayloadObject(body, OverwriteResourceImport)
+	if err != nil {
+		return nil, err
+	}
+	s := &hostv1.ImportSnapshot{}
+	if err := mapToProto(obj, s); err != nil {
+		return nil, fmt.Errorf("%w: decoding import payload: %v", ErrOverwriteBodyInvalid, err)
+	}
+	return s, nil
 }
