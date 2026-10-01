@@ -209,7 +209,8 @@ Warnings carry a `code`:
 | `recommend_unknown_module_dropped` | The model named a module that is not in the results. It was dropped. |
 | `recommend_duplicate_dropped` | The model named the same module twice. The repeat was dropped. |
 | `recommend_candidates_truncated` | The searches found more modules than the candidate limit; the extra ones were not ranked. |
-| `recommend_search_failed` | One search failed while another worked, so the candidates are narrower than you asked for. The `origins` field names the source. |
+| `recommend_search_failed` | One search failed or was skipped (the search time budget ran out) while another worked, so the candidates are narrower than you asked for. The `origins` field names the source when one search failed. |
+| `recommend_metadata_degraded` | A search worked but the registry would not give the details (summary, tags, quality score) for some modules, so they were ranked on thinner data. |
 
 ## 5. What to do next
 
