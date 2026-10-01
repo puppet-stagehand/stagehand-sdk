@@ -1441,28 +1441,33 @@ var Inventory_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	Code_ListEnvironments_FullMethodName       = "/stagehand.host.v1.Code/ListEnvironments"
-	Code_GetEnvironment_FullMethodName         = "/stagehand.host.v1.Code/GetEnvironment"
-	Code_CreateEnvironment_FullMethodName      = "/stagehand.host.v1.Code/CreateEnvironment"
-	Code_RenameEnvironment_FullMethodName      = "/stagehand.host.v1.Code/RenameEnvironment"
-	Code_DeleteEnvironment_FullMethodName      = "/stagehand.host.v1.Code/DeleteEnvironment"
-	Code_DuplicateEnvironment_FullMethodName   = "/stagehand.host.v1.Code/DuplicateEnvironment"
-	Code_GetEnvironmentSettings_FullMethodName = "/stagehand.host.v1.Code/GetEnvironmentSettings"
-	Code_PutEnvironmentSettings_FullMethodName = "/stagehand.host.v1.Code/PutEnvironmentSettings"
-	Code_ListPuppetfileModules_FullMethodName  = "/stagehand.host.v1.Code/ListPuppetfileModules"
-	Code_PutPuppetfileModule_FullMethodName    = "/stagehand.host.v1.Code/PutPuppetfileModule"
-	Code_RemovePuppetfileModule_FullMethodName = "/stagehand.host.v1.Code/RemovePuppetfileModule"
-	Code_SetModuledir_FullMethodName           = "/stagehand.host.v1.Code/SetModuledir"
-	Code_RenderPuppetfile_FullMethodName       = "/stagehand.host.v1.Code/RenderPuppetfile"
-	Code_GetHieraHierarchy_FullMethodName      = "/stagehand.host.v1.Code/GetHieraHierarchy"
-	Code_PutHieraLevel_FullMethodName          = "/stagehand.host.v1.Code/PutHieraLevel"
-	Code_RemoveHieraLevel_FullMethodName       = "/stagehand.host.v1.Code/RemoveHieraLevel"
-	Code_ReorderHieraLevels_FullMethodName     = "/stagehand.host.v1.Code/ReorderHieraLevels"
-	Code_ListHieraDataFiles_FullMethodName     = "/stagehand.host.v1.Code/ListHieraDataFiles"
-	Code_GetHieraDataFile_FullMethodName       = "/stagehand.host.v1.Code/GetHieraDataFile"
-	Code_PutHieraDataKey_FullMethodName        = "/stagehand.host.v1.Code/PutHieraDataKey"
-	Code_RemoveHieraDataKey_FullMethodName     = "/stagehand.host.v1.Code/RemoveHieraDataKey"
-	Code_DeleteHieraDataFile_FullMethodName    = "/stagehand.host.v1.Code/DeleteHieraDataFile"
+	Code_ListEnvironments_FullMethodName               = "/stagehand.host.v1.Code/ListEnvironments"
+	Code_GetEnvironment_FullMethodName                 = "/stagehand.host.v1.Code/GetEnvironment"
+	Code_CreateEnvironment_FullMethodName              = "/stagehand.host.v1.Code/CreateEnvironment"
+	Code_RenameEnvironment_FullMethodName              = "/stagehand.host.v1.Code/RenameEnvironment"
+	Code_DeleteEnvironment_FullMethodName              = "/stagehand.host.v1.Code/DeleteEnvironment"
+	Code_DuplicateEnvironment_FullMethodName           = "/stagehand.host.v1.Code/DuplicateEnvironment"
+	Code_ApplyEnvironmentDuplicate_FullMethodName      = "/stagehand.host.v1.Code/ApplyEnvironmentDuplicate"
+	Code_GetEnvironmentSettings_FullMethodName         = "/stagehand.host.v1.Code/GetEnvironmentSettings"
+	Code_PutEnvironmentSettings_FullMethodName         = "/stagehand.host.v1.Code/PutEnvironmentSettings"
+	Code_ApplyEnvironmentSettings_FullMethodName       = "/stagehand.host.v1.Code/ApplyEnvironmentSettings"
+	Code_ListPuppetfileModules_FullMethodName          = "/stagehand.host.v1.Code/ListPuppetfileModules"
+	Code_PutPuppetfileModule_FullMethodName            = "/stagehand.host.v1.Code/PutPuppetfileModule"
+	Code_ApplyPuppetfileModuleOverwrite_FullMethodName = "/stagehand.host.v1.Code/ApplyPuppetfileModuleOverwrite"
+	Code_RemovePuppetfileModule_FullMethodName         = "/stagehand.host.v1.Code/RemovePuppetfileModule"
+	Code_SetModuledir_FullMethodName                   = "/stagehand.host.v1.Code/SetModuledir"
+	Code_RenderPuppetfile_FullMethodName               = "/stagehand.host.v1.Code/RenderPuppetfile"
+	Code_GetHieraHierarchy_FullMethodName              = "/stagehand.host.v1.Code/GetHieraHierarchy"
+	Code_PutHieraLevel_FullMethodName                  = "/stagehand.host.v1.Code/PutHieraLevel"
+	Code_ApplyHieraLevelOverwrite_FullMethodName       = "/stagehand.host.v1.Code/ApplyHieraLevelOverwrite"
+	Code_RemoveHieraLevel_FullMethodName               = "/stagehand.host.v1.Code/RemoveHieraLevel"
+	Code_ReorderHieraLevels_FullMethodName             = "/stagehand.host.v1.Code/ReorderHieraLevels"
+	Code_ListHieraDataFiles_FullMethodName             = "/stagehand.host.v1.Code/ListHieraDataFiles"
+	Code_GetHieraDataFile_FullMethodName               = "/stagehand.host.v1.Code/GetHieraDataFile"
+	Code_PutHieraDataKey_FullMethodName                = "/stagehand.host.v1.Code/PutHieraDataKey"
+	Code_ApplyHieraDataKeyOverwrite_FullMethodName     = "/stagehand.host.v1.Code/ApplyHieraDataKeyOverwrite"
+	Code_RemoveHieraDataKey_FullMethodName             = "/stagehand.host.v1.Code/RemoveHieraDataKey"
+	Code_DeleteHieraDataFile_FullMethodName            = "/stagehand.host.v1.Code/DeleteHieraDataFile"
 )
 
 // CodeClient is the client API for Code service.
@@ -1490,10 +1495,41 @@ const (
 // from this milestone's actual environment/Puppetfile/Hiera authoring
 // requirements; no RPC or message name was taken from the reference tree.
 //
-// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
-// a name that already exists is refused outright (AlreadyExists), never
-// silently applied. Deliberate overwrite of existing content is a later
-// phase's approval-gated path, not something this contract offers.
+// Overwriting existing content is approval-gated, and creating new content
+// never is. A Put* that would replace something already stored is refused
+// outright with FAILED_PRECONDITION and a structured ErrorDetail whose fix
+// line says what to do next; it never applies the change silently. The path
+// to a deliberate overwrite has three steps, in three separate call graphs:
+//  1. Propose. The caller writes a pending proposal into the shared
+//     "code-overwrites" Documents collection. The proposal body names the
+//     exact target (environment, resource kind, name, path, source) and
+//     freezes the payload to be written.
+//  2. Approve. An operator holding a token scoped "code:approve" decides
+//     the proposal through the approval package. That scope is a route
+//     access scope, never a manifest permission, and nothing in this
+//     service can decide a proposal.
+//  3. Apply. The caller invokes the matching Apply* RPC with only the
+//     proposal_id. The Apply RPC reads the approved proposal, writes the
+//     payload frozen inside it, and never accepts a payload from its
+//     caller, so an approved proposal cannot be used to write content its
+//     approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//     which freezes only the source and target names and reads the source
+//     at apply time; see its comment.
+//
+// One collection and one scope cover every overwrite resource type; the
+// type is carried inside the proposal body, not in a separate collection.
+// Every Apply* RPC needs code:rw and nothing narrower.
+//
+// What the gate is and is not. It refuses an in-place replace made through a
+// Put*, which stops accidental replacement and gives deliberate replacement a
+// reviewable path. It is not a control against a caller with code:rw who means
+// to get around it: the delete RPCs (RemovePuppetfileModule, RemoveHieraLevel,
+// RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
+// putting an item back after removing it is an ungated create, so a replace
+// can be done as a remove followed by a put. ReorderHieraLevels and
+// SetModuledir change effective behaviour and are ungated too. A caller that
+// can also write the Documents facet directly can bypass the gate on
+// host.Local, since Documents has no access control.
 type CodeClient interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
@@ -1507,18 +1543,60 @@ type CodeClient interface {
 	// hierarchy, Hiera data files and settings to a NEW target name in one
 	// atomic write. A target that already exists is refused, never merged.
 	DuplicateEnvironment(ctx context.Context, in *DuplicateEnvironmentRequest, opts ...grpc.CallOption) (*Environment, error)
+	// ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+	// proposal: the target environment's whole owned document set (Puppetfile,
+	// Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+	// the source environment's, in one atomic step. The request carries only a
+	// proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+	// proposal but the source and target names: the source is read at apply
+	// time, so the approver approved the operation "replace the target with a
+	// copy of the source", not a fixed set of documents. It refuses with
+	// NOT_FOUND for an unknown proposal or a source environment that no longer
+	// exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+	// decision made under the code:approve scope and targets an environment
+	// duplicate, or when source and target are the same environment. An approval
+	// covers one application: a repeat call after the proposal was applied
+	// returns the environment without writing when the target already equals a
+	// copy of the source, and is refused with FAILED_PRECONDITION when the source
+	// or target has changed since, so an approval is never a standing permission
+	// to copy whatever the source later becomes. Requires code:rw only.
+	ApplyEnvironmentDuplicate(ctx context.Context, in *ApplyEnvironmentDuplicateRequest, opts ...grpc.CallOption) (*Environment, error)
 	// ------------------------------------------------- environment.conf
 	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
 	// documented defaults — Puppet applies those at catalog-compile time, and a
 	// second copy of them here would be a second source of truth.
 	GetEnvironmentSettings(ctx context.Context, in *GetEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
 	PutEnvironmentSettings(ctx context.Context, in *PutEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
+	// ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyEnvironmentSettings(ctx context.Context, in *ApplyEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error)
 	// ------------------------------------------------------- Puppetfile
 	ListPuppetfileModules(ctx context.Context, in *ListPuppetfileModulesRequest, opts ...grpc.CallOption) (*ListPuppetfileModulesResponse, error)
 	// PutPuppetfileModule upserts by module name: a name not present is
 	// appended, a name already present is replaced in place, preserving its
 	// position in the render order.
 	PutPuppetfileModule(ctx context.Context, in *PutPuppetfileModuleRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
+	// ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyPuppetfileModuleOverwrite(ctx context.Context, in *ApplyPuppetfileModuleOverwriteRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
 	RemovePuppetfileModule(ctx context.Context, in *RemovePuppetfileModuleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	SetModuledir(ctx context.Context, in *SetModuledirRequest, opts ...grpc.CallOption) (*Puppetfile, error)
 	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
@@ -1534,12 +1612,36 @@ type CodeClient interface {
 	// warnings alongside the already-applied write — a flagged anti-pattern
 	// never blocks the write.
 	PutHieraLevel(ctx context.Context, in *PutHieraLevelRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error)
+	// ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyHieraLevelOverwrite(ctx context.Context, in *ApplyHieraLevelOverwriteRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error)
 	RemoveHieraLevel(ctx context.Context, in *RemoveHieraLevelRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
 	ReorderHieraLevels(ctx context.Context, in *ReorderHieraLevelsRequest, opts ...grpc.CallOption) (*HieraHierarchy, error)
 	// ------------------------------------------------ Hiera data files
 	ListHieraDataFiles(ctx context.Context, in *ListHieraDataFilesRequest, opts ...grpc.CallOption) (*ListHieraDataFilesResponse, error)
 	GetHieraDataFile(ctx context.Context, in *GetHieraDataFileRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	PutHieraDataKey(ctx context.Context, in *PutHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
+	// ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyHieraDataKeyOverwrite(ctx context.Context, in *ApplyHieraDataKeyOverwriteRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	RemoveHieraDataKey(ctx context.Context, in *RemoveHieraDataKeyRequest, opts ...grpc.CallOption) (*HieraDataFile, error)
 	DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDataFileRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 }
@@ -1612,6 +1714,16 @@ func (c *codeClient) DuplicateEnvironment(ctx context.Context, in *DuplicateEnvi
 	return out, nil
 }
 
+func (c *codeClient) ApplyEnvironmentDuplicate(ctx context.Context, in *ApplyEnvironmentDuplicateRequest, opts ...grpc.CallOption) (*Environment, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Environment)
+	err := c.cc.Invoke(ctx, Code_ApplyEnvironmentDuplicate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codeClient) GetEnvironmentSettings(ctx context.Context, in *GetEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnvironmentSettings)
@@ -1632,6 +1744,16 @@ func (c *codeClient) PutEnvironmentSettings(ctx context.Context, in *PutEnvironm
 	return out, nil
 }
 
+func (c *codeClient) ApplyEnvironmentSettings(ctx context.Context, in *ApplyEnvironmentSettingsRequest, opts ...grpc.CallOption) (*EnvironmentSettings, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnvironmentSettings)
+	err := c.cc.Invoke(ctx, Code_ApplyEnvironmentSettings_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codeClient) ListPuppetfileModules(ctx context.Context, in *ListPuppetfileModulesRequest, opts ...grpc.CallOption) (*ListPuppetfileModulesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListPuppetfileModulesResponse)
@@ -1646,6 +1768,16 @@ func (c *codeClient) PutPuppetfileModule(ctx context.Context, in *PutPuppetfileM
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(PuppetfileModule)
 	err := c.cc.Invoke(ctx, Code_PutPuppetfileModule_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ApplyPuppetfileModuleOverwrite(ctx context.Context, in *ApplyPuppetfileModuleOverwriteRequest, opts ...grpc.CallOption) (*PuppetfileModule, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PuppetfileModule)
+	err := c.cc.Invoke(ctx, Code_ApplyPuppetfileModuleOverwrite_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1702,6 +1834,16 @@ func (c *codeClient) PutHieraLevel(ctx context.Context, in *PutHieraLevelRequest
 	return out, nil
 }
 
+func (c *codeClient) ApplyHieraLevelOverwrite(ctx context.Context, in *ApplyHieraLevelOverwriteRequest, opts ...grpc.CallOption) (*PutHieraLevelResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PutHieraLevelResponse)
+	err := c.cc.Invoke(ctx, Code_ApplyHieraLevelOverwrite_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *codeClient) RemoveHieraLevel(ctx context.Context, in *RemoveHieraLevelRequest, opts ...grpc.CallOption) (*HieraHierarchy, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HieraHierarchy)
@@ -1746,6 +1888,16 @@ func (c *codeClient) PutHieraDataKey(ctx context.Context, in *PutHieraDataKeyReq
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(HieraDataFile)
 	err := c.cc.Invoke(ctx, Code_PutHieraDataKey_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *codeClient) ApplyHieraDataKeyOverwrite(ctx context.Context, in *ApplyHieraDataKeyOverwriteRequest, opts ...grpc.CallOption) (*HieraDataFile, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(HieraDataFile)
+	err := c.cc.Invoke(ctx, Code_ApplyHieraDataKeyOverwrite_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -1797,10 +1949,41 @@ func (c *codeClient) DeleteHieraDataFile(ctx context.Context, in *DeleteHieraDat
 // from this milestone's actual environment/Puppetfile/Hiera authoring
 // requirements; no RPC or message name was taken from the reference tree.
 //
-// Overwrite behavior is deliberately ungated here: a rename or duplicate onto
-// a name that already exists is refused outright (AlreadyExists), never
-// silently applied. Deliberate overwrite of existing content is a later
-// phase's approval-gated path, not something this contract offers.
+// Overwriting existing content is approval-gated, and creating new content
+// never is. A Put* that would replace something already stored is refused
+// outright with FAILED_PRECONDITION and a structured ErrorDetail whose fix
+// line says what to do next; it never applies the change silently. The path
+// to a deliberate overwrite has three steps, in three separate call graphs:
+//  1. Propose. The caller writes a pending proposal into the shared
+//     "code-overwrites" Documents collection. The proposal body names the
+//     exact target (environment, resource kind, name, path, source) and
+//     freezes the payload to be written.
+//  2. Approve. An operator holding a token scoped "code:approve" decides
+//     the proposal through the approval package. That scope is a route
+//     access scope, never a manifest permission, and nothing in this
+//     service can decide a proposal.
+//  3. Apply. The caller invokes the matching Apply* RPC with only the
+//     proposal_id. The Apply RPC reads the approved proposal, writes the
+//     payload frozen inside it, and never accepts a payload from its
+//     caller, so an approved proposal cannot be used to write content its
+//     approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//     which freezes only the source and target names and reads the source
+//     at apply time; see its comment.
+//
+// One collection and one scope cover every overwrite resource type; the
+// type is carried inside the proposal body, not in a separate collection.
+// Every Apply* RPC needs code:rw and nothing narrower.
+//
+// What the gate is and is not. It refuses an in-place replace made through a
+// Put*, which stops accidental replacement and gives deliberate replacement a
+// reviewable path. It is not a control against a caller with code:rw who means
+// to get around it: the delete RPCs (RemovePuppetfileModule, RemoveHieraLevel,
+// RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
+// putting an item back after removing it is an ungated create, so a replace
+// can be done as a remove followed by a put. ReorderHieraLevels and
+// SetModuledir change effective behaviour and are ungated too. A caller that
+// can also write the Documents facet directly can bypass the gate on
+// host.Local, since Documents has no access control.
 type CodeServer interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
@@ -1814,18 +1997,60 @@ type CodeServer interface {
 	// hierarchy, Hiera data files and settings to a NEW target name in one
 	// atomic write. A target that already exists is refused, never merged.
 	DuplicateEnvironment(context.Context, *DuplicateEnvironmentRequest) (*Environment, error)
+	// ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+	// proposal: the target environment's whole owned document set (Puppetfile,
+	// Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+	// the source environment's, in one atomic step. The request carries only a
+	// proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+	// proposal but the source and target names: the source is read at apply
+	// time, so the approver approved the operation "replace the target with a
+	// copy of the source", not a fixed set of documents. It refuses with
+	// NOT_FOUND for an unknown proposal or a source environment that no longer
+	// exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+	// decision made under the code:approve scope and targets an environment
+	// duplicate, or when source and target are the same environment. An approval
+	// covers one application: a repeat call after the proposal was applied
+	// returns the environment without writing when the target already equals a
+	// copy of the source, and is refused with FAILED_PRECONDITION when the source
+	// or target has changed since, so an approval is never a standing permission
+	// to copy whatever the source later becomes. Requires code:rw only.
+	ApplyEnvironmentDuplicate(context.Context, *ApplyEnvironmentDuplicateRequest) (*Environment, error)
 	// ------------------------------------------------- environment.conf
 	// Fields a pack never wrote come back absent, not pre-filled with Puppet's
 	// documented defaults — Puppet applies those at catalog-compile time, and a
 	// second copy of them here would be a second source of truth.
 	GetEnvironmentSettings(context.Context, *GetEnvironmentSettingsRequest) (*EnvironmentSettings, error)
 	PutEnvironmentSettings(context.Context, *PutEnvironmentSettingsRequest) (*EnvironmentSettings, error)
+	// ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyEnvironmentSettings(context.Context, *ApplyEnvironmentSettingsRequest) (*EnvironmentSettings, error)
 	// ------------------------------------------------------- Puppetfile
 	ListPuppetfileModules(context.Context, *ListPuppetfileModulesRequest) (*ListPuppetfileModulesResponse, error)
 	// PutPuppetfileModule upserts by module name: a name not present is
 	// appended, a name already present is replaced in place, preserving its
 	// position in the render order.
 	PutPuppetfileModule(context.Context, *PutPuppetfileModuleRequest) (*PuppetfileModule, error)
+	// ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyPuppetfileModuleOverwrite(context.Context, *ApplyPuppetfileModuleOverwriteRequest) (*PuppetfileModule, error)
 	RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error)
 	SetModuledir(context.Context, *SetModuledirRequest) (*Puppetfile, error)
 	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
@@ -1841,12 +2066,36 @@ type CodeServer interface {
 	// warnings alongside the already-applied write — a flagged anti-pattern
 	// never blocks the write.
 	PutHieraLevel(context.Context, *PutHieraLevelRequest) (*PutHieraLevelResponse, error)
+	// ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyHieraLevelOverwrite(context.Context, *ApplyHieraLevelOverwriteRequest) (*PutHieraLevelResponse, error)
 	RemoveHieraLevel(context.Context, *RemoveHieraLevelRequest) (*HieraHierarchy, error)
 	ReorderHieraLevels(context.Context, *ReorderHieraLevelsRequest) (*HieraHierarchy, error)
 	// ------------------------------------------------ Hiera data files
 	ListHieraDataFiles(context.Context, *ListHieraDataFilesRequest) (*ListHieraDataFilesResponse, error)
 	GetHieraDataFile(context.Context, *GetHieraDataFileRequest) (*HieraDataFile, error)
 	PutHieraDataKey(context.Context, *PutHieraDataKeyRequest) (*HieraDataFile, error)
+	// ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+	// The request carries only a proposal_id; the payload written is the one
+	// frozen in the proposal at propose time, never one supplied by the caller.
+	// It refuses with NOT_FOUND for an unknown proposal, and with
+	// FAILED_PRECONDITION unless the proposal is approved by a decision made
+	// under the code:approve scope, targets this resource kind, and still
+	// applies (the environment, and for a replace the item, must exist). An
+	// approval covers one application: a repeat call for an already applied
+	// proposal returns the current result without writing when the target
+	// already equals the payload, and is refused with FAILED_PRECONDITION when
+	// the target has changed since. Requires code:rw only.
+	ApplyHieraDataKeyOverwrite(context.Context, *ApplyHieraDataKeyOverwriteRequest) (*HieraDataFile, error)
 	RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error)
 	DeleteHieraDataFile(context.Context, *DeleteHieraDataFileRequest) (*emptypb.Empty, error)
 	mustEmbedUnimplementedCodeServer()
@@ -1877,17 +2126,26 @@ func (UnimplementedCodeServer) DeleteEnvironment(context.Context, *DeleteEnviron
 func (UnimplementedCodeServer) DuplicateEnvironment(context.Context, *DuplicateEnvironmentRequest) (*Environment, error) {
 	return nil, status.Error(codes.Unimplemented, "method DuplicateEnvironment not implemented")
 }
+func (UnimplementedCodeServer) ApplyEnvironmentDuplicate(context.Context, *ApplyEnvironmentDuplicateRequest) (*Environment, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyEnvironmentDuplicate not implemented")
+}
 func (UnimplementedCodeServer) GetEnvironmentSettings(context.Context, *GetEnvironmentSettingsRequest) (*EnvironmentSettings, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetEnvironmentSettings not implemented")
 }
 func (UnimplementedCodeServer) PutEnvironmentSettings(context.Context, *PutEnvironmentSettingsRequest) (*EnvironmentSettings, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutEnvironmentSettings not implemented")
 }
+func (UnimplementedCodeServer) ApplyEnvironmentSettings(context.Context, *ApplyEnvironmentSettingsRequest) (*EnvironmentSettings, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyEnvironmentSettings not implemented")
+}
 func (UnimplementedCodeServer) ListPuppetfileModules(context.Context, *ListPuppetfileModulesRequest) (*ListPuppetfileModulesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListPuppetfileModules not implemented")
 }
 func (UnimplementedCodeServer) PutPuppetfileModule(context.Context, *PutPuppetfileModuleRequest) (*PuppetfileModule, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutPuppetfileModule not implemented")
+}
+func (UnimplementedCodeServer) ApplyPuppetfileModuleOverwrite(context.Context, *ApplyPuppetfileModuleOverwriteRequest) (*PuppetfileModule, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyPuppetfileModuleOverwrite not implemented")
 }
 func (UnimplementedCodeServer) RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemovePuppetfileModule not implemented")
@@ -1904,6 +2162,9 @@ func (UnimplementedCodeServer) GetHieraHierarchy(context.Context, *GetHieraHiera
 func (UnimplementedCodeServer) PutHieraLevel(context.Context, *PutHieraLevelRequest) (*PutHieraLevelResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutHieraLevel not implemented")
 }
+func (UnimplementedCodeServer) ApplyHieraLevelOverwrite(context.Context, *ApplyHieraLevelOverwriteRequest) (*PutHieraLevelResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyHieraLevelOverwrite not implemented")
+}
 func (UnimplementedCodeServer) RemoveHieraLevel(context.Context, *RemoveHieraLevelRequest) (*HieraHierarchy, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveHieraLevel not implemented")
 }
@@ -1918,6 +2179,9 @@ func (UnimplementedCodeServer) GetHieraDataFile(context.Context, *GetHieraDataFi
 }
 func (UnimplementedCodeServer) PutHieraDataKey(context.Context, *PutHieraDataKeyRequest) (*HieraDataFile, error) {
 	return nil, status.Error(codes.Unimplemented, "method PutHieraDataKey not implemented")
+}
+func (UnimplementedCodeServer) ApplyHieraDataKeyOverwrite(context.Context, *ApplyHieraDataKeyOverwriteRequest) (*HieraDataFile, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApplyHieraDataKeyOverwrite not implemented")
 }
 func (UnimplementedCodeServer) RemoveHieraDataKey(context.Context, *RemoveHieraDataKeyRequest) (*HieraDataFile, error) {
 	return nil, status.Error(codes.Unimplemented, "method RemoveHieraDataKey not implemented")
@@ -2054,6 +2318,24 @@ func _Code_DuplicateEnvironment_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Code_ApplyEnvironmentDuplicate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyEnvironmentDuplicateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyEnvironmentDuplicate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyEnvironmentDuplicate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyEnvironmentDuplicate(ctx, req.(*ApplyEnvironmentDuplicateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Code_GetEnvironmentSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetEnvironmentSettingsRequest)
 	if err := dec(in); err != nil {
@@ -2090,6 +2372,24 @@ func _Code_PutEnvironmentSettings_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Code_ApplyEnvironmentSettings_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyEnvironmentSettingsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyEnvironmentSettings(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyEnvironmentSettings_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyEnvironmentSettings(ctx, req.(*ApplyEnvironmentSettingsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Code_ListPuppetfileModules_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListPuppetfileModulesRequest)
 	if err := dec(in); err != nil {
@@ -2122,6 +2422,24 @@ func _Code_PutPuppetfileModule_Handler(srv interface{}, ctx context.Context, dec
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(CodeServer).PutPuppetfileModule(ctx, req.(*PutPuppetfileModuleRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Code_ApplyPuppetfileModuleOverwrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyPuppetfileModuleOverwriteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyPuppetfileModuleOverwrite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyPuppetfileModuleOverwrite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyPuppetfileModuleOverwrite(ctx, req.(*ApplyPuppetfileModuleOverwriteRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -2216,6 +2534,24 @@ func _Code_PutHieraLevel_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Code_ApplyHieraLevelOverwrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyHieraLevelOverwriteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyHieraLevelOverwrite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyHieraLevelOverwrite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyHieraLevelOverwrite(ctx, req.(*ApplyHieraLevelOverwriteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Code_RemoveHieraLevel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveHieraLevelRequest)
 	if err := dec(in); err != nil {
@@ -2306,6 +2642,24 @@ func _Code_PutHieraDataKey_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Code_ApplyHieraDataKeyOverwrite_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApplyHieraDataKeyOverwriteRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CodeServer).ApplyHieraDataKeyOverwrite(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Code_ApplyHieraDataKeyOverwrite_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CodeServer).ApplyHieraDataKeyOverwrite(ctx, req.(*ApplyHieraDataKeyOverwriteRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Code_RemoveHieraDataKey_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveHieraDataKeyRequest)
 	if err := dec(in); err != nil {
@@ -2374,6 +2728,10 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Code_DuplicateEnvironment_Handler,
 		},
 		{
+			MethodName: "ApplyEnvironmentDuplicate",
+			Handler:    _Code_ApplyEnvironmentDuplicate_Handler,
+		},
+		{
 			MethodName: "GetEnvironmentSettings",
 			Handler:    _Code_GetEnvironmentSettings_Handler,
 		},
@@ -2382,12 +2740,20 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Code_PutEnvironmentSettings_Handler,
 		},
 		{
+			MethodName: "ApplyEnvironmentSettings",
+			Handler:    _Code_ApplyEnvironmentSettings_Handler,
+		},
+		{
 			MethodName: "ListPuppetfileModules",
 			Handler:    _Code_ListPuppetfileModules_Handler,
 		},
 		{
 			MethodName: "PutPuppetfileModule",
 			Handler:    _Code_PutPuppetfileModule_Handler,
+		},
+		{
+			MethodName: "ApplyPuppetfileModuleOverwrite",
+			Handler:    _Code_ApplyPuppetfileModuleOverwrite_Handler,
 		},
 		{
 			MethodName: "RemovePuppetfileModule",
@@ -2410,6 +2776,10 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Code_PutHieraLevel_Handler,
 		},
 		{
+			MethodName: "ApplyHieraLevelOverwrite",
+			Handler:    _Code_ApplyHieraLevelOverwrite_Handler,
+		},
+		{
 			MethodName: "RemoveHieraLevel",
 			Handler:    _Code_RemoveHieraLevel_Handler,
 		},
@@ -2428,6 +2798,10 @@ var Code_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PutHieraDataKey",
 			Handler:    _Code_PutHieraDataKey_Handler,
+		},
+		{
+			MethodName: "ApplyHieraDataKeyOverwrite",
+			Handler:    _Code_ApplyHieraDataKeyOverwrite_Handler,
 		},
 		{
 			MethodName: "RemoveHieraDataKey",

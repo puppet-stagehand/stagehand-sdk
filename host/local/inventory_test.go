@@ -248,6 +248,70 @@ func TestInventory_DeniedWithoutPermission(t *testing.T) {
 	assertInventoryAllDenied(t, ctx, local.New([]string{"secrets:rw"}, "opentofu"), "secrets-only")
 }
 
+// inventoryReadOnlyRPCs is the 8-RPC read surface gatedInventory.checkRead
+// admits under either inventory:read or inventory:rw, mirroring the
+// console-side admission table (stagehand-console
+// backend/internal/expansions/interceptor.go's FacetPermissions). The
+// remaining 3 Inventory RPCs (PutFacts, AddNodeToGroup, OnboardNode) are
+// mutating and stay inventory:rw-only.
+var inventoryReadOnlyRPCs = []string{
+	"GetNode", "Discover", "ListNodes", "QueryNodes",
+	"ListGroups", "ListGroupNodes", "ListNodeGroups", "ListClasses",
+}
+var inventoryWriteOnlyRPCs = []string{"PutFacts", "AddNodeToGroup", "OnboardNode"}
+
+// TestInventory_ReadPermissionParity is the parity-fix regression test
+// (stagehand-planner work order B, D-08/D-19): a manifest declaring only
+// inventory:read (not inventory:rw) must be admitted on all 8 read-only
+// Inventory RPCs -- matching the console's long-standing admission table --
+// and still denied PermissionDenied on the 3 mutating RPCs. A manifest
+// declaring only inventory:rw must keep working on the full 11-RPC surface
+// (no regression from D-00's original single-permission design).
+func TestInventory_ReadPermissionParity(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("inventory:read alone", func(t *testing.T) {
+		h := local.New([]string{"inventory:read"}, "opentofu")
+		calls := inventoryCalls(ctx, h)
+
+		for _, name := range inventoryReadOnlyRPCs {
+			err := calls[name]()
+			if err != nil {
+				st, _ := status.FromError(err)
+				if st.Code() == codes.PermissionDenied {
+					t.Fatalf("%s: expected inventory:read to admit this read RPC, got PermissionDenied: %v", name, err)
+				}
+			}
+		}
+
+		for _, name := range inventoryWriteOnlyRPCs {
+			err := calls[name]()
+			if err == nil {
+				t.Fatalf("%s: expected PermissionDenied with only inventory:read, got nil", name)
+			}
+			st, _ := status.FromError(err)
+			if st.Code() != codes.PermissionDenied {
+				t.Fatalf("%s: expected PermissionDenied with only inventory:read, got %v (%v)", name, st.Code(), err)
+			}
+		}
+	})
+
+	t.Run("inventory:rw alone still admits everything", func(t *testing.T) {
+		h := local.New([]string{"inventory:rw"}, "opentofu")
+		calls := inventoryCalls(ctx, h)
+
+		for name, call := range calls {
+			err := call()
+			if err != nil {
+				st, _ := status.FromError(err)
+				if st.Code() == codes.PermissionDenied {
+					t.Fatalf("%s: expected inventory:rw to admit every RPC (no regression), got PermissionDenied: %v", name, err)
+				}
+			}
+		}
+	})
+}
+
 func TestInventory_ReadPathClonesNodes(t *testing.T) {
 	h := local.New([]string{"inventory:rw"}, "opentofu")
 	ctx := context.Background()

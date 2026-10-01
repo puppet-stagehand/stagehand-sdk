@@ -45,6 +45,23 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
+// OnboardingKind is the approval.Kind this example's two personas share:
+// the "inventory-proposals" collection host/local's OnboardNode reads and
+// the "inventory:approve" scope required to decide a proposal in it. It is
+// a code-defined package-level var, deliberately not derived from any
+// request field, proposal body, or method parameter reachable by the
+// proposing persona, and deliberately not built by a method or constructor
+// on either persona — the proposing persona must not be able to choose the
+// scope required to decide its own proposals (GOV-01, D-06/D-07).
+// OnboardNode keeps its name, request/response shape and wire contract;
+// only the internal approval call sites carry this value (D-08).
+//
+// The Collection literal must match host/local's unexported
+// proposalCollection (host/local/inventory.go): OnboardNode resolves a
+// proposal_id through that collection, so drift between the two would leave
+// every approval invisible to it.
+var OnboardingKind = approval.Kind{Collection: "inventory-proposals", ApproveScope: "inventory:approve"}
+
 // ProposerBackend models the pack worker's persona: it discovers
 // candidates, groups them, attaches facts, proposes onboarding, and
 // materializes an already-decided proposal. It holds no approval token,
@@ -129,7 +146,7 @@ func (p *ProposerBackend) ProposeOnboarding(ctx context.Context, nodeID string) 
 	if err != nil {
 		return nil, err
 	}
-	return approval.Propose(ctx, p.h, node)
+	return approval.Propose(ctx, p.h, node, OnboardingKind)
 }
 
 // Onboard materializes proposalID's decided proposal into Inventory. A
@@ -162,13 +179,13 @@ func (p *ProposerBackend) FindByFact(ctx context.Context, field string, value an
 // point: it arrives from outside this process, held by the person
 // deciding, and nothing in this package can produce it.
 func (a *ApproverBackend) Approve(ctx context.Context, proposalID, tokenSecret string) (*approval.Proposal, error) {
-	return approval.Approve(ctx, a.h, approval.ApproveRequest{ProposalID: proposalID, TokenSecret: tokenSecret})
+	return approval.Approve(ctx, a.h, approval.ApproveRequest{Kind: OnboardingKind, ProposalID: proposalID, TokenSecret: tokenSecret})
 }
 
 // Reject presents tokenSecret (obtained by the caller, never by this
 // package) to approval.Reject along with a required human-readable reason.
 func (a *ApproverBackend) Reject(ctx context.Context, proposalID, tokenSecret, reason string) (*approval.Proposal, error) {
-	return approval.Reject(ctx, a.h, approval.RejectRequest{ProposalID: proposalID, TokenSecret: tokenSecret, Reason: reason})
+	return approval.Reject(ctx, a.h, approval.RejectRequest{Kind: OnboardingKind, ProposalID: proposalID, TokenSecret: tokenSecret, Reason: reason})
 }
 
 // scalarFact wraps v in the single-field "v" convention

@@ -45,6 +45,17 @@ There is a worked example in the box: `examples/inventory-onboarding`, with
 `examples/inventory-onboarding/README.md` as the short tour. Copying its
 two-halves shape is the easiest way to get this right.
 
+## Replacing code that is already there
+The Code facet (`code:rw`) lets your pack write environments, Puppetfile
+modules, Hiera levels and Hiera data keys. Adding new content is free.
+Replacing content that already exists is refused until a person has
+approved a proposal for exactly that change, and there is no setting that
+turns this off. Note that the approval scope, `code:approve`, is not a
+permission: it goes on a route's `access.scope` and never in `permissions`.
+`docs/code-overwrite-gating.md` walks through the whole loop (propose,
+approve, apply) for all five kinds of write, explains each refusal, and ends
+with a checklist a human can follow to confirm it works.
+
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used
   Puppet. Short sentences. A glossary.

@@ -74,7 +74,7 @@ func TestCode_HieraEmptyEnvironment(t *testing.T) {
 }
 
 func TestCode_HieraLevelLifecycle(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -133,14 +133,9 @@ func TestCode_HieraLevelLifecycle(t *testing.T) {
 	}
 
 	// Replace common in place (insert=false).
-	resp, err = h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{
-		Environment: "prod",
-		Level:       &hostv1.HieraLevel{Name: "common", Path: "common.yaml", DataHash: "yaml_data"},
-		Insert:      false,
-	})
-	if err != nil {
-		t.Fatalf("PutHieraLevel(common, replace): %v", err)
-	}
+	// Replacing an existing level is an overwrite, so it goes through the
+	// approval path.
+	resp = putHieraLevelViaApproval(t, h, "prod", &hostv1.HieraLevel{Name: "common", Path: "common.yaml", DataHash: "yaml_data"}, 0, false)
 	if len(resp.Hierarchy.Levels) != 3 || resp.Hierarchy.Levels[2].DataHash != "yaml_data" {
 		t.Fatalf("expected common replaced in place at index 2, got %+v", resp.Hierarchy.Levels)
 	}
@@ -194,7 +189,7 @@ func TestCode_HieraLevelLifecycle(t *testing.T) {
 // the stored document rather than only through the format package's own
 // tests.
 func TestCode_HieraCommentsSurviveFacetRoundTrip(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -242,13 +237,7 @@ hierarchy:
 	assertComments(t, "after insert")
 
 	// Replace.
-	if _, err := h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{
-		Environment: "prod",
-		Level:       &hostv1.HieraLevel{Name: "role", Path: "roles/%{facts.role}.yaml", DataHash: "yaml_data"},
-		Insert:      false,
-	}); err != nil {
-		t.Fatalf("PutHieraLevel(replace): %v", err)
-	}
+	putHieraLevelViaApproval(t, h, "prod", &hostv1.HieraLevel{Name: "role", Path: "roles/%{facts.role}.yaml", DataHash: "yaml_data"}, 0, false)
 	assertComments(t, "after replace")
 
 	// Remove.
@@ -265,7 +254,7 @@ hierarchy:
 }
 
 func TestCode_HieraLevelAdjacentNames(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -274,14 +263,7 @@ func TestCode_HieraLevelAdjacentNames(t *testing.T) {
 	seedDoc(t, h, ctx, "code-hiera-hierarchy", "prod", map[string]any{"yaml": "version: 5\nhierarchy:\n  - name: common\n    path: common.yaml\n  - name: common_extra\n    path: common_extra.yaml\n"})
 
 	// Replacing "common" leaves "common_extra" untouched.
-	hierarchy, err := h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{
-		Environment: "prod",
-		Level:       &hostv1.HieraLevel{Name: "common", DataHash: "yaml_data"},
-		Insert:      false,
-	})
-	if err != nil {
-		t.Fatalf("PutHieraLevel(common, replace): %v", err)
-	}
+	hierarchy := putHieraLevelViaApproval(t, h, "prod", &hostv1.HieraLevel{Name: "common", DataHash: "yaml_data"}, 0, false)
 	if len(hierarchy.Hierarchy.Levels) != 2 {
 		t.Fatalf("expected 2 levels, got %d", len(hierarchy.Hierarchy.Levels))
 	}
@@ -623,8 +605,8 @@ port: 8080 # trailing comment on port
 	}
 }
 
-func TestCode_HieraDataKeyIsIdempotent(t *testing.T) {
-	h := local.New([]string{"code:rw"}, "controlrepo")
+func TestCode_HieraDataKeyRepeatPutIsRefusedAndTextStable(t *testing.T) {
+	h := newOverwriteHost()
 	ctx := context.Background()
 
 	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
@@ -641,17 +623,25 @@ func TestCode_HieraDataKeyIsIdempotent(t *testing.T) {
 	}
 	first := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
 
-	// Writing the identical key and value twice leaves the stored YAML
-	// byte-identical.
-	if _, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
+	// Writing a key that already exists is an overwrite, so even an identical
+	// repeat put is refused and leaves the stored YAML byte-identical.
+	_, err := h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{
 		Environment: "prod", Path: "common.yaml", Key: "port",
 		Value: &hostv1.Json{Value: mustStruct(t, map[string]any{"v": float64(8080)})},
-	}); err != nil {
-		t.Fatalf("PutHieraDataKey(port, repeat): %v", err)
+	})
+	if !local.IsCodeOverwriteRequiresApproval(err) {
+		t.Fatalf("PutHieraDataKey(port, repeat): got %v, want requires-approval", err)
 	}
 	second := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml")
 	if first != second {
-		t.Fatalf("expected byte-identical text after idempotent put, got:\nfirst:  %q\nsecond: %q", first, second)
+		t.Fatalf("expected byte-identical text after refused put, got:\nfirst:  %q\nsecond: %q", first, second)
+	}
+
+	// The same identical value applied through an approval is also a no-op on
+	// the stored text.
+	dataKeyViaApproval(t, h, "prod", "common.yaml", "port", &hostv1.Json{Value: mustStruct(t, map[string]any{"v": float64(8080)})})
+	if third := hieraDataTextRaw(t, h, ctx, "prod", "common.yaml"); first != third {
+		t.Fatalf("expected byte-identical text after an approved identical overwrite, got:\nfirst: %q\nthird: %q", first, third)
 	}
 }
 

@@ -4,7 +4,7 @@ package local
 // PutHieraLevel, RemoveHieraLevel, ReorderHieraLevels,
 // ListHieraDataFiles, GetHieraDataFile, PutHieraDataKey,
 // RemoveHieraDataKey, DeleteHieraDataFile) on *codeServer, split out of
-// code.go: codeServer, gatedCode and all 22 forwarders live in code.go so
+// code.go: codeServer, gatedCode and all the Code forwarders live in code.go so
 // the permission gate stays reviewable as a unit, while the RPC bodies are
 // split by resource kind so the plans that write them (this one, and the
 // sibling Puppetfile plan) can land in the same wave without touching the
@@ -156,6 +156,12 @@ func (s *codeServer) GetHieraHierarchy(ctx context.Context, req *hostv1.GetHiera
 // and then both travel back together on the same response. A warning
 // never becomes a refusal, never downgrades the write to a partial one,
 // and never causes the level to be silently rewritten into a "safe" form.
+//
+// A level whose name is already in the hierarchy is an overwrite and is
+// refused unless covered by an approved proposal, and even then only
+// ApplyHieraLevelOverwrite materializes it. A level with a new name is
+// ungated create. The gate follows the environment NotFound check and the
+// read-only lookup_options refusal, so those keep their own reasons.
 func (s *codeServer) PutHieraLevel(ctx context.Context, req *hostv1.PutHieraLevelRequest) (*hostv1.PutHieraLevelResponse, error) {
 	if err := validateEnvName(req.Environment); err != nil {
 		return nil, err
@@ -177,6 +183,28 @@ func (s *codeServer) PutHieraLevel(ctx context.Context, req *hostv1.PutHieraLeve
 	}
 
 	text, _ := s.hierarchyTextLocked(req.Environment)
+
+	// Overwrite gate (D-02): the existence check runs against the hierarchy's
+	// node tree (names only, no other level converted) before code.PutLevel is
+	// ever called, so a refused write never reaches it and an unrelated level
+	// that cannot be parsed cannot block adding a new one. Adding a level whose name is not present stays
+	// ungated create.
+	exists, err := code.LevelExists(text, req.Level.GetName())
+	if err != nil {
+		return nil, mapHieraErr(err)
+	}
+	if exists {
+		target := code.OverwriteTarget{
+			Environment: req.Environment,
+			Resource:    code.OverwriteResourceHieraLevel,
+			Name:        req.Level.GetName(),
+		}
+		if id, approved := s.approvedOverwriteProposalLocked(target); approved {
+			return nil, ErrCodeOverwriteApplyPending(id, applyHieraLevelRPC)
+		}
+		return nil, ErrCodeOverwriteRequiresApproval(target, applyHieraLevelRPC)
+	}
+
 	newText, err := code.PutLevel(text, req.Level, req.Index, req.Insert)
 	if err != nil {
 		return nil, mapHieraErr(err)
@@ -374,6 +402,11 @@ func (s *codeServer) GetHieraDataFile(ctx context.Context, req *hostv1.GetHieraD
 // text it returns is stored; nothing here parses the file into a Go map,
 // mutates that, and re-serialises it, which would drop every comment and
 // can reorder keys.
+//
+// A key already present in the file is an overwrite and is refused unless an
+// approved proposal for that environment, file and key exists, and even then
+// only ApplyHieraDataKeyOverwrite materializes it. A new key is ungated
+// create. The gate is checked before code.PutDataKey is called.
 func (s *codeServer) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDataKeyRequest) (*hostv1.HieraDataFile, error) {
 	if err := validateEnvName(req.Environment); err != nil {
 		return nil, err
@@ -392,7 +425,33 @@ func (s *codeServer) PutHieraDataKey(ctx context.Context, req *hostv1.PutHieraDa
 		return nil, status.Errorf(codes.NotFound, "no environment %q", req.Environment)
 	}
 
-	text, _ := s.dataFileTextLocked(req.Environment, req.Path)
+	text, present := s.dataFileTextLocked(req.Environment, req.Path)
+
+	// Overwrite gate (D-02): only a key already present in the file is an
+	// overwrite. An absent file, or a key not in it, stays ungated create. The
+	// existence check reads the node tree's keys only and converts no value, so
+	// a value ParseDataFile could not represent cannot block adding an unrelated
+	// key. The reserved lookup_options key reports absent, so it falls through
+	// to code.PutDataKey's own refusal.
+	if present {
+		exists, err := code.DataKeyExists(text, req.Key)
+		if err != nil {
+			return nil, mapHieraErr(err)
+		}
+		if exists {
+			target := code.OverwriteTarget{
+				Environment: req.Environment,
+				Resource:    code.OverwriteResourceHieraDataKey,
+				Name:        req.Key,
+				Path:        req.Path,
+			}
+			if id, approved := s.approvedOverwriteProposalLocked(target); approved {
+				return nil, ErrCodeOverwriteApplyPending(id, applyHieraDataKeyRPC)
+			}
+			return nil, ErrCodeOverwriteRequiresApproval(target, applyHieraDataKeyRPC)
+		}
+	}
+
 	newText, err := code.PutDataKey(text, req.Key, req.Value)
 	if err != nil {
 		return nil, mapHieraErr(err)

@@ -596,3 +596,102 @@ func TestHiera_ValidateDataPath(t *testing.T) {
 		}
 	}
 }
+
+// unrepresentableData holds a value ParseDataFile cannot convert (a YAML
+// timestamp) and one with integer map keys, next to an ordinary key.
+const unrepresentableData = "when: 2020-01-02T03:04:05Z\nports:\n  80: http\n  443: https\nname: web\n"
+
+func TestHiera_ExistenceHelpersDoNotConvertValues(t *testing.T) {
+	// The premise: the full-file parser rejects this file outright.
+	if _, err := ParseDataFile(unrepresentableData); err == nil {
+		t.Fatal("test premise broken: ParseDataFile accepted a file with unrepresentable values")
+	}
+
+	for _, tc := range []struct {
+		key  string
+		want bool
+	}{
+		{"name", true},
+		{"when", true},
+		{"ports", true},
+		{"absent", false},
+		{"nam", false},
+		{"lookup_options", false},
+	} {
+		got, err := DataKeyExists(unrepresentableData, tc.key)
+		if err != nil {
+			t.Fatalf("DataKeyExists(%q): %v", tc.key, err)
+		}
+		if got != tc.want {
+			t.Errorf("DataKeyExists(%q) = %v, want %v", tc.key, got, tc.want)
+		}
+	}
+
+	if ok, err := DataKeyExists("", "name"); err != nil || ok {
+		t.Errorf("DataKeyExists on empty text = %v, %v; want false, nil", ok, err)
+	}
+	if _, err := DataKeyExists("- not\n- a mapping\n", "name"); !errors.Is(err, ErrHieraParse) {
+		t.Errorf("DataKeyExists on a non-mapping document: got %v, want ErrHieraParse", err)
+	}
+
+	// DataKeyValue converts only the asked-about key.
+	v, ok, err := DataKeyValue(unrepresentableData, "name")
+	if err != nil || !ok || v.GetValue().AsMap()["v"] != "web" {
+		t.Errorf("DataKeyValue(name) = %v, %v, %v", v, ok, err)
+	}
+	if v, ok, err := DataKeyValue(unrepresentableData, "when"); err != nil || !ok || v != nil {
+		t.Errorf("DataKeyValue(when) = %v, %v, %v; want nil, true, nil (present but unrepresentable)", v, ok, err)
+	}
+	if _, ok, _ := DataKeyValue(unrepresentableData, "absent"); ok {
+		t.Error("DataKeyValue(absent) reported present")
+	}
+
+	// PutDataKey adds an unrelated key to that same file without complaint.
+	if _, err := PutDataKey(unrepresentableData, "fresh", &hostv1.Json{Value: mustStructForTest(t, map[string]any{"v": "x"})}); err != nil {
+		t.Errorf("PutDataKey on an unrepresentable file: %v", err)
+	}
+}
+
+func TestHiera_LevelExistsIgnoresUnrelatedLevels(t *testing.T) {
+	// A non-mapping element makes ParseHierarchy fail for the whole file.
+	text := "version: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml\n  - just-a-string\n  - name: common\n    path: common.yaml\n"
+	if _, err := ParseHierarchy(text); err == nil {
+		t.Fatal("test premise broken: ParseHierarchy accepted a non-mapping level")
+	}
+
+	for _, tc := range []struct {
+		name string
+		want bool
+	}{{"role", true}, {"common", true}, {"comm", false}, {"Common", false}, {"absent", false}} {
+		got, err := LevelExists(text, tc.name)
+		if err != nil {
+			t.Fatalf("LevelExists(%q): %v", tc.name, err)
+		}
+		if got != tc.want {
+			t.Errorf("LevelExists(%q) = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+	if ok, err := LevelExists("", "role"); err != nil || ok {
+		t.Errorf("LevelExists on empty text = %v, %v; want false, nil", ok, err)
+	}
+	if ok, err := LevelExists("version: 5\n", "role"); err != nil || ok {
+		t.Errorf("LevelExists with no hierarchy = %v, %v; want false, nil", ok, err)
+	}
+
+	lvl, ok, err := LevelByName(text, "common")
+	if err != nil || !ok || lvl.GetPath() != "common.yaml" {
+		t.Errorf("LevelByName(common) = %v, %v, %v", lvl, ok, err)
+	}
+	if _, ok, _ := LevelByName(text, "absent"); ok {
+		t.Error("LevelByName(absent) reported present")
+	}
+}
+
+func mustStructForTest(t *testing.T, m map[string]any) *structpb.Struct {
+	t.Helper()
+	s, err := structpb.NewStruct(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}

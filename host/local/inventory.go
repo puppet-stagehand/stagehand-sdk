@@ -17,7 +17,10 @@ import (
 
 // proposalCollection is the D-08 Documents collection name OnboardNode
 // resolves a proposal_id through — the single definition Phase 4's
-// approval package and Phase 5's example both bind to.
+// approval package and Phase 5's example both bind to. The literal is
+// duplicated as OnboardingKind.Collection in
+// examples/inventory-onboarding/inventory_onboarding.go; keep the two in
+// step, because OnboardNode only sees approvals written to this collection.
 const proposalCollection = "inventory-proposals"
 
 // inventoryServer is the real in-memory Inventory facet implementation: an
@@ -655,11 +658,15 @@ func (s *inventoryServer) OnboardNode(ctx context.Context, req *hostv1.OnboardNo
 	return cloneNode(proposed), nil
 }
 
-// gatedInventory wraps inventoryServer with the inventory:rw permission
-// check every one of the 11 Inventory RPCs requires, including the
-// read-only ones (D-00) — there is no separate, narrower check for
-// OnboardNode here; the onboarding decision's approval authority is a
-// different namespace entirely and is Phase 4's concern.
+// gatedInventory wraps inventoryServer with a permission check on every
+// one of the 11 Inventory RPCs. D-00's original design required
+// inventory:rw uniformly; as of the stagehand-planner Phase B parity fix
+// (D-08/D-19), the 8 read-only RPCs also accept the dormant inventory:read
+// literal (see checkRead below), matching the console-side admission table.
+// The 3 mutating RPCs (PutFacts, AddNodeToGroup, OnboardNode) still require
+// inventory:rw only. There is no separate, narrower check for OnboardNode
+// beyond that; the onboarding decision's approval authority is a different
+// namespace entirely and is Phase 4's concern.
 type gatedInventory struct {
 	hostv1.UnimplementedInventoryServer
 	perms  map[string]bool
@@ -674,29 +681,48 @@ func (g *gatedInventory) check() error {
 	return nil
 }
 
+// checkRead gates the 8 read-only Inventory RPCs (GetNode, Discover,
+// ListNodes, QueryNodes, ListGroups, ListGroupNodes, ListNodeGroups,
+// ListClasses): either inventory:read or inventory:rw satisfies it. This is
+// a parity fix against the console-side admission table
+// (stagehand-console backend/internal/expansions/interceptor.go's
+// FacetPermissions), which has long admitted these same RPCs under either
+// permission; inventory:read already exists in manifest.Permissions and
+// manifest/validate.go rePerm (inherited, previously unused by this
+// facet) — not a new permission or facet. Authorized by stagehand-planner
+// work order B (D-08/D-19, parity fix, no-reopen). The 3 mutating RPCs
+// (PutFacts, AddNodeToGroup, OnboardNode) still require inventory:rw via
+// check() above.
+func (g *gatedInventory) checkRead() error {
+	if g.perms["inventory:read"] || g.perms["inventory:rw"] {
+		return nil
+	}
+	return ErrPermissionDenied("inventory:read or inventory:rw")
+}
+
 func (g *gatedInventory) GetNode(ctx context.Context, req *hostv1.GetNodeRequest) (*hostv1.Node, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.GetNode(ctx, req)
 }
 
 func (g *gatedInventory) Discover(ctx context.Context, req *emptypb.Empty) (*hostv1.DiscoverResponse, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.Discover(ctx, req)
 }
 
 func (g *gatedInventory) ListNodes(ctx context.Context, req *hostv1.ListNodesRequest) (*hostv1.ListNodesResponse, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.ListNodes(ctx, req)
 }
 
 func (g *gatedInventory) QueryNodes(ctx context.Context, req *hostv1.QueryNodesRequest) (*hostv1.ListNodesResponse, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.QueryNodes(ctx, req)
@@ -710,21 +736,21 @@ func (g *gatedInventory) PutFacts(ctx context.Context, req *hostv1.PutFactsReque
 }
 
 func (g *gatedInventory) ListGroups(ctx context.Context, req *emptypb.Empty) (*hostv1.GroupList, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.ListGroups(ctx, req)
 }
 
 func (g *gatedInventory) ListGroupNodes(ctx context.Context, req *hostv1.ListGroupNodesRequest) (*hostv1.ListNodesResponse, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.ListGroupNodes(ctx, req)
 }
 
 func (g *gatedInventory) ListNodeGroups(ctx context.Context, req *hostv1.ListNodeGroupsRequest) (*hostv1.GroupList, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.ListNodeGroups(ctx, req)
@@ -738,7 +764,7 @@ func (g *gatedInventory) AddNodeToGroup(ctx context.Context, req *hostv1.GroupMe
 }
 
 func (g *gatedInventory) ListClasses(ctx context.Context, req *hostv1.GroupRef) (*hostv1.ClassList, error) {
-	if err := g.check(); err != nil {
+	if err := g.checkRead(); err != nil {
 		return nil, err
 	}
 	return g.inner.ListClasses(ctx, req)

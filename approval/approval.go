@@ -35,18 +35,23 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 )
 
-// Collection is the D-00 Documents collection this package writes to and
-// reads from — the exact literal host/local/inventory.go's OnboardNode
-// already binds to (proposalCollection).
-const Collection = "inventory-proposals"
-
-// ScopeApprove is the fixed, code-defined approval scope required to
-// decide a proposal (D-02). It is never sourced from the proposal
-// document's body or from caller-supplied request input: a caller who can
-// create proposals must not be able to name the scope required to decide
-// them, or they could pick one they can trivially self-issue, reopening
-// the self-approval hole this pattern exists to close.
-const ScopeApprove = "inventory:approve"
+// Kind names one governed action: the Documents collection its proposals
+// live in and the approval scope required to decide them. Both fields are
+// code-defined by the caller. The caller pinning them as a constant — never
+// building either from request input, from a proposal document body, or
+// from any value the proposing persona controls — is what preserves the
+// property the removed package-level scope constant used to provide (D-02,
+// GOV-01): a caller who can create proposals must not be able to name the
+// scope required to decide them, or they could pick one they can trivially
+// self-issue, reopening the self-approval hole this pattern exists to
+// close. Two Kinds that share a Collection but differ in ApproveScope are
+// distinct: decide hands h.Auth.Verify exactly the ApproveScope it was
+// given and never merges them. A Kind with an empty Collection or an empty
+// ApproveScope is refused with ErrKindRequired.
+type Kind struct {
+	Collection   string
+	ApproveScope string
+}
 
 // The complete status vocabulary a proposal document can carry. There is
 // no fourth value — no "expired" status exists (D-08).
@@ -66,7 +71,17 @@ const (
 	keyReason    = "reason"
 	keyDecidedBy = "decided_by"
 	keyDecidedAt = "decided_at"
+
+	// keyApprovedScope records the approval scope decide verified the
+	// caller's token against, so a reader of an approved proposal can tell
+	// which scope authorized it instead of trusting the bare status string.
+	keyApprovedScope = "approved_scope"
 )
+
+// governanceKeys are the body keys this package owns. A proposer may not
+// supply any of them, because each is either the status or part of the audit
+// trail that only Approve and Reject write.
+var governanceKeys = []string{keyStatus, keyReason, keyDecidedBy, keyDecidedAt, keyApprovedScope}
 
 // Detail codes attached to this package's errors, used by IsAlreadyDecided
 // and by callers inspecting a *status.Status's ErrorDetail directly.
@@ -74,6 +89,7 @@ const (
 	detailAlreadyProposed = "proposal_already_exists"
 	detailAlreadyDecided  = "proposal_already_decided"
 	detailReasonRequired  = "reject_reason_required"
+	detailKindRequired    = "approval_kind_required"
 )
 
 // Proposal is a read-only snapshot of a proposal document. It carries no
@@ -94,8 +110,8 @@ func ErrAlreadyProposed(proposalID string) error {
 	st := status.New(codes.AlreadyExists, "proposal "+proposalID+" already exists")
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailAlreadyProposed,
-		Message: "a proposal for node " + proposalID + " already exists and cannot be overwritten",
-		Fix:     "propose a different node id, or wait for the existing proposal to be decided",
+		Message: "proposal " + proposalID + " already exists and cannot be overwritten",
+		Fix:     "propose under a different proposal id, or wait for the existing proposal to be decided",
 	})
 	if err != nil {
 		return st.Err() // details are best-effort; the status itself must never fail to construct
@@ -117,7 +133,7 @@ func ErrAlreadyDecided(proposalID, currentStatus string) error {
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailAlreadyDecided,
 		Message: msg,
-		Fix:     "propose a new node id to retry — a decided proposal cannot transition back to pending",
+		Fix:     "propose a new proposal id to retry — a decided proposal cannot transition back to pending",
 	})
 	if err != nil {
 		return st.Err()
@@ -132,12 +148,48 @@ func ErrReasonRequired(proposalID string) error {
 	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
 		Code:    detailReasonRequired,
 		Message: "rejecting proposal " + proposalID + " requires a human-readable reason",
-		Fix:     "supply a non-empty Reason describing why the node onboarding was denied",
+		Fix:     "supply a non-empty Reason describing why the proposal was denied",
 	})
 	if err != nil {
 		return st.Err() // details are best-effort; the status itself must never fail to construct
 	}
 	return withDetails.Err()
+}
+
+// ErrKindRequired builds the error every entry point returns when the Kind
+// it was handed has an empty field. field names which one ("collection" or
+// "approve_scope"). A Kind is refused before any document read and before
+// any token verification, so a zero-valued Kind can never reach
+// h.Auth.Verify with an empty Scope.
+func ErrKindRequired(field string) error {
+	msg := "approval kind requires a non-empty " + field
+	st := status.New(codes.InvalidArgument, msg)
+	withDetails, err := st.WithDetails(&hostv1.ErrorDetail{
+		Code:    detailKindRequired,
+		Message: msg,
+		Fix:     "pass a code-defined approval.Kind with both Collection and ApproveScope set",
+	})
+	if err != nil {
+		return st.Err() // details are best-effort; the status itself must never fail to construct
+	}
+	return withDetails.Err()
+}
+
+// IsKindRequired reports whether err is (or wraps) an ErrKindRequired
+// error.
+func IsKindRequired(err error) bool {
+	return errorDetailCode(err) == detailKindRequired
+}
+
+// validate refuses a Kind with an empty Collection or ApproveScope.
+func (k Kind) validate() error {
+	if k.Collection == "" {
+		return ErrKindRequired("collection")
+	}
+	if k.ApproveScope == "" {
+		return ErrKindRequired("approve_scope")
+	}
+	return nil
 }
 
 // IsAlreadyDecided reports whether err is (or wraps) an ErrAlreadyDecided
@@ -219,8 +271,11 @@ func proposalFromBody(proposalID string, m map[string]any, version int64) *Propo
 // authorization check here — it would look prudent and buy nothing, since
 // nothing about this read crosses the governance boundary Approve/Reject
 // guard.
-func Get(ctx context.Context, h *host.Host, proposalID string) (*Proposal, error) {
-	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: Collection, DocId: proposalID})
+func Get(ctx context.Context, h *host.Host, kind Kind, proposalID string) (*Proposal, error) {
+	if err := kind.validate(); err != nil {
+		return nil, err
+	}
+	doc, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: kind.Collection, DocId: proposalID})
 	if err != nil {
 		return nil, err
 	}
