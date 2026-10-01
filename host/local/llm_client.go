@@ -126,6 +126,8 @@ func (c *defaultLLMClient) Complete(ctx context.Context, p LLMProvider, req LLMR
 	switch p.Kind {
 	case llmKindAnthropic:
 		return completeAnthropic(ctx, c.hc, base, p, req)
+	case llmKindOpenAICompatible:
+		return completeOpenAICompatible(ctx, c.hc, base, p, req)
 	default:
 		return "", status.Error(codes.FailedPrecondition, "llm provider kind is not supported")
 	}
