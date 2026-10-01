@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -662,5 +663,30 @@ func TestForgeHTTPClient_DoesNotFollowRedirects(t *testing.T) {
 	defer mu.Unlock()
 	if targetHits != 0 {
 		t.Fatalf("redirect target was contacted %d times; redirects must not be followed", targetHits)
+	}
+}
+
+// WR-02: a version containing path syntax must be refused before any request,
+// not collapsed by path cleaning onto another endpoint of the registry host.
+func TestForgeHTTPClient_GetReleaseRejectsPathyVersion(t *testing.T) {
+	var calls atomic.Int32
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, v := range []string{"1.0/../../../admin", "../x", "1.0.0/", "1.0.0?x=y", "1.0.0#frag", "1 0", "%2e%2e", "-1.0.0"} {
+		_, err := client.GetRelease(context.Background(), ep, "puppetlabs/apache", v)
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("version %q: expected InvalidArgument, got %v", v, err)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("expected no upstream request for an invalid version, saw %d", n)
+	}
+	// Real-world SemVer shapes remain accepted (validation, not a 400).
+	for _, v := range []string{"12.0.0", "1.0.0-rc.1", "1.0.0+build.5", "0.1.0-beta_2"} {
+		if _, err := client.GetRelease(context.Background(), ep, "puppetlabs/apache", v); status.Code(err) == codes.InvalidArgument {
+			t.Fatalf("version %q was wrongly rejected: %v", v, err)
+		}
 	}
 }

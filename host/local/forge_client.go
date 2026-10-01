@@ -25,6 +25,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -370,6 +371,12 @@ func (c *httpForgeClient) GetRelease(ctx context.Context, ep ForgeEndpoint, name
 	if version == "" {
 		return nil, status.Error(codes.InvalidArgument, "forge: version is required")
 	}
+	// The version becomes part of a URL path segment, and JoinPath cleans the
+	// result, so "1.0/../../admin" would otherwise escape the base path prefix
+	// with the source's Authorization header attached (WR-02).
+	if !forgeVersionRe.MatchString(version) {
+		return nil, status.Error(codes.InvalidArgument, "forge: version is not a valid release version")
+	}
 
 	u := base.JoinPath("v3", "releases", forgeSlug+"-"+version)
 	q := u.Query()
@@ -496,6 +503,11 @@ func validateForgeBaseURL(raw string) (*url.URL, error) {
 	}
 	return u, nil
 }
+
+// forgeVersionRe bounds a release version to the characters a SemVer string
+// (including pre-release and build metadata) uses. It admits no "/", so a
+// version can never become more than one path segment.
+var forgeVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 
 // forgeModuleSlug converts this project's "namespace/name" module identity
 // (matching PuppetfileModule.name) into Forge's native hyphenated slug
