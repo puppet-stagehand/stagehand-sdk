@@ -1,4 +1,4 @@
-# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# Fixture for the RESEARCH fixture catalog (Real-World Fixture Catalog, hiera.yaml table), catalog row
 # "multiple distinct effective datadirs". The Code model has one path
 # namespace and no datadir dimension, so each file is imported by its
 # datadir-relative path and a path collision keeps the first in hierarchy

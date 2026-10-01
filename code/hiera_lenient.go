@@ -13,7 +13,10 @@ package code
 // an explicit, tested decision here.
 
 import (
+	"errors"
 	"fmt"
+	"io"
+	"path"
 	"strings"
 	"unicode/utf8"
 
@@ -27,6 +30,25 @@ const utf8BOM = "\xEF\xBB\xBF"
 
 // supportedHieraVersion is the only hiera.yaml version the Code model reads.
 const supportedHieraVersion = 5
+
+// maxDataNestingDepth bounds how deeply a data file's YAML may nest before it
+// is refused. The YAML library's own ceiling is 10000, but a structpb value
+// costs two protobuf messages per level and the proposal body is later
+// marshalled and re-read under protobuf's recursion limit, so a file that
+// deep would pass the facet's parser and fail at proposal-write time. No real
+// Hiera data nests anywhere near this deep.
+const maxDataNestingDepth = 64
+
+// hieraDefaultsKeys and hieraLevelKeys are the keys the Code model carries in
+// the defaults mapping and in a level, matching what ParseHierarchy and
+// levelFromNode read. They are the same keys, so a modelled key cannot start
+// producing false findings (T-10 key link).
+var hieraDefaultsKeys = map[string]bool{"datadir": true, "data_hash": true}
+
+var hieraLevelKeys = map[string]bool{
+	"name": true, "path": true, "paths": true, "glob": true,
+	"mapped_paths": true, "datadir": true, "data_hash": true,
+}
 
 // hieraTopLevelKeys is the set of top-level keys the Code model carries.
 // Everything else, including the valid-but-unmodelled default_hierarchy and
@@ -88,14 +110,74 @@ func ParseHierarchyLenient(yamlText string, lim ImportLimits) (*hostv1.HieraHier
 			fmt.Sprintf("hiera.yaml does not have the shape the Code facet reads, so it could not be read back and was not imported: %v", err))
 	}
 
-	warn := func(line int, key, msg string) {
-		fl.add(newFinding(FindingHieraUnmodelledKey, hostv1.ImportFinding_WARNING, line, key, msg, lim))
+	warn := func(kind string, line int, excerpt, msg string) {
+		fl.add(newFinding(kind, hostv1.ImportFinding_WARNING, line, excerpt, msg, lim))
 	}
+	unmodelled := func(k *yaml.Node, scope, rewrite string) {
+		warn(FindingHieraUnmodelledKey, k.Line, k.Value, fmt.Sprintf(
+			"%s key %q is kept in the stored hiera.yaml text but the Code model has no field for it; %s", scope, k.Value, rewrite))
+	}
+
 	for i := 0; i+1 < len(m.Content); i += 2 {
 		k := m.Content[i]
 		if !hieraTopLevelKeys[k.Value] {
-			warn(k.Line, k.Value, fmt.Sprintf(
-				"top-level key %q is kept in the stored hiera.yaml text but the Code model has no field for it, so the facet cannot show or edit it", k.Value))
+			unmodelled(k, "top-level", "the facet cannot show or edit it")
+		}
+	}
+
+	if defaults := mapValue(m, "defaults"); defaults != nil {
+		if defaults.Kind != yaml.MappingNode {
+			warn(FindingHieraUnmodelledKey, defaults.Line, "defaults",
+				"defaults is not a mapping, so the Code model reads nothing from it; it is kept in the stored text")
+		} else {
+			for i := 0; i+1 < len(defaults.Content); i += 2 {
+				k := defaults.Content[i]
+				if !hieraDefaultsKeys[k.Value] {
+					unmodelled(k, "defaults", "the facet cannot show or edit it")
+				}
+			}
+			if dn := mapValue(defaults, "datadir"); dn != nil {
+				if _, problem := cleanDatadir(dn.Value); problem != "" {
+					warn(FindingHieraDatadirUnresolvable, dn.Line, dn.Value, fmt.Sprintf(
+						"defaults.datadir %q %s; levels that inherit it import no data files", dn.Value, problem))
+				}
+			}
+		}
+	}
+
+	if seq := mapValue(m, "hierarchy"); seq != nil {
+		seen := map[string]bool{}
+		for idx, ln := range seq.Content {
+			name := ""
+			if nn := mapValue(ln, "name"); nn != nil {
+				name = nn.Value
+			}
+			label := fmt.Sprintf("level %q", name)
+			switch {
+			case name == "":
+				label = fmt.Sprintf("level #%d", idx+1)
+				warn(FindingHieraLevelUnnamed, ln.Line, "", fmt.Sprintf(
+					"%s has no name; PutHieraLevel, RemoveHieraLevel and ReorderHieraLevels match levels by name, so the facet cannot address it", label))
+			case seen[name]:
+				warn(FindingHieraDuplicateLevel, ln.Line, name, fmt.Sprintf(
+					"the name %q is used by more than one level; PutHieraLevel, RemoveHieraLevel and ReorderHieraLevels match levels by name, so only the first can be addressed", name))
+			}
+			if name != "" {
+				seen[name] = true
+			}
+			rewrite := "a later PutHieraLevel rewrite of this level rebuilds it from the model and would drop it"
+			for j := 0; j+1 < len(ln.Content); j += 2 {
+				k := ln.Content[j]
+				if !hieraLevelKeys[k.Value] {
+					unmodelled(k, label, rewrite)
+				}
+			}
+			if dn := mapValue(ln, "datadir"); dn != nil {
+				if _, problem := cleanDatadir(dn.Value); problem != "" {
+					warn(FindingHieraDatadirUnresolvable, dn.Line, dn.Value, fmt.Sprintf(
+						"%s declares datadir %q which %s; no data files were imported for it", label, dn.Value, problem))
+				}
+			}
 		}
 	}
 	return h, yamlText, fl.items, true
@@ -137,6 +219,72 @@ func versionMessage(m *yaml.Node, vn *yaml.Node) string {
 		" Importing it as an empty hierarchy would silently overwrite a real one."
 }
 
+// cleanDatadir normalises a declared datadir and says why it cannot be
+// followed. A datadir that interpolates (%{...}) depends on facts and cannot
+// be resolved statically; an absolute path or one with a ".." segment would
+// leave the environment (T-10-42); one that resolves to the environment root
+// would sweep in every YAML file the branch holds; and one under modules/ or
+// site-modules/ would walk a module tree, which is out of scope. The returned
+// problem is empty when the datadir is usable, and the cleaned path is
+// relative with no "./" prefix or trailing slash.
+func cleanDatadir(dd string) (string, string) {
+	switch {
+	case strings.Contains(dd, "%{"):
+		return "", "interpolates a variable and cannot be resolved without facts"
+	case strings.HasPrefix(dd, "/"):
+		return "", "is an absolute path"
+	case strings.ContainsAny(dd, "\\\x00\n"):
+		return "", "contains a backslash, NUL or newline"
+	}
+	for _, seg := range strings.Split(dd, "/") {
+		if seg == ".." {
+			return "", `contains a ".." segment`
+		}
+	}
+	c := path.Clean(dd)
+	switch {
+	case c == ".":
+		return "", "resolves to the environment root"
+	case c == "modules" || strings.HasPrefix(c, "modules/") || c == "site-modules" || strings.HasPrefix(c, "site-modules/"):
+		return "", "is inside a module tree, which is out of scope"
+	}
+	return c, ""
+}
+
+// effectiveDatadirs lists the datadirs a hierarchy reads, in hierarchy order
+// and without duplicates: each level's own datadir, else the hierarchy's
+// default, else Hiera's own default. A datadir that cannot be followed is
+// skipped; ParseHierarchyLenient has already reported it. A nil hierarchy
+// (no hiera.yaml) or one with no levels reads the default datadir, so a
+// branch's data files are not silently lost.
+func effectiveDatadirs(h *hostv1.HieraHierarchy) []string {
+	def := h.GetDefaultDatadir()
+	if def == "" {
+		def = defaultDatadir
+	}
+	var out []string
+	seen := map[string]bool{}
+	add := func(dd string) {
+		c, problem := cleanDatadir(dd)
+		if problem == "" && !seen[c] {
+			seen[c] = true
+			out = append(out, c)
+		}
+	}
+	if len(h.GetLevels()) == 0 {
+		add(def)
+		return out
+	}
+	for _, l := range h.GetLevels() {
+		dd := l.GetDatadir()
+		if dd == "" {
+			dd = def
+		}
+		add(dd)
+	}
+	return out
+}
+
 // ParseDataFileLenient is the gate every imported data file passes: the path
 // must satisfy ValidateDataPath, the text must be valid UTF-8 (a
 // structpb.Struct cannot hold anything else, and the failure would otherwise
@@ -145,9 +293,9 @@ func versionMessage(m *yaml.Node, vn *yaml.Node) string {
 // any of them yields one data_file_unparseable error finding naming the cause
 // and is absent from the snapshot.
 //
-// path is the datadir-relative path the file will be stored under. The
+// dataPath is the datadir-relative path the file will be stored under. The
 // returned finding is unstamped.
-func ParseDataFileLenient(path, yamlText string, lim ImportLimits) (*hostv1.ImportDataFile, []*hostv1.ImportFinding) {
+func ParseDataFileLenient(dataPath, yamlText string, lim ImportLimits) (*hostv1.ImportDataFile, []*hostv1.ImportFinding) {
 	lim = lim.withDefaults()
 	reject := func(msg string) (*hostv1.ImportDataFile, []*hostv1.ImportFinding) {
 		return nil, []*hostv1.ImportFinding{newFinding(FindingDataFileUnparseable, hostv1.ImportFinding_ERROR, 0, "", msg, lim)}
@@ -155,13 +303,68 @@ func ParseDataFileLenient(path, yamlText string, lim ImportLimits) (*hostv1.Impo
 	if !utf8.ValidString(yamlText) {
 		return reject("the file is not valid UTF-8, which the Code facet cannot store, so it was not imported")
 	}
-	if err := ValidateDataPath(path); err != nil {
+	if err := ValidateDataPath(dataPath); err != nil {
 		return reject(fmt.Sprintf("the path is not a valid data path, so it was not imported: %v", err))
+	}
+	doc, err := decodeDoc(yamlText)
+	if err != nil {
+		return reject(dataFileCause(err))
+	}
+	if d := nestingDepth(doc); d > maxDataNestingDepth {
+		return reject(fmt.Sprintf("the file is nested %d levels deep, past the limit of %d, so it was not imported", d, maxDataNestingDepth))
 	}
 	if _, err := ParseDataFile(yamlText); err != nil {
 		return reject(dataFileCause(err))
 	}
-	return &hostv1.ImportDataFile{Path: path, Yaml: yamlText}, nil
+	df := &hostv1.ImportDataFile{Path: dataPath, Yaml: yamlText}
+	if hasExtraDocuments(yamlText) {
+		return df, []*hostv1.ImportFinding{newFinding(FindingDataFileExtraDocuments, hostv1.ImportFinding_WARNING, 0, "",
+			"the file holds more than one YAML document; only the first is read, matching the Code facet, and the stored text keeps the rest", lim)}
+	}
+	return df, nil
+}
+
+// nestingDepth is the deepest chain of mappings and sequences under n. Alias
+// nodes are not followed: an alias bomb is refused by the YAML library when
+// it is decoded, and following aliases here would walk what that refusal
+// exists to prevent.
+func nestingDepth(n *yaml.Node) int {
+	if n == nil {
+		return 0
+	}
+	deepest := 0
+	for _, c := range n.Content {
+		if d := nestingDepth(c); d > deepest {
+			deepest = d
+		}
+	}
+	if n.Kind == yaml.MappingNode || n.Kind == yaml.SequenceNode {
+		return deepest + 1
+	}
+	return deepest
+}
+
+// hasExtraDocuments reports whether text holds a second YAML document with
+// content. A trailing bare document marker is not one; a malformed second
+// document is, because it is present and ignored.
+func hasExtraDocuments(text string) bool {
+	dec := yaml.NewDecoder(strings.NewReader(text))
+	var first, second yaml.Node
+	if err := dec.Decode(&first); err != nil {
+		return false
+	}
+	err := dec.Decode(&second)
+	if errors.Is(err, io.EOF) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	if second.Kind == yaml.DocumentNode && len(second.Content) == 1 &&
+		second.Content[0].Kind == yaml.ScalarNode && second.Content[0].ShortTag() == "!!null" {
+		return false
+	}
+	return second.Kind != 0
 }
 
 // dataFileCause names why strict ParseDataFile refused a file, so the finding

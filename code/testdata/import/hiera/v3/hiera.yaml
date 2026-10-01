@@ -1,4 +1,4 @@
-# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# Fixture for the RESEARCH fixture catalog (Real-World Fixture Catalog, hiera.yaml table), catalog row
 # "Hiera v3 (:backends:, :hierarchy:)". The strict ParseHierarchy accepts this
 # file as version=0, levels=0 (a silent drop); the lenient path must refuse it
 # with one version error and import nothing.

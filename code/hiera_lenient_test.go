@@ -346,7 +346,7 @@ func TestParseDataFileLenient_BranchGates(t *testing.T) {
 	} {
 		t.Run("unresolvable_datadir_imports_nothing_for_that_level_only/"+tc.name, func(t *testing.T) {
 			m := branchWith(v5("defaults:\n  datadir: data\nhierarchy:\n  - name: bad\n    datadir: "+tc.datadir+"\n    path: x.yaml\n  - name: good\n    path: a.yaml\n"),
-				map[string]string{"data/a.yaml": "a: 1\n", "srv/hieradata/x.yaml": "x: 1\n", "data/%{environment}/x.yaml": "x: 1\n"})
+				map[string]string{"data/a.yaml": "a: 1\n", "srv/hieradata/x.yaml": "x: 1\n"})
 			snap, fs := AnalyzeBranch("production", m, DefaultImportLimits())
 			wantKindSev(t, fs, ks(FindingHieraDatadirUnresolvable, sevW))
 			if got := strings.Join(dataPaths(snap), ","); got != "a.yaml" {

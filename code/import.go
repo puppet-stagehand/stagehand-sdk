@@ -8,6 +8,7 @@ package code
 
 import (
 	"fmt"
+	"path"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -501,34 +502,98 @@ func (a *branchAnalyzer) importEnvConf(text string) {
 	a.snap.Settings = s
 }
 
-// importData imports the data files under the datadirs the hierarchy
-// declares, each under its datadir-relative path.
-func (a *branchAnalyzer) importData(h *hostv1.HieraHierarchy) {
-	datadir := defaultDatadir
-	if h != nil && h.GetDefaultDatadir() != "" {
-		datadir = h.GetDefaultDatadir()
+// isYAMLPath reports whether p carries a YAML extension. Hiera data files are
+// named .yaml, and .yml is the same format.
+func isYAMLPath(p string) bool {
+	switch strings.ToLower(path.Ext(p)) {
+	case ".yaml", ".yml":
+		return true
 	}
-	datadir = strings.TrimSuffix(datadir, "/")
-	entries, err := a.fs.List(datadir)
+	return false
+}
+
+// importData imports the data files under the datadirs the hierarchy
+// declares, each under its datadir-relative path. Each candidate is checked
+// in a fixed order, cheapest and safest first, so a file is never read before
+// it is known to be wanted: scope (inside a declared datadir), mode (a
+// symlink or gitlink is never read through), extension, the reported size
+// against the per-file cap, collision with a file already imported, and only
+// then the read and the facet's own parser (T-10-21).
+func (a *branchAnalyzer) importData(h *hostv1.HieraHierarchy) {
+	dirs := effectiveDatadirs(h)
+	if len(dirs) == 0 {
+		return
+	}
+	entries, err := a.fs.List(dirs...)
 	if err != nil {
-		a.fail("", FindingBranchFileUnreadable, fmt.Sprintf("the data directory %q could not be listed: %v", datadir, err))
+		a.fail("", FindingBranchFileUnreadable, fmt.Sprintf("the data directories could not be listed: %v", err))
 		return
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+
+	// Each entry belongs to the first declared datadir that contains it, so
+	// the walk below runs in hierarchy order and a collision keeps the
+	// earliest level's file.
+	owned := make([][]ImportFile, len(dirs))
 	for _, e := range entries {
-		rel := strings.TrimPrefix(e.Path, datadir+"/")
-		if rel == e.Path || !strings.HasSuffix(rel, ".yaml") {
-			continue
+		placed := false
+		for i, dd := range dirs {
+			if strings.HasPrefix(e.Path, dd+"/") {
+				owned[i] = append(owned[i], e)
+				placed = true
+				break
+			}
 		}
-		b, err := a.fs.Read(e.Path)
-		if err != nil {
-			a.fail(e.Path, FindingDataFileUnparseable, fmt.Sprintf("the file could not be read: %v", err))
-			continue
-		}
-		df, fs := ParseDataFileLenient(rel, string(b), a.lim)
-		a.add(e.Path, fs)
-		if df != nil {
-			a.snap.DataFiles = append(a.snap.DataFiles, df)
+		if !placed && e.Path != branchPuppetfile && e.Path != branchHieraYaml && e.Path != branchEnvironConf {
+			a.warn(e.Path, FindingDataFileOutsideDatadir, "the file is outside every declared datadir, so it was not imported")
 		}
 	}
+
+	claimed := map[string]string{} // relative path -> repo path imported under it
+	for i, dd := range dirs {
+		for _, e := range owned[i] {
+			a.importDataFile(dd, e, claimed)
+		}
+	}
+}
+
+// importDataFile applies the per-file checks to one entry under datadir dd.
+func (a *branchAnalyzer) importDataFile(dd string, e ImportFile, claimed map[string]string) {
+	switch e.Mode {
+	case modeSymlink:
+		a.warn(e.Path, FindingDataFileSymlink, "the entry is a symlink and is never read through, so it was not imported")
+		return
+	case modeGitlink:
+		a.warn(e.Path, FindingDataFileGitlink, "the entry is a gitlink (a submodule), not a file, so it was not imported")
+		return
+	}
+	if !isYAMLPath(e.Path) {
+		a.warn(e.Path, FindingDataFileNotYAML, "the file is not YAML (only .yaml and .yml are imported), so it was not imported")
+		return
+	}
+	if e.Size > a.lim.MaxFileBytes {
+		a.warn(e.Path, FindingDataFileTooLarge, fmt.Sprintf("the file is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not read or imported", e.Size, a.lim.MaxFileBytes))
+		return
+	}
+	rel := strings.TrimPrefix(e.Path, dd+"/")
+	if first, dup := claimed[rel]; dup {
+		a.warn(e.Path, FindingDataFileCollision, fmt.Sprintf("the datadir-relative path %q is already imported from %s and the first file in hierarchy order is kept; the Code model stores a data file by a path relative to the datadir and has no datadir dimension, so this second file cannot be represented", rel, first))
+		return
+	}
+	b, err := a.fs.Read(e.Path)
+	if err != nil {
+		a.fail(e.Path, FindingDataFileUnparseable, fmt.Sprintf("the file could not be read, so it was not imported: %v", err))
+		return
+	}
+	if int64(len(b)) > a.lim.MaxFileBytes {
+		a.warn(e.Path, FindingDataFileTooLarge, fmt.Sprintf("the file is %d bytes, over the per-file cap of %d bytes (ImportLimits.MaxFileBytes), so it was not imported", len(b), a.lim.MaxFileBytes))
+		return
+	}
+	df, fs := ParseDataFileLenient(rel, string(b), a.lim)
+	a.add(e.Path, fs)
+	if df == nil {
+		return
+	}
+	claimed[rel] = e.Path
+	a.snap.DataFiles = append(a.snap.DataFiles, df)
 }

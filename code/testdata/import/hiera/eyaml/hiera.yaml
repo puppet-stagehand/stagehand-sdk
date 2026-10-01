@@ -1,4 +1,4 @@
-# Fixture for the RESEARCH "Real-World Fixture Catalog" (hiera.yaml table), row
+# Fixture for the RESEARCH fixture catalog (Real-World Fixture Catalog, hiera.yaml table), catalog row
 # "eyaml level (lookup_key, options, .eyaml path)". Strict parsing imports the
 # level with lookup_key and options silently dropped; the lenient path keeps
 # the raw text and flags both keys as unmodelled.
