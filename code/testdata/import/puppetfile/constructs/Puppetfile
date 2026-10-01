@@ -1,0 +1,54 @@
+# One example of every catalog row (10-RESEARCH "Real-World Fixture Catalog /
+# Puppetfile"). Each statement is preceded by a comment naming the catalog row it
+# exercises, so a finding can be traced back to its entry. The lenient test
+# asserts the findings against the text of each statement, not hard-coded line
+# numbers, so adding a row here does not silently break it.
+
+# catalog: forge directive
+forge 'https://forge.puppet.com'
+
+# catalog: moduledir, then a duplicate moduledir (the last value is kept)
+moduledir 'first'
+moduledir 'second'
+
+# catalog: clean Forge module and clean git module (both imported)
+mod 'puppetlabs/stdlib', '7.0.1'
+mod 'profiles',
+  :git => 'https://example.com/profiles.git',
+  :tag => 'v1'
+
+# catalog: unmodelled attribute on a git module (whole statement skipped)
+mod 'skip_install_path',
+  :git => 'https://example.com/a.git',
+  :install_path => 'vendor'
+
+# catalog: unmodelled attribute on a Forge module (whole statement skipped)
+mod 'puppetlabs/apache', '1.0.0', :local => true
+
+# catalog: hash-form Forge module
+mod :version => '1.0'
+
+# catalog: parenthesised call
+mod('puppetlabs/ntp', '1.0')
+
+# catalog: Ruby control flow, block, variable assignment and require
+if ENV['STAGEHAND']
+%w(a b).each do |n|
+version = '1.0'
+require 'yaml'
+end
+
+# catalog: conflicting :ref and :branch selectors
+mod 'conflict',
+  :git => 'https://example.com/c.git',
+  :ref => 'a',
+  :branch => 'b'
+
+# catalog: duplicate module name (the first is kept)
+mod 'puppetlabs/stdlib', '9.9.9'
+
+# catalog: bare Forge name (parses, would not render)
+mod 'stdlib'
+
+# catalog: absolute git path (parses, would not render)
+mod 'abs_git', :git => '/srv/git/x.git'

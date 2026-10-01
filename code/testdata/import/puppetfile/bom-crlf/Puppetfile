@@ -1,0 +1,5 @@
+﻿mod 'puppetlabs/stdlib', '7.0.1'
+mod 'profiles',
+  :git => 'https://example.com/profiles.git',
+  :tag => 'v1'
+forge 'https://forge.puppet.com'

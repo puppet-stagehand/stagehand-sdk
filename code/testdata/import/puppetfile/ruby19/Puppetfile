@@ -1,0 +1,16 @@
+# Ruby-1.9 hash keys only (DQ-5): the form the official control-repo template
+# documents, which strict ParsePuppetfile refuses and the lenient path imports.
+mod 'apache',
+  git:    'https://github.com/puppetlabs/puppetlabs-apache',
+  commit: '1b6f89afdde0df7f9433a163d5c4b5328eac5779'
+
+mod 'concat', git: 'https://github.com/puppetlabs/puppetlabs-concat', branch: 'main'
+
+mod 'ntp',
+  git: 'https://example.com/ntp.git',
+  tag: 'v1.2.3'
+
+mod 'profiles',
+  git:            'git@git.example.com:puppet/profiles.git',
+  branch:         :control_branch,
+  default_branch: 'main'
