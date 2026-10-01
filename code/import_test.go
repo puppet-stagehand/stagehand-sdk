@@ -2,6 +2,7 @@ package code
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -426,4 +427,178 @@ func TestAnalyzeBranch_ModuleTreesAreNeverWalked(t *testing.T) {
 			}
 		}
 	}
+}
+
+// snapshotBytes is the stored size of a snapshot's texts: the bytes the
+// total-snapshot budget bounds.
+func snapshotBytes(s *hostv1.ImportBranchSnapshot) int64 {
+	n := int64(len(s.GetPuppetfileText()) + len(s.GetHieraYaml()))
+	for _, d := range s.GetDataFiles() {
+		n += int64(len(d.GetYaml()))
+	}
+	return n
+}
+
+// dataBranch builds a branch whose hierarchy has no levels, so it reads the
+// default datadir, with n ten-byte data files named a.yaml, b.yaml, ...
+func dataBranch(n int) *memFS {
+	m := newMemFS().add("hiera.yaml", "version: 5\nhierarchy: []\n")
+	for i := 0; i < n; i++ {
+		m.add(fmt.Sprintf("data/%c.yaml", 'a'+i), "k: 123456\n") // exactly 10 bytes
+	}
+	return m
+}
+
+func TestAnalyzeBranch_DataBudget(t *testing.T) {
+	t.Run("per_branch_data_cap_stops_the_walk_with_one_warning_and_keeps_what_was_imported", func(t *testing.T) {
+		m := dataBranch(4)
+		snap, fs := AnalyzeBranch("production", m, ImportLimits{MaxBranchBytes: 25})
+		if got := strings.Join(dataPaths(snap), ","); got != "a.yaml,b.yaml" {
+			t.Fatalf("data files = %q, want the two that fit in 25 bytes", got)
+		}
+		wantKindSev(t, fs, ks(FindingBranchDataCapExceeded, sevW))
+		if !strings.Contains(fs[0].GetMessage(), "MaxBranchBytes") || !strings.Contains(fs[0].GetMessage(), "25") {
+			t.Errorf("the warning must name the cap and its value: %q", fs[0].GetMessage())
+		}
+		if fs[0].GetBranch() != "production" {
+			t.Errorf("finding not stamped: %v", fs[0])
+		}
+	})
+
+	t.Run("the_file_that_would_exceed_the_budget_is_not_read", func(t *testing.T) {
+		m := dataBranch(3)
+		AnalyzeBranch("production", m, ImportLimits{MaxBranchBytes: 15})
+		if !m.wasRead("data/a.yaml") {
+			t.Error("the first file fits and must be read")
+		}
+		if m.wasRead("data/b.yaml") || m.wasRead("data/c.yaml") {
+			t.Error("the budget must be enforced from the reported size, before any read (D-12, DQ-8)")
+		}
+	})
+
+	t.Run("total_snapshot_cap_is_enforced_the_same_way", func(t *testing.T) {
+		m := dataBranch(4)
+		lim := ImportLimits{MaxSnapshotBytes: 45} // 26 bytes of hiera.yaml leave room for one 10-byte file
+		snap, fs := AnalyzeBranch("production", m, lim)
+		wantKindSev(t, fs, ks(FindingBranchDataCapExceeded, sevW))
+		if !strings.Contains(fs[0].GetMessage(), "MaxSnapshotBytes") {
+			t.Errorf("the warning must name the total cap: %q", fs[0].GetMessage())
+		}
+		if got := snapshotBytes(snap); got > 45 {
+			t.Fatalf("snapshot is %d bytes, over the 45-byte total cap", got)
+		}
+		if len(snap.GetDataFiles()) != 1 {
+			t.Fatalf("data files = %v", dataPaths(snap))
+		}
+	})
+
+	t.Run("a_branch_inside_both_caps_has_no_cap_finding", func(t *testing.T) {
+		snap, fs := AnalyzeBranch("production", dataBranch(4), DefaultImportLimits())
+		wantKindSev(t, fs)
+		if len(snap.GetDataFiles()) != 4 {
+			t.Fatalf("data files = %v", dataPaths(snap))
+		}
+	})
+
+	t.Run("budgets_are_read_from_the_limits_value", func(t *testing.T) {
+		// Zero fields fall back to the defaults, so a zero ImportLimits must
+		// not make every file exceed a zero budget.
+		snap, fs := AnalyzeBranch("production", dataBranch(2), ImportLimits{})
+		wantKindSev(t, fs)
+		if len(snap.GetDataFiles()) != 2 {
+			t.Fatalf("data files = %v", dataPaths(snap))
+		}
+	})
+}
+
+func TestAnalyzeBranch_FindingsCap(t *testing.T) {
+	m := newMemFS().add("environment.conf", "a = 1\nb = 2\nc = 3\nd = 4\ne = 5\nf = 6\n")
+	snap, fs := AnalyzeBranch("production", m, ImportLimits{MaxFindingsPerBranch: 3})
+	if len(fs) != 4 {
+		t.Fatalf("findings = %v, want cap(3) plus one terminal", kindSev(fs))
+	}
+	last := fs[3]
+	if last.GetKind() != FindingFindingsTruncated || last.GetSeverity() != hostv1.ImportFinding_WARNING {
+		t.Fatalf("terminal finding = %v", last)
+	}
+	if len(findingsOfKind(fs, FindingFindingsTruncated)) != 1 {
+		t.Errorf("exactly one terminal finding is allowed, got %v", kindSev(fs))
+	}
+	for _, f := range fs {
+		if f.GetBranch() != "production" {
+			t.Errorf("finding %v is not stamped with the branch, the terminal one included", f)
+		}
+	}
+	if len(snap.GetFindings()) != 4 {
+		t.Errorf("snapshot carries %d findings", len(snap.GetFindings()))
+	}
+}
+
+func TestAnalyzeBranch_RootFileGates(t *testing.T) {
+	t.Run("symlinked_root_files_are_never_read", func(t *testing.T) {
+		m := newMemFS()
+		m.addFile("Puppetfile", memFile{content: []byte("/etc/passwd"), mode: "120000"})
+		m.addFile("hiera.yaml", memFile{content: []byte("/etc/passwd"), mode: "120000"})
+		m.addFile("environment.conf", memFile{content: []byte("/etc/passwd"), mode: "160000"})
+		snap, fs := AnalyzeBranch("production", m, DefaultImportLimits())
+		wantKindSev(t, fs, ks(FindingBranchFileUnreadable, sevE), ks(FindingBranchFileUnreadable, sevE), ks(FindingBranchFileUnreadable, sevE))
+		if len(m.reads) != 0 {
+			t.Fatalf("a symlink or gitlink was read: %v", m.reads)
+		}
+		if snap.GetPuppetfileText() != "" || snap.GetHieraYaml() != "" || snap.GetSettings() != nil {
+			t.Fatalf("nothing may be imported from them, got %v", snap)
+		}
+	})
+
+	t.Run("oversized_root_file_is_not_read", func(t *testing.T) {
+		m := newMemFS()
+		m.addFile("hiera.yaml", memFile{content: []byte("version: 5\n"), size: 5000})
+		snap, fs := AnalyzeBranch("production", m, ImportLimits{MaxFileBytes: 1000})
+		wantKindSev(t, fs, ks(FindingBranchFileUnreadable, sevE))
+		if m.wasRead("hiera.yaml") || snap.GetHieraYaml() != "" {
+			t.Fatal("an oversized root file must not be read or imported")
+		}
+	})
+
+	t.Run("a_listing_failure_is_a_branch_level_error_and_the_branch_is_not_importable", func(t *testing.T) {
+		m := newMemFS()
+		m.listErr = errors.New("boom")
+		snap, fs := AnalyzeBranch("production", m, DefaultImportLimits())
+		wantKindSev(t, fs, ks(FindingBranchFileUnreadable, sevE))
+		if snap.GetImportable() {
+			t.Error("a branch that could not be listed is not importable")
+		}
+	})
+
+	t.Run("an_environment_conf_that_is_all_comments_writes_no_settings", func(t *testing.T) {
+		snap, fs := AnalyzeBranch("production", newMemFS().add("environment.conf", "# nothing\n"), DefaultImportLimits())
+		wantKindSev(t, fs)
+		if snap.GetSettings() != nil {
+			t.Fatalf("settings = %v, want absent", snap.GetSettings())
+		}
+	})
+}
+
+func TestReadPathGuards(t *testing.T) {
+	t.Run("settings_with_a_newline_fail_the_round_trip", func(t *testing.T) {
+		bad := &hostv1.EnvironmentSettings{Modulepath: strPtr("a\nb = c")}
+		if err := settingsReadPath(bad); err == nil {
+			t.Fatal("settingsReadPath accepted a value RenderEnvConf refuses")
+		}
+	})
+	t.Run("a_hierarchy_that_reads_back_different_fails", func(t *testing.T) {
+		h := &hostv1.HieraHierarchy{Version: 5, DefaultDatadir: "other"}
+		if err := hierarchyReadPath("version: 5\n", h); err == nil {
+			t.Fatal("hierarchyReadPath accepted a text that reads back as a different model")
+		}
+		if err := hierarchyReadPath("- not a mapping\n", h); err == nil {
+			t.Fatal("hierarchyReadPath accepted unparseable text")
+		}
+	})
+	t.Run("a_puppetfile_that_does_not_render_fails", func(t *testing.T) {
+		pf := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{{Name: "stdlib"}}}
+		if _, err := puppetfileReadPath(pf); err == nil {
+			t.Fatal("puppetfileReadPath accepted a model that cannot render")
+		}
+	})
 }
