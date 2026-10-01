@@ -1461,3 +1461,86 @@ func TestInvisibleFormatCharactersAreStripped(t *testing.T) {
 		t.Fatalf("invisible characters reached the ranking prompt: %q", rr.User)
 	}
 }
+
+// slowForge answers the first okCalls searches from inner and blocks every
+// later one until its context ends, standing in for a registry that has gone
+// slow part-way through the fan-out.
+type slowForge struct {
+	staticForge
+	mu      sync.Mutex
+	calls   int
+	okCalls int
+}
+
+func (f *slowForge) Search(ctx context.Context, ep ForgeEndpoint, source, q string, p *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	f.mu.Lock()
+	f.calls++
+	n := f.calls
+	f.mu.Unlock()
+	if n <= f.okCalls {
+		return f.staticForge.Search(ctx, ep, source, q, p)
+	}
+	<-ctx.Done()
+	return nil, nil, status.Error(codes.Unavailable, "forge: request failed (network error, timeout, or canceled context)")
+}
+
+// WR-07: the search fan-out has its own deadline, so a slow registry cannot
+// hold Recommend (and a goroutine) indefinitely when the caller set none.
+func TestRecommendSearchFanOutHasItsOwnDeadline(t *testing.T) {
+	const threeQueries = `{"queries":["windows","security","iis"]}`
+	const goodRank = `{"suggestions":[{"name":"puppetlabs/apache","source":"puppet-forge","reasoning":"ok"}]}`
+
+	t.Run("every search slow is Unavailable and bounded", func(t *testing.T) {
+		slow := &slowForge{staticForge: twoModules()}
+		h, llm := recommendHost(t, slow, threeQueries, goodRank)
+		h.Forge.(*gatedForge).inner.searchTimeout = 50 * time.Millisecond
+		start := time.Now()
+		_, err := recommend(h)
+		if status.Code(err) != codes.Unavailable {
+			t.Fatalf("expected Unavailable, got %v", err)
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatalf("Recommend was not bounded by the search deadline: %v", time.Since(start))
+		}
+		slow.mu.Lock()
+		defer slow.mu.Unlock()
+		if slow.calls != 1 {
+			t.Fatalf("searches after the budget expired must be skipped, saw %d calls", slow.calls)
+		}
+		if llm.callCount() != 1 {
+			t.Fatalf("no ranking call may follow a failed fan-out, saw %d LLM calls", llm.callCount())
+		}
+	})
+
+	t.Run("partial results rank with a warning", func(t *testing.T) {
+		slow := &slowForge{staticForge: twoModules(), okCalls: 1}
+		h, _ := recommendHost(t, slow, threeQueries, goodRank)
+		h.Forge.(*gatedForge).inner.searchTimeout = 50 * time.Millisecond
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatalf("a partial fan-out must still answer: %v", err)
+		}
+		if len(resp.Suggestions) != 1 {
+			t.Fatalf("expected the surviving candidates to be ranked, got %+v", resp.Suggestions)
+		}
+		found := false
+		for _, c := range warningCodes(resp.Warnings) {
+			if c == recommendWarnSearchFailed {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("expected a %s warning, got %v", recommendWarnSearchFailed, warningCodes(resp.Warnings))
+		}
+	})
+
+	t.Run("a cancelled caller stops the fan-out", func(t *testing.T) {
+		h, _ := recommendHost(t, twoModules(), threeQueries, goodRank)
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		_, err := h.Forge.Recommend(ctx, &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"})
+		if err == nil {
+			t.Fatalf("expected an error from a cancelled caller")
+		}
+	})
+}

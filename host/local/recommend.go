@@ -59,6 +59,11 @@ const (
 	// llmCallTimeout bounds every provider call independently of the caller's
 	// context. Nothing is retried.
 	llmCallTimeout = 45 * time.Second
+	// recommendSearchTimeout bounds the whole search fan-out (up to
+	// sources x queries Search calls, each with its own enrichment requests)
+	// independently of the caller's context, which may carry no deadline
+	// (WR-07). Searches still outstanding when it expires are skipped.
+	recommendSearchTimeout = 90 * time.Second
 
 	// recommendMaxCandidateSummaryRunes caps one candidate's summary before it
 	// enters the ranking prompt.
@@ -307,9 +312,25 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 	// the only source of module facts.
 	lists := make([][]*hostv1.ForgeSearchResult, 0, len(sources)*len(queries))
 	var firstErr error
+	searchTimeout := s.searchTimeout
+	if searchTimeout <= 0 {
+		searchTimeout = recommendSearchTimeout
+	}
+	searchCtx, cancelSearch := context.WithTimeout(ctx, searchTimeout)
+	defer cancelSearch()
+	budgetSpent := false
+fanout:
 	for _, src := range sources {
 		for _, q := range queries {
-			searched, err := s.Search(ctx, &hostv1.SearchRequest{
+			if err := ctx.Err(); err != nil {
+				// The caller gave up: stop, and say so with the caller's own code.
+				return nil, status.FromContextError(err).Err()
+			}
+			if searchCtx.Err() != nil {
+				budgetSpent = true
+				break fanout
+			}
+			searched, err := s.Search(searchCtx, &hostv1.SearchRequest{
 				Query:  q,
 				Source: &hostv1.ForgeSourceSelection{Name: src},
 				Page:   &hostv1.Page{Limit: recommendSearchPageLimit},
@@ -329,8 +350,20 @@ func (s *forgeServer) Recommend(ctx context.Context, req *hostv1.RecommendReques
 			lists = append(lists, searched.Results)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	if budgetSpent || searchCtx.Err() != nil {
+		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+			Code:    recommendWarnSearchFailed,
+			Message: "the search time budget ran out; some searches were skipped and their modules are missing from the candidates",
+		})
+	}
 	if len(lists) == 0 {
 		// Every search failed: the error reaches the caller with its own code.
+		if firstErr == nil {
+			firstErr = status.Error(codes.Unavailable, "the search time budget ran out before any search completed")
+		}
 		return nil, firstErr
 	}
 

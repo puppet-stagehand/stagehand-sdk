@@ -75,6 +75,9 @@ type forgeServer struct {
 	// callTimeout bounds each LLM provider call; llmCallTimeout in production.
 	// A field rather than a bare constant so a test can shrink it.
 	callTimeout time.Duration
+	// searchTimeout bounds Recommend's whole search fan-out;
+	// recommendSearchTimeout in production. A field so a test can shrink it.
+	searchTimeout time.Duration
 }
 
 // newForgeServer wires a forgeServer. A nil client defaults to the real
@@ -89,7 +92,7 @@ func newForgeServer(packID string, docs *documentsServer, secrets *secretsServer
 	if llm == nil {
 		llm = DefaultLLMClient()
 	}
-	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm, callTimeout: llmCallTimeout}
+	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm, callTimeout: llmCallTimeout, searchTimeout: recommendSearchTimeout}
 }
 
 // resolveSource turns a ForgeSourceSelection into the endpoint a request
