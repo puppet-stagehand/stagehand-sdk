@@ -244,8 +244,17 @@ func (s *codeServer) analyzeImport(ctx context.Context, url, credentialName stri
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Name < refs[j].Name })
 
+	// A name the caller asked for is never silently dropped (DQ-10): one the
+	// remote does not have is refused before anything is fetched.
+	discovered := make(map[string]bool, len(refs))
+	for _, ref := range refs {
+		discovered[ref.Name] = true
+	}
 	want := map[string]bool{}
 	for _, n := range filter {
+		if !discovered[n] {
+			return nil, status.Errorf(codes.InvalidArgument, "branch %s was not found on the remote", quoteName(n))
+		}
 		want[n] = true
 	}
 
@@ -368,7 +377,11 @@ func (s *codeServer) ProposeImport(ctx context.Context, req *hostv1.ProposeImpor
 		case b.Importable:
 			importable++
 			frozen.Branches = append(frozen.Branches, b)
-		case len(filter) == 0 && b.Branch != "" && !strings.Contains(b.Branch, ","):
+		case len(filter) > 0:
+			// The caller named this branch and it cannot be imported. Dropping it
+			// would file a proposal the caller did not ask for (DQ-10).
+			return nil, status.Errorf(codes.InvalidArgument, "branch %s was selected but is not importable: %s", quoteName(b.Branch), unimportableReason(b))
+		case b.Branch != "" && !strings.Contains(b.Branch, ","):
 			// The refused branches stay in the frozen snapshot, marked not
 			// importable, so the approver reads the same findings the report
 			// showed. ApplyImport skips them.
@@ -377,6 +390,26 @@ func (s *codeServer) ProposeImport(ctx context.Context, req *hostv1.ProposeImpor
 	}
 	if importable == 0 {
 		return nil, status.Error(codes.FailedPrecondition, "no importable branch was selected, so there is nothing to propose")
+	}
+
+	// The optional staleness guard (DQ-3): when the caller pinned commits, every
+	// selected branch must be pinned and must still be at that commit, so a
+	// proposal can never be filed against content different from the report the
+	// human read.
+	if len(req.ExpectedCommits) > 0 {
+		for _, b := range frozen.Branches {
+			if !b.Importable {
+				continue
+			}
+			want, ok := req.ExpectedCommits[b.Branch]
+			if !ok {
+				return nil, status.Errorf(codes.InvalidArgument,
+					"expected_commits has no entry for selected branch %s; pin every selected branch or send no expected_commits", quoteName(b.Branch))
+			}
+			if want != b.Commit {
+				return nil, ErrCodeImportBranchMoved(b.Branch, want, b.Commit)
+			}
+		}
 	}
 
 	body, err := code.OverwriteBodyForImport(frozen)
@@ -391,6 +424,15 @@ func (s *codeServer) ProposeImport(ctx context.Context, req *hostv1.ProposeImpor
 		return nil, err
 	}
 	return &hostv1.ProposeImportResponse{ProposalId: req.ProposalId, Snapshot: proto.Clone(frozen).(*hostv1.ImportSnapshot)}, nil
+}
+
+// unimportableReason is the first finding's message for a refused branch, or a
+// generic sentence when it somehow carries none.
+func unimportableReason(b *hostv1.ImportBranchSnapshot) string {
+	if len(b.GetFindings()) > 0 {
+		return b.GetFindings()[0].GetMessage()
+	}
+	return "it carries no importable content"
 }
 
 // importEnvPlan is one environment ApplyImport will write: its name and every
@@ -548,6 +590,16 @@ func (s *codeServer) ApplyImport(ctx context.Context, req *hostv1.ApplyImportReq
 	}
 	if s.overwriteAppliedLocked(req.ProposalId) {
 		return nil, errOverwriteAlreadyApplied(req.ProposalId)
+	}
+	// The collision rule (D-15, RESEARCH Pitfall 8b). A branch the frozen
+	// snapshot flagged as an overwrite is replaced; one it did not flag but
+	// whose environment now exists was never shown to the approver as being
+	// replaced, so the whole import is refused rather than that branch skipped.
+	// The reverse, flagged but now absent, simply creates.
+	for _, p := range plans {
+		if !p.flag && s.targetInUseLocked(p.name) {
+			return nil, ErrCodeImportUnflaggedCollision(p.name)
+		}
 	}
 
 	// Pass two: only deletes and create-only puts. putLocked can fail only on a
