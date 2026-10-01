@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -71,6 +72,9 @@ type forgeServer struct {
 	docs    *documentsServer
 	secrets *secretsServer
 	llm     LLMClient
+	// callTimeout bounds each LLM provider call; llmCallTimeout in production.
+	// A field rather than a bare constant so a test can shrink it.
+	callTimeout time.Duration
 }
 
 // newForgeServer wires a forgeServer. A nil client defaults to the real
@@ -85,7 +89,7 @@ func newForgeServer(packID string, docs *documentsServer, secrets *secretsServer
 	if llm == nil {
 		llm = DefaultLLMClient()
 	}
-	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm}
+	return &forgeServer{packID: packID, client: client, docs: docs, secrets: secrets, llm: llm, callTimeout: llmCallTimeout}
 }
 
 // resolveSource turns a ForgeSourceSelection into the endpoint a request

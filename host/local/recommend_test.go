@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -1034,6 +1035,384 @@ func TestRecommendReplyDecodingIsStrict(t *testing.T) {
 		b, _ := json.Marshal(llm.calls[1].Schema)
 		if n := strings.Count(string(b), `"additionalProperties":false`); n != 2 {
 			t.Fatalf("the ranking schema must close both the reply and its entries, got %d closed objects: %s", n, b)
+		}
+	})
+}
+
+// ------------------------------------------------------- limits and errors
+
+// errLLM is an LLMClient double that answers from replies like scriptedLLM but
+// fails the call at index failAt with err. Calls are counted.
+type errLLM struct {
+	mu      sync.Mutex
+	replies []string
+	failAt  int
+	err     error
+	n       int
+}
+
+func (f *errLLM) Complete(context.Context, LLMProvider, LLMRequest) (string, error) {
+	f.mu.Lock()
+	i := f.n
+	f.n++
+	f.mu.Unlock()
+	if i == f.failAt {
+		return "", f.err
+	}
+	if i >= len(f.replies) {
+		return "", status.Error(codes.Internal, "unscripted call")
+	}
+	return f.replies[i], nil
+}
+
+func (f *errLLM) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.n
+}
+
+// manyModules is a staticForge holding n modules, acme/m01..acme/mNN.
+func manyModules(n int) staticForge {
+	var out []*hostv1.ForgeSearchResult
+	for i := 1; i <= n; i++ {
+		out = append(out, &hostv1.ForgeSearchResult{Name: fmt.Sprintf("acme/m%02d", i), Version: "1.0.0", QualityScore: 0.5})
+	}
+	return staticForge{results: out}
+}
+
+func TestRecommendEgressAndLimits(t *testing.T) {
+	ask := func(h *host.Host, mutate func(*hostv1.RecommendRequest)) (*hostv1.RecommendResponse, error) {
+		req := &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"}
+		if mutate != nil {
+			mutate(req)
+		}
+		return h.Forge.Recommend(context.Background(), req)
+	}
+	wantRefusal := func(t *testing.T, err error, field string, max int) {
+		t.Helper()
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for %s above its maximum, got %v", field, err)
+		}
+		msg := status.Convert(err).Message()
+		if !strings.Contains(msg, field) || !strings.Contains(msg, fmt.Sprint(max)) {
+			t.Fatalf("expected the refusal to name %s and its maximum %d, got %q", field, max, msg)
+		}
+	}
+	sixQueries := extractionReply("q one", "q two", "q three", "q four", "q five", "q six")
+
+	t.Run("max_queries", func(t *testing.T) {
+		search := func(set int32) (int, error) {
+			forge := &planForge{fn: func(s, q string) ([]*hostv1.ForgeSearchResult, error) { return nil, nil }}
+			h, _, _ := planHost(t, forge, sixQueries)
+			_, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxQueries = set })
+			return len(forge.snapshot()), err
+		}
+		if n, err := search(0); err != nil || n != recommendDefaultMaxQueries {
+			t.Fatalf("zero must select the default of %d queries, got %d (err %v)", recommendDefaultMaxQueries, n, err)
+		}
+		if n, err := search(2); err != nil || n != 2 {
+			t.Fatalf("an override within range is taken as given, got %d (err %v)", n, err)
+		}
+		if n, err := search(recommendHardMaxQueries); err != nil || n != recommendHardMaxQueries {
+			t.Fatalf("the hard maximum itself is allowed, got %d (err %v)", n, err)
+		}
+		forge := &planForge{fn: func(s, q string) ([]*hostv1.ForgeSearchResult, error) { return nil, nil }}
+		h, llm, reveals := planHost(t, forge, sixQueries)
+		_, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxQueries = recommendHardMaxQueries + 1 })
+		wantRefusal(t, err, "max_queries", recommendHardMaxQueries)
+		if llm.callCount() != 0 || len(*reveals) != 0 {
+			t.Fatalf("a refused override must cost nothing: %d LLM calls, %d reveals", llm.callCount(), len(*reveals))
+		}
+		if _, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxQueries = -1 }); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("a negative override is invalid, got %v", err)
+		}
+	})
+
+	t.Run("max_candidates", func(t *testing.T) {
+		count := func(set int32) (int, []*hostv1.ForgeAdvisoryWarning, error) {
+			forge := &planForge{fn: func(s, q string) ([]*hostv1.ForgeSearchResult, error) {
+				return ladderResults(s, q, 59), nil
+			}}
+			h, llm, _ := planHost(t, forge, extractionReply("windows"), rankingReply())
+			resp, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxCandidates = set })
+			if err != nil {
+				return 0, nil, err
+			}
+			return len(candidateBlock(t, llm.calls[1].User)), resp.Warnings, nil
+		}
+		if n, ws, err := count(0); err != nil || n != recommendDefaultMaxCandidates || !hasWarning(ws, "recommend_candidates_truncated") {
+			t.Fatalf("zero must select the default of %d candidates with a truncation warning, got %d %v (err %v)", recommendDefaultMaxCandidates, n, warningCodes(ws), err)
+		}
+		if n, _, err := count(5); err != nil || n != 5 {
+			t.Fatalf("an override within range is taken as given, got %d (err %v)", n, err)
+		}
+		if n, _, err := count(recommendHardMaxCandidates); err != nil || n != recommendHardMaxCandidates {
+			t.Fatalf("the hard maximum itself is allowed, got %d (err %v)", n, err)
+		}
+		h, llm, _ := planHost(t, &planForge{fn: func(s, q string) ([]*hostv1.ForgeSearchResult, error) { return nil, nil }})
+		_, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxCandidates = recommendHardMaxCandidates + 1 })
+		wantRefusal(t, err, "max_candidates", recommendHardMaxCandidates)
+		if llm.callCount() != 0 {
+			t.Fatalf("a refused override must make no LLM call, got %d", llm.callCount())
+		}
+	})
+
+	t.Run("max_suggestions", func(t *testing.T) {
+		var all []scriptedRank
+		for i := 1; i <= 25; i++ {
+			all = append(all, scriptedRank{fmt.Sprintf("acme/m%02d", i), "puppet-forge", "fits"})
+		}
+		got := func(set int32) (*hostv1.RecommendResponse, error) {
+			h, _ := recommendHost(t, manyModules(25), extractionReply("windows"), rankingReply(all...))
+			return ask(h, func(r *hostv1.RecommendRequest) { r.MaxSuggestions = set })
+		}
+		if resp, err := got(0); err != nil || len(resp.Suggestions) != recommendDefaultMaxSuggestions {
+			t.Fatalf("zero must select the default cap of %d, got %+v (err %v)", recommendDefaultMaxSuggestions, resp, err)
+		} else if resp.Suggestions[9].Rank != 10 || resp.Suggestions[9].Module.Name != "acme/m10" {
+			t.Fatalf("the cap must keep the ranker's best entries in order, got %+v", resp.Suggestions[9])
+		}
+		if resp, err := got(3); err != nil || len(resp.Suggestions) != 3 {
+			t.Fatalf("an override within range is taken as given, got %+v (err %v)", resp, err)
+		}
+		if resp, err := got(recommendHardMaxSuggestions); err != nil || len(resp.Suggestions) != recommendHardMaxSuggestions {
+			t.Fatalf("the hard maximum itself is allowed, got %+v (err %v)", resp, err)
+		}
+		h, llm := recommendHost(t, manyModules(3), extractionReply("windows"), rankingReply())
+		_, err := ask(h, func(r *hostv1.RecommendRequest) { r.MaxSuggestions = recommendHardMaxSuggestions + 1 })
+		wantRefusal(t, err, "max_suggestions", recommendHardMaxSuggestions)
+		if llm.callCount() != 0 {
+			t.Fatalf("a refused override must make no LLM call, got %d", llm.callCount())
+		}
+	})
+
+	t.Run("input validation", func(t *testing.T) {
+		for name, mutate := range map[string]func(*hostv1.RecommendRequest){
+			"empty text":      func(r *hostv1.RecommendRequest) { r.Text = "" },
+			"whitespace text": func(r *hostv1.RecommendRequest) { r.Text = " \t\n " },
+			"text over cap":   func(r *hostv1.RecommendRequest) { r.Text = strings.Repeat("é", recommendMaxInputRunes+1) },
+			"empty provider":  func(r *hostv1.RecommendRequest) { r.LlmProvider = "" },
+			"too many sources": func(r *hostv1.RecommendRequest) {
+				for i := 0; i <= recommendMaxSources; i++ {
+					r.Sources = append(r.Sources, &hostv1.ForgeSourceSelection{Name: fmt.Sprintf("src-%d", i)})
+				}
+			},
+		} {
+			h, llm := recommendHost(t, twoModules(), extractionReply("windows"), rankingReply())
+			if _, err := ask(h, mutate); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("%s: expected InvalidArgument, got %v", name, err)
+			}
+			if llm.callCount() != 0 {
+				t.Fatalf("%s: a rejected request made %d LLM calls", name, llm.callCount())
+			}
+		}
+		// Text exactly at the cap is accepted; repeated source names count once.
+		h, _ := recommendHost(t, twoModules(), extractionReply("windows"), rankingReply())
+		if _, err := ask(h, func(r *hostv1.RecommendRequest) {
+			r.Text = strings.Repeat("é", recommendMaxInputRunes)
+			for i := 0; i <= recommendMaxSources; i++ {
+				r.Sources = append(r.Sources, &hostv1.ForgeSourceSelection{Name: "puppet-forge"})
+			}
+		}); err != nil {
+			t.Fatalf("text at the cap and repeated source names must be accepted: %v", err)
+		}
+	})
+}
+
+func hasWarning(ws []*hostv1.ForgeAdvisoryWarning, code string) bool {
+	for _, w := range ws {
+		if w.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRecommendBadRequestCostsNothing(t *testing.T) {
+	forge := &planForge{fn: func(s, q string) ([]*hostv1.ForgeSearchResult, error) { return ladderResults(s, q, 1), nil }}
+
+	t.Run("unknown provider", func(t *testing.T) {
+		h, llm, _ := planHost(t, forge, extractionReply("windows"))
+		_, err := h.Forge.Recommend(context.Background(), &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "ghost"})
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", err)
+		}
+		if llm.callCount() != 0 || len(forge.snapshot()) != 0 {
+			t.Fatalf("a bad provider must cost nothing: %d LLM calls, %d searches", llm.callCount(), len(forge.snapshot()))
+		}
+	})
+
+	t.Run("unconfigured source", func(t *testing.T) {
+		h, llm, _ := planHost(t, forge, extractionReply("windows"))
+		_, err := recommendFrom(h, "internal-a", "ghost-source")
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("expected NotFound, got %v", err)
+		}
+		if llm.callCount() != 0 || len(forge.snapshot()) != 0 {
+			t.Fatalf("a bad source must cost nothing: %d LLM calls, %d searches", llm.callCount(), len(forge.snapshot()))
+		}
+	})
+}
+
+func TestRecommendProviderTimeoutIsUnavailable(t *testing.T) {
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	hung := &hangingLLM{release: release}
+	h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(twoModules()), WithLLMClient(hung))
+	mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "m", "k")
+	h.Forge.(*gatedForge).inner.callTimeout = 50 * time.Millisecond
+
+	type result struct {
+		resp *hostv1.RecommendResponse
+		err  error
+	}
+	done := make(chan result, 1)
+	go func() {
+		// The caller's context carries no deadline: only the per-call timeout
+		// can end the wait.
+		resp, err := h.Forge.Recommend(context.Background(), &hostv1.RecommendRequest{Text: canonicalNeed, LlmProvider: "primary"})
+		done <- result{resp, err}
+	}()
+	select {
+	case r := <-done:
+		if status.Code(r.err) != codes.Unavailable {
+			t.Fatalf("expected Unavailable from a provider that never answers, got %v", r.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the provider call hung past its per-call timeout")
+	}
+	if got := hung.count(); got != 1 {
+		t.Fatalf("a timed-out provider must be called exactly once (no retry), got %d", got)
+	}
+}
+
+// hangingLLM blocks until its context ends or release closes.
+type hangingLLM struct {
+	mu      sync.Mutex
+	n       int
+	release chan struct{}
+}
+
+func (f *hangingLLM) Complete(ctx context.Context, _ LLMProvider, _ LLMRequest) (string, error) {
+	f.mu.Lock()
+	f.n++
+	f.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return "", ctx.Err()
+	case <-f.release:
+		return "", status.Error(codes.Internal, "released")
+	}
+}
+
+func (f *hangingLLM) count() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.n
+}
+
+// TestRecommendProviderStatusPropagates pins the 08-04 carry-over: the LLM
+// client's FailedPrecondition and Internal reach the pack instead of being
+// flattened to Unavailable, with a static message that carries none of the
+// client's text.
+func TestRecommendProviderStatusPropagates(t *testing.T) {
+	const leak = "LEAK-SENTINEL-4d2e"
+	good := []string{extractionReply("windows"), rankingReply(scriptedRank{"puppetlabs/apache", "puppet-forge", "ok"})}
+	cases := []struct {
+		name   string
+		failAt int
+		err    error
+		want   codes.Code
+	}{
+		{"credential rejected on extraction", 0, status.Error(codes.FailedPrecondition, "bad key "+leak), codes.FailedPrecondition},
+		{"credential rejected on ranking", 1, status.Error(codes.FailedPrecondition, "bad key "+leak), codes.FailedPrecondition},
+		{"refusal on extraction", 0, status.Error(codes.Internal, "refused "+leak), codes.Internal},
+		{"truncated on ranking", 1, status.Error(codes.Internal, "cut short "+leak), codes.Internal},
+		{"rate limited", 0, status.Error(codes.Unavailable, "429 "+leak), codes.Unavailable},
+		{"plain error", 1, fmt.Errorf("dial tcp: %s", leak), codes.Unavailable},
+		{"unexpected code", 0, status.Error(codes.PermissionDenied, leak), codes.Unavailable},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			llm := &errLLM{replies: good, failAt: tc.failAt, err: tc.err}
+			h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
+			mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "m", "k")
+			resp, err := recommend(h)
+			if status.Code(err) != tc.want || resp != nil {
+				t.Fatalf("expected %v and no response, got %v / %+v", tc.want, err, resp)
+			}
+			if strings.Contains(status.Convert(err).Message(), leak) {
+				t.Fatalf("the client's message reached the pack: %q", status.Convert(err).Message())
+			}
+			if got := llm.count(); got != tc.failAt+1 {
+				t.Fatalf("a failing call must not be retried: expected %d calls, got %d", tc.failAt+1, got)
+			}
+		})
+	}
+}
+
+func TestRecommendNeverLeaksKey(t *testing.T) {
+	const key = "KEY-SENTINEL-91be07"
+	build := func(llm LLMClient, forge ForgeClient) *host.Host {
+		h := New([]string{"forge:recommend", "secrets:rw"}, "pkg", WithForgeClient(forge), WithLLMClient(llm))
+		mustConfigureLLMProvider(t, h, "primary", "Primary", llmKindAnthropic, "", "m", key)
+		return h
+	}
+	extract := extractionReply("windows")
+	paths := map[string]struct {
+		llm   LLMClient
+		forge ForgeClient
+	}{
+		"client quotes the key on a credential rejection": {&errLLM{failAt: 0, err: status.Error(codes.FailedPrecondition, "invalid x-api-key "+key)}, twoModules()},
+		"client quotes the key on a refusal":              {&errLLM{replies: []string{extract}, failAt: 1, err: status.Error(codes.Internal, "refused "+key)}, twoModules()},
+		"client returns a plain error holding the key":    {&errLLM{failAt: 0, err: fmt.Errorf("Post https://u:%s@host: dial", key)}, twoModules()},
+		"extraction reply echoes the key in a bad field":  {&scriptedLLM{replies: []string{`{"queries":["a"],"` + key + `":1}`}}, twoModules()},
+		"ranking reply is prose around the key":           {&scriptedLLM{replies: []string{extract, "Sure, " + key}}, twoModules()},
+		"ranking names only unknown modules":              {&scriptedLLM{replies: []string{extract, rankingReply(scriptedRank{key, "puppet-forge", key})}}, twoModules()},
+		"extraction holds no usable query":                {&scriptedLLM{replies: []string{extractionReply(" ")}}, twoModules()},
+	}
+	for name, p := range paths {
+		t.Run(name, func(t *testing.T) {
+			resp, err := recommend(build(p.llm, p.forge))
+			if err == nil {
+				t.Fatalf("expected a failure, got %+v", resp)
+			}
+			if strings.Contains(status.Convert(err).Message(), key) || strings.Contains(err.Error(), key) {
+				t.Fatalf("the key reached a status message: %v", err)
+			}
+		})
+	}
+
+	t.Run("a timed-out provider", func(t *testing.T) {
+		release := make(chan struct{})
+		t.Cleanup(func() { close(release) })
+		h := build(&hangingLLM{release: release}, twoModules())
+		h.Forge.(*gatedForge).inner.callTimeout = 20 * time.Millisecond
+		errc := make(chan error, 1)
+		go func() { _, err := recommend(h); errc <- err }()
+		select {
+		case err := <-errc:
+			if err == nil || strings.Contains(err.Error(), key) {
+				t.Fatalf("expected a keyless failure, got %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("the provider call hung past its per-call timeout")
+		}
+	})
+
+	t.Run("success path sends no key and returns none", func(t *testing.T) {
+		llm := &scriptedLLM{replies: []string{extract, rankingReply(scriptedRank{"puppetlabs/apache", "puppet-forge", "ok"})}}
+		resp, err := recommend(build(llm, twoModules()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, c := range llm.calls {
+			schema, _ := json.Marshal(c.Schema)
+			if strings.Contains(c.System+c.User+string(schema), key) {
+				t.Fatalf("call %d sent the key to the provider", i+1)
+			}
+		}
+		if b, _ := json.Marshal(resp); strings.Contains(string(b), key) {
+			t.Fatalf("the response carries the key: %s", b)
 		}
 	})
 }

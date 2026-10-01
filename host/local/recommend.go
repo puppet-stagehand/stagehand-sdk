@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
@@ -50,6 +51,14 @@ const (
 	// reply.
 	llmMaxOutputTokensExtract = 2048
 	llmMaxOutputTokensRank    = 4096
+
+	// recommendDefaultMaxSuggestions / recommendHardMaxSuggestions bound the
+	// ranked answer.
+	recommendDefaultMaxSuggestions = 10
+	recommendHardMaxSuggestions    = 20
+	// llmCallTimeout bounds every provider call independently of the caller's
+	// context. Nothing is retried.
+	llmCallTimeout = 45 * time.Second
 
 	// recommendMaxCandidateSummaryRunes caps one candidate's summary before it
 	// enters the ranking prompt.
