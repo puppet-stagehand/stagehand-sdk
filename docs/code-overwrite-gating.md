@@ -190,7 +190,10 @@ permission.
   facet has no access control, so a pack that can call `Documents.Put`
   directly can write a complete approval record into `code-overwrites` (or
   write the Code collections themselves) and bypass the gate on `host.Local`.
-  `TestCodeOverwriteApprovalProvenance` pins that.
+  `TestCodeOverwriteApprovalProvenance` pins that. The same goes for the
+  `code-overwrite-applied` marker collection that makes an approval
+  single-use: a caller with `Documents` access can delete a marker to allow a
+  replay, or write one to make an Apply refuse.
 - **Creating and deleting are not gated, so the gate can be walked around by
   a caller who means to.** Only an in-place replace is refused. Removing a
   module, level or data key is ungated (D-01), and putting it back afterwards
