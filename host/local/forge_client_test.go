@@ -306,6 +306,8 @@ func TestForgeHTTPClient_StatusClassification(t *testing.T) {
 		{name: "rate_limited_is_unavailable", statusCode: http.StatusTooManyRequests, body: `{}`, wantCode: codes.Unavailable},
 		{name: "server_error_is_unavailable", statusCode: http.StatusInternalServerError, body: `{}`, wantCode: codes.Unavailable},
 		{name: "bad_gateway_is_unavailable", statusCode: http.StatusBadGateway, body: `{}`, wantCode: codes.Unavailable},
+		{name: "unauthorized_is_unauthenticated", statusCode: http.StatusUnauthorized, body: `{}`, wantCode: codes.Unauthenticated},
+		{name: "forbidden_is_permission_denied", statusCode: http.StatusForbidden, body: `{}`, wantCode: codes.PermissionDenied},
 		{name: "bad_request_is_internal", statusCode: http.StatusBadRequest, body: `{}`, wantCode: codes.Internal},
 	}
 	for _, tc := range cases {

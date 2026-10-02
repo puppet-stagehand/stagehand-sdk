@@ -508,6 +508,12 @@ func (c *httpForgeClient) doJSON(ctx context.Context, ep ForgeEndpoint, rawURL s
 		return status.Error(codes.Unavailable, "forge: rate limited (429)")
 	case resp.StatusCode >= 500:
 		return status.Errorf(codes.Unavailable, "forge: upstream error (%d)", resp.StatusCode)
+	case resp.StatusCode == http.StatusUnauthorized:
+		// The common "bad or expired token for this private source" case: say
+		// so, without echoing any header or the credential (WR-04).
+		return status.Error(codes.Unauthenticated, "forge: the configured source credential was rejected (401)")
+	case resp.StatusCode == http.StatusForbidden:
+		return status.Error(codes.PermissionDenied, "forge: the configured source credential is not permitted to read this resource (403)")
 	case resp.StatusCode >= 400:
 		return status.Errorf(codes.Internal, "forge: unexpected status %d", resp.StatusCode)
 	}
