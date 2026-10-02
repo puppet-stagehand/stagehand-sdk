@@ -376,6 +376,39 @@ func TestForgeHTTPClient_ListReleasesPaginatesAndAssembles(t *testing.T) {
 	}
 }
 
+// IN-03 regression: a compatible source that omits pagination.total must not
+// be truncated to its first full page.
+func TestForgeHTTPClient_ListReleasesPagesPastFullPageWithoutTotal(t *testing.T) {
+	var calls int
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		offset, _ := strconv.Atoi(r.URL.Query().Get("offset"))
+		n := 100
+		if offset >= 100 {
+			n = 5
+		}
+		var sb strings.Builder
+		sb.WriteString(`{"results":[`)
+		for i := 0; i < n; i++ {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			sb.WriteString(`{"version":"1.` + strconv.Itoa(offset+i) + `.0"}`)
+		}
+		sb.WriteString(`]}`)
+		_, _ = w.Write([]byte(sb.String()))
+	})
+
+	versions, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(versions) != 105 || calls != 2 {
+		t.Fatalf("expected 105 versions over 2 requests, got %d versions over %d requests", len(versions), calls)
+	}
+}
+
 func TestForgeHTTPClient_ListReleasesEmptyFirstPageIsNotFound(t *testing.T) {
 	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

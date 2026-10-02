@@ -412,7 +412,15 @@ func (c *httpForgeClient) ListReleases(ctx context.Context, ep ForgeEndpoint, na
 			return nil, status.Error(codes.Internal, "forge: release list exceeds the adapter's limit")
 		}
 		offset += len(payload.Results)
-		if offset >= payload.Pagination.Total {
+		if payload.Pagination.Total > 0 {
+			if offset >= payload.Pagination.Total {
+				break
+			}
+		} else if len(payload.Results) < pageSize {
+			// A compatible source that omits pagination.total: a short page
+			// is the only end-of-list signal. A full page means there may be
+			// more, so keep paging (still bounded by the repeat guard and
+			// forgeMaxReleases above).
 			break
 		}
 	}
