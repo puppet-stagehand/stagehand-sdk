@@ -322,3 +322,29 @@ func TestForgeResolverMalformedPayloadPropagatesAsInternal(t *testing.T) {
 		t.Fatalf("expected a malformed root payload to abort the walk as Internal, got %v", err)
 	}
 }
+
+// WR-02 (review): a module spelled ns/name on one edge and ns-name on another
+// is one module; the cycle guard and caches must treat it so.
+func TestForgeResolverNormalisesSpellingForCycleAndCache(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/a", "1.0.0", ForgeDependency{Name: "acme-b", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/b"] = []string{"1.0.0"}
+	c.addRelease("acme/b", "1.0.0", ForgeDependency{Name: "acme-a", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/a"] = []string{"1.0.0"}
+
+	root, err := resolveDependencyTree(context.Background(), c, ForgeEndpoint{}, "puppet-forge", "acme/a", "1.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	b := findChild(root, "acme/b")
+	if b == nil {
+		t.Fatal("expected the acme-b edge to be normalised to acme/b")
+	}
+	cyclicA := findChild(b, "acme/a")
+	if cyclicA == nil || !cyclicA.Cycle {
+		t.Fatalf("expected the acme-a edge to be flagged as a cycle back to the root, got %+v", cyclicA)
+	}
+	if n := c.releaseCalls[forgeCacheKey{"acme/a", "1.0.0"}]; n != 1 {
+		t.Fatalf("expected acme/a@1.0.0 to be fetched exactly once, got %d", n)
+	}
+}

@@ -158,6 +158,9 @@ func (w *forgeResolveWalk) listReleases(name string) ([]string, error) {
 // cycle (D-10), checked before any client call so a cyclic edge never
 // re-fetches metadata it already has.
 func (w *forgeResolveWalk) walkKnownVersion(name, version string, path []string) *hostv1.DependencyNode {
+	// A module identity may arrive as ns/name or ns-name; normalise so the
+	// cycle guard, caches and ledger agree on one spelling (WR-02).
+	name = normalizeModuleName(name)
 	node := &hostv1.DependencyNode{Name: name, Version: version, Source: w.source}
 	if containsString(path, name) {
 		node.Cycle = true
@@ -195,6 +198,9 @@ func (w *forgeResolveWalk) walkKnownVersion(name, version string, path []string)
 // caller reviewing the tree can always find every path that named a given
 // module, and so detectConflicts has full data once the walk completes.
 func (w *forgeResolveWalk) resolveEdge(name, requirement string, path []string) *hostv1.DependencyNode {
+	// Normalise the spelling (ns/name vs ns-name) before it keys the cycle
+	// guard, caches and ledger (WR-02).
+	name = normalizeModuleName(name)
 	origin := strings.Join(append(append([]string{}, path...), name), " > ")
 
 	if containsString(path, name) {
