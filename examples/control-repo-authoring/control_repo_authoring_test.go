@@ -1084,6 +1084,73 @@ func TestControlRepoAuthoring_RejectedOverwriteDoesNotApply(t *testing.T) {
 	t.Logf("rejected overwrite %q (%q) did not apply; a second decision was refused; the module stayed at 9.4.1", proposalID, reason)
 }
 
+// TestControlRepoAuthoring_ReplayRefused proves an approval covers one
+// application of one payload. It is independent of the end-to-end walk.
+//
+// This is NOT a token-reuse test. Verifying a token does not consume it, so one
+// approver token legitimately serves every cycle inside its lifetime; the
+// single-use property under test belongs to the applied proposal, which the
+// facet marks as spent.
+func TestControlRepoAuthoring_ReplayRefused(t *testing.T) {
+	ctx := context.Background()
+	w := newHost(t)
+	proposer := controlrepoauthoring.NewProposer(w.h)
+	approver := controlrepoauthoring.NewApprover(w.h)
+
+	const (
+		env  = "replaying"
+		name = "puppetlabs/stdlib"
+	)
+	if _, err := proposer.CreateEnvironment(ctx, env); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if _, err := proposer.AddModule(ctx, env, forgeModule(name, "9.4.1")); err != nil {
+		t.Fatalf("AddModule: %v", err)
+	}
+
+	const proposalID = "bump-replay-1"
+	if _, err := proposer.ProposeModuleOverwrite(ctx, proposalID, env, forgeModule(name, "9.6.0")); err != nil {
+		t.Fatalf("ProposeModuleOverwrite: %v", err)
+	}
+	if _, err := approver.Approve(ctx, proposalID, approverToken(t, w.h, "operator-hopper")); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if _, err := proposer.ApplyModuleOverwrite(ctx, proposalID); err != nil {
+		t.Fatalf("ApplyModuleOverwrite (first): %v", err)
+	}
+	assertModuleVersion(t, proposer, env, name, "9.6.0", "after the first apply")
+
+	// 1: a repeat against the unchanged target would change nothing, so it is
+	// idempotent rather than an error.
+	repeat, err := proposer.ApplyModuleOverwrite(ctx, proposalID)
+	if err != nil {
+		t.Fatalf("ApplyModuleOverwrite (repeat on an unchanged target): expected success, got %v", err)
+	}
+	if repeat.GetForge().GetVersion() != "9.6.0" {
+		t.Fatalf("ApplyModuleOverwrite (repeat): expected 9.6.0, got %+v", repeat)
+	}
+	assertModuleVersion(t, proposer, env, name, "9.6.0", "after the idempotent repeat")
+
+	// 2: move the target by routes the gate does not cover. Removing is not an
+	// overwrite, and writing a name that is no longer present is a create.
+	if err := proposer.RemoveModule(ctx, env, name); err != nil {
+		t.Fatalf("RemoveModule: %v", err)
+	}
+	if _, err := proposer.AddModule(ctx, env, forgeModule(name, "9.8.0")); err != nil {
+		t.Fatalf("AddModule (third version): %v", err)
+	}
+	assertModuleVersion(t, proposer, env, name, "9.8.0", "after the ungated change")
+
+	// 3: replaying the spent approval now would revert a later change nobody
+	// approved, so it is refused.
+	if _, err := proposer.ApplyModuleOverwrite(ctx, proposalID); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ApplyModuleOverwrite (replay after the target moved): expected codes.FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	// 4: the refused replay wrote nothing.
+	assertModuleVersion(t, proposer, env, name, "9.8.0", "after the refused replay")
+	t.Logf("approval %q applied once, repeated idempotently, then refused after the target moved to 9.8.0; the module stayed at 9.8.0", proposalID)
+}
+
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
 // grounding claim: the host owns every module fact and the model only orders
 // them. A ranked module no registry search produced is dropped with the host's
@@ -1401,8 +1468,17 @@ func TestControlRepoAuthoring_ProposerCannotSelfApprove(t *testing.T) {
 	if !approverQualified["approval.Reject"] {
 		t.Errorf("liveness: expected approval.Reject reachable from ApproverBackend, got qualified selectors %v", approverQualified)
 	}
-	if proposerResolved < 6 {
-		t.Errorf("liveness: expected the walker to resolve at least 6 ProposerBackend methods, resolved %d", proposerResolved)
+	// The apply selectors are named so the walk is proven to have reached the
+	// import and per-item overwrite paths, not just the settings one.
+	for _, sel := range []string{"ApplyImport", "ApplyPuppetfileModuleOverwrite"} {
+		if !proposerSelectors[sel] {
+			t.Errorf("liveness: expected %s reachable from ProposerBackend, got selectors %v", sel, proposerSelectors)
+		}
+	}
+	// ProposerBackend declares 21 methods; the floor is set from that real count
+	// (the walk also visits the scalarValue helper, so it resolves 22).
+	if proposerResolved < 21 {
+		t.Errorf("liveness: expected the walker to resolve at least 21 ProposerBackend methods, resolved %d", proposerResolved)
 	}
 	if approverResolved < 2 {
 		t.Errorf("liveness: expected the walker to resolve at least 2 ApproverBackend methods, resolved %d", approverResolved)
