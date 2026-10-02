@@ -215,6 +215,50 @@ func (p *ProposerBackend) DataFile(ctx context.Context, env, path string) (*host
 	return p.h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: env, Path: path})
 }
 
+// InspectImport reads the control repo at url and returns the per-branch report
+// an approver reads before anything is proposed. It writes nothing. credential
+// is the NAME of a secret sealed through the Secrets facet, or empty for an
+// anonymous fetch: the request carries only that name, and the host reveals the
+// sealed secret itself and builds the remote credential. url must never carry
+// a token, a password or any other userinfo; the host refuses one that does.
+func (p *ProposerBackend) InspectImport(ctx context.Context, url, credential string) (*hostv1.ImportSnapshot, error) {
+	resp, err := p.h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url, Credential: credential})
+	if err != nil {
+		return nil, err
+	}
+	return resp.Snapshot, nil
+}
+
+// ProposeImport re-fetches the repo, freezes the per-branch snapshot for the
+// named branches and files it with the approval gate as one pending proposal.
+//
+// Import is the one gated path that files its own proposal through a Code RPC
+// rather than through the approval package's body helper: the host composes the
+// approval Kind and the proposal body itself, so there is no body builder in
+// this package to look for. Nothing here decides the proposal it files.
+//
+// expectedCommits pins each selected branch to the commit the report showed. When
+// the map is non-empty it must pin every selected branch, and a branch that has
+// moved since the report is refused, so the proposal can never cover content the
+// approver did not read.
+func (p *ProposerBackend) ProposeImport(ctx context.Context, proposalID, url, credential string, branches []string, expectedCommits map[string]string) (*hostv1.ProposeImportResponse, error) {
+	return p.h.Code.ProposeImport(ctx, &hostv1.ProposeImportRequest{
+		ProposalId:      proposalID,
+		Url:             url,
+		Credential:      credential,
+		Branches:        branches,
+		ExpectedCommits: expectedCommits,
+	})
+}
+
+// ApplyImport materializes proposalID's approved import into the Code facet. It
+// passes only the proposal id: the content written is exactly the frozen
+// snapshot the approver decided on, the call makes no network request and needs
+// no credential. Call it immediately after Approve returns on the same path.
+func (p *ProposerBackend) ApplyImport(ctx context.Context, proposalID string) (*hostv1.ApplyImportResponse, error) {
+	return p.h.Code.ApplyImport(ctx, &hostv1.ApplyImportRequest{ProposalId: proposalID})
+}
+
 // scalarValue wraps v in the single-field "v" convention that Hiera data keys
 // use across the host.Local and approval package boundaries. AuthorHieraDataKey
 // uses it to write Hiera data values.

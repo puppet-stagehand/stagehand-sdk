@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,8 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 	"github.com/puppet-stagehand/stagehand-sdk/manifest"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -27,12 +30,25 @@ import (
 // with. Tests assert it reaches the LLM client and never a prompt.
 const fixtureAPIKey = "sk-proof-11-key"
 
+// Git credential fixture values. The token is an obvious fixture string, never
+// anything that reads as a real credential.
+const (
+	gitCredentialName  = "control-repo-login"
+	gitCredentialUser  = "svc-stagehand"
+	fixtureGitToken    = "tok-proof-11"
+	controlRepoURL     = "https://git.example.test/org/control-repo.git"
+	canaryCommit       = "c0ffee0000000000000000000000000000000001"
+	qaTwoCommit        = "c0ffee0000000000000000000000000000000002"
+	featureSpikeCommit = "c0ffee0000000000000000000000000000000003"
+)
+
 // world is one test host plus the fixtures it was built over, so a test can
 // read what the fixtures observed and override what they answer.
 type world struct {
 	h        *host.Host
 	forge    *forgeFixture
 	llm      *llmFixture
+	git      *gitFixture
 	provider string
 }
 
@@ -40,8 +56,9 @@ type world struct {
 // parse or validation finding, and builds one *host.Host scoped to exactly the
 // permissions that manifest declares. The host's grant therefore comes from
 // the manifest and nowhere else. The host runs against a registry fixture and
-// an LLM fixture, so nothing here touches the network, and its LLM provider is
-// configured the way an operator would configure it.
+// an LLM fixture and an in-memory git remote, so nothing here touches the
+// network or a git binary, and its LLM provider is configured the way an
+// operator would configure it.
 func newHost(t *testing.T) *world {
 	t.Helper()
 	raw, err := os.ReadFile("manifest.json")
@@ -57,8 +74,9 @@ func newHost(t *testing.T) *world {
 	}
 	forge := &forgeFixture{}
 	llm := &llmFixture{rankingReply: rankingReplyFor(rankedEntry{"puppetlabs/ntp", "puppet-forge", "Keeps clocks in sync across the fleet."})}
-	h := local.New(m.Permissions, m.ID, local.WithForgeClient(forge), local.WithLLMClient(llm))
-	return &world{h: h, forge: forge, llm: llm, provider: configureLLMProvider(t, h)}
+	git := newGitFixture()
+	h := local.New(m.Permissions, m.ID, local.WithForgeClient(forge), local.WithLLMClient(llm), local.WithGitClient(git))
+	return &world{h: h, forge: forge, llm: llm, git: git, provider: configureLLMProvider(t, h)}
 }
 
 // configureLLMProvider is operator setup, performed the way docs/forge-recommend.md
@@ -168,6 +186,183 @@ func (*forgeFixture) GetRelease(_ context.Context, _ local.ForgeEndpoint, name, 
 	}
 	return nil, local.ErrForgeNotFound
 }
+
+// sealGitCredential is operator setup: it seals an https-token credential as one
+// Secrets value and returns its NAME, which is the only thing an import request
+// carries. The host reveals the sealed secret itself and builds the remote
+// credential. The three JSON keys are the host's own convention for a sealed git
+// credential; they are unexported in host/local, so this helper is the one place
+// they are repeated. Like configureLLMProvider it lives in this test file so the
+// proposing persona never needs a Secrets selector.
+func sealGitCredential(t *testing.T, h *host.Host) string {
+	t.Helper()
+	sealed, err := json.Marshal(map[string]string{
+		"kind":     "https_token",
+		"username": gitCredentialUser,
+		"token":    fixtureGitToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Secrets.Store(context.Background(), &hostv1.StoreSecretRequest{Name: gitCredentialName, Plaintext: sealed}); err != nil {
+		t.Fatalf("sealGitCredential: Secrets.Store: %v", err)
+	}
+	return gitCredentialName
+}
+
+// gitFixture is an in-memory control-repo remote implementing local.GitClient.
+// It is deliberately re-implemented here rather than borrowed from host/local:
+// that package's fixture lives in a test file and cannot be imported, and the
+// real system-git client is not exercised by this example (Phase 10 covers it,
+// and the host's URL allowlist refuses a filesystem remote anyway).
+//
+// Every call records the remote it was handed, under a mutex because the suite
+// runs under -race. Both the inspect and the propose paths fetch, so recording
+// only the last call would hide a credential dropped on the first.
+type gitFixture struct {
+	mu      sync.Mutex
+	files   map[string]map[string]string // branch -> repo-relative path -> bytes
+	commits map[string]string            // branch -> fixed 40-hex SHA
+	remotes []local.GitRemote
+	opened  []string
+}
+
+// newGitFixture builds the three-branch remote. Every value differs from a
+// Puppet default, so no assertion can pass by matching one. feature-spike is in
+// the branch listing with a SHA and no content: its name cannot be an
+// environment name, so the host classifies it from the listing alone and never
+// opens it. Do not add other branch names.
+func newGitFixture() *gitFixture {
+	const hiera = "version: 5\ndefaults:\n  datadir: hieradata\nhierarchy:\n  - name: common\n    path: common.yaml\n"
+	return &gitFixture{
+		files: map[string]map[string]string{
+			"canary": {
+				"Puppetfile":            "mod 'puppetlabs-stdlib', '9.4.1'\n",
+				"hiera.yaml":            hiera,
+				"hieradata/common.yaml": "profile::ntp::servers: ntp-canary.example.test\n",
+				"environment.conf":      "config_version = scripts/canary_config_version.sh\nenvironment_timeout = 10m\n",
+			},
+			"qa_two": {
+				"Puppetfile":            "mod 'puppetlabs/apache', '12.3.0'\n",
+				"hiera.yaml":            hiera,
+				"hieradata/common.yaml": "profile::apache::docroot: /srv/qa_two\n",
+				"environment.conf":      "config_version = scripts/qa_two_config_version.sh\n",
+			},
+		},
+		commits: map[string]string{
+			"canary":        canaryCommit,
+			"qa_two":        qaTwoCommit,
+			"feature-spike": featureSpikeCommit,
+		},
+	}
+}
+
+func (f *gitFixture) ListBranches(_ context.Context, r local.GitRemote) ([]local.GitBranchRef, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remotes = append(f.remotes, r)
+	out := make([]local.GitBranchRef, 0, len(f.commits))
+	for name, sha := range f.commits {
+		out = append(out, local.GitBranchRef{Name: name, Commit: sha})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
+func (f *gitFixture) Open(_ context.Context, r local.GitRemote, branches []string) (local.GitRepo, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remotes = append(f.remotes, r)
+	f.opened = append(f.opened, branches...)
+	for _, b := range branches {
+		if _, ok := f.files[b]; !ok {
+			return nil, status.Errorf(codes.NotFound, "gitFixture: no content for branch %q", b)
+		}
+	}
+	return &gitFixtureRepo{f: f, branches: append([]string(nil), branches...)}, nil
+}
+
+// recordedRemotes returns a copy of every remote the fixture was handed.
+func (f *gitFixture) recordedRemotes() []local.GitRemote {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]local.GitRemote(nil), f.remotes...)
+}
+
+// openedBranches returns every branch name Open was ever asked for.
+func (f *gitFixture) openedBranches() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.opened...)
+}
+
+// gitFixtureRepo is the read-only view Open returns, carrying only the branches
+// that were requested.
+type gitFixtureRepo struct {
+	f        *gitFixture
+	branches []string
+}
+
+func (r *gitFixtureRepo) has(branch string) bool {
+	for _, b := range r.branches {
+		if b == branch {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *gitFixtureRepo) Commit(branch string) (string, bool) {
+	if !r.has(branch) {
+		return "", false
+	}
+	sha, ok := r.f.commits[branch]
+	return sha, ok
+}
+
+// ListFiles matches a path against a pathspec when the path equals it, or
+// starts with it plus a separator, so both an exact file and a directory prefix
+// are accepted.
+func (r *gitFixtureRepo) ListFiles(branch string, pathspecs ...string) ([]local.GitFileEntry, error) {
+	if !r.has(branch) {
+		return nil, status.Errorf(codes.NotFound, "gitFixture: branch %q was not opened", branch)
+	}
+	files := r.f.files[branch]
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	var out []local.GitFileEntry
+	for _, p := range paths {
+		if len(pathspecs) > 0 {
+			match := false
+			for _, ps := range pathspecs {
+				if p == ps || strings.HasPrefix(p, strings.TrimSuffix(ps, "/")+"/") {
+					match = true
+				}
+			}
+			if !match {
+				continue
+			}
+		}
+		out = append(out, local.GitFileEntry{Path: p, Mode: "100644", Size: int64(len(files[p]))})
+	}
+	return out, nil
+}
+
+func (r *gitFixtureRepo) ReadFile(branch, path string) ([]byte, error) {
+	if !r.has(branch) {
+		return nil, status.Errorf(codes.NotFound, "gitFixture: branch %q was not opened", branch)
+	}
+	body, ok := r.f.files[branch][path]
+	if !ok {
+		return nil, status.Errorf(codes.NotFound, "gitFixture: no file %q on branch %q", path, branch)
+	}
+	return []byte(body), nil
+}
+
+func (*gitFixtureRepo) Close() error { return nil }
 
 // llmCall is one observed LLM request, with the key the client was handed.
 type llmCall struct{ APIKey, System, User string }
@@ -474,6 +669,54 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		t.Fatalf("ListEnvironments: expected [authored canary], got %+v", envs)
 	}
 	t.Logf("step 10: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
+
+	// Step 11: read an existing control repo before anything is written. The
+	// credential was sealed by operator setup; the request names it and nothing
+	// else. Every environment this run creates was created above, so the
+	// will-overwrite flags in this report are not stale: an environment that
+	// appeared after the report would refuse the whole import at apply time.
+	credential := sealGitCredential(t, h)
+	snap, err := proposer.InspectImport(ctx, controlRepoURL, credential)
+	if err != nil {
+		t.Fatalf("InspectImport: %v", err)
+	}
+	if len(snap.Branches) != 3 {
+		t.Fatalf("InspectImport: expected 3 branch entries, got %+v", snap.Branches)
+	}
+	report := map[string]*hostv1.ImportBranchSnapshot{}
+	for _, b := range snap.Branches {
+		report[b.Branch] = b
+	}
+	// canary is an environment the author step already created, still blank: a
+	// blank environment is still an environment, so it is a will-overwrite.
+	if b := report["canary"]; b == nil || !b.Importable || !b.WillOverwrite || b.Commit != canaryCommit {
+		t.Fatalf("InspectImport: expected canary importable, will-overwrite, at %s, got %+v", canaryCommit, b)
+	}
+	if b := report["qa_two"]; b == nil || !b.Importable || b.WillOverwrite || b.Commit != qaTwoCommit {
+		t.Fatalf("InspectImport: expected qa_two importable, not a will-overwrite, at %s, got %+v", qaTwoCommit, b)
+	}
+	spike := report["feature-spike"]
+	if spike == nil || spike.Importable || len(spike.Findings) < 1 || !strings.Contains(spike.Findings[0].Message, "[a-z0-9_]") {
+		t.Fatalf("InspectImport: expected feature-spike not importable with a finding that explains the branch-name rule, got %+v", spike)
+	}
+	remotes := w.git.recordedRemotes()
+	if len(remotes) < 1 {
+		t.Fatalf("InspectImport: expected the fixture to record at least one remote")
+	}
+	for i, r := range remotes {
+		if r.Credential == nil || r.Credential.Kind != local.GitCredentialHTTPSToken || r.Credential.Token != fixtureGitToken {
+			t.Errorf("remote %d: expected the sealed https-token credential on every call", i+1)
+		}
+		if strings.Contains(r.URL, fixtureGitToken) {
+			t.Errorf("remote %d: the token travelled in the URL", i+1)
+		}
+	}
+	for _, b := range w.git.openedBranches() {
+		if b == "feature-spike" {
+			t.Errorf("the fixture was asked to open feature-spike, which cannot be an environment")
+		}
+	}
+	t.Logf("step 11: inspected %s read-only: canary will overwrite an existing environment, qa_two is new, feature-spike is refused by name and never opened; credential %q reached %d fixture calls and no URL", controlRepoURL, credential, len(remotes))
 }
 
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
