@@ -999,6 +999,91 @@ func TestControlRepoAuthoring_PendingImportDoesNotApply(t *testing.T) {
 	t.Logf("pending import %q refused with FailedPrecondition; no environment was created", importID)
 }
 
+// forgeModule builds a Forge-sourced Puppetfile module at version.
+func forgeModule(name, version string) *hostv1.PuppetfileModule {
+	return &hostv1.PuppetfileModule{
+		Name:   name,
+		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: version}},
+	}
+}
+
+// assertModuleVersion fails unless env holds exactly one module, named name, at
+// version.
+func assertModuleVersion(t *testing.T, p *controlrepoauthoring.ProposerBackend, env, name, version, label string) {
+	t.Helper()
+	mods, err := p.ListModules(context.Background(), env)
+	if err != nil {
+		t.Fatalf("%s: ListModules: %v", label, err)
+	}
+	if len(mods) != 1 || mods[0].Name != name || mods[0].GetForge().GetVersion() != version {
+		t.Fatalf("%s: expected exactly %s at %s, got %+v", label, name, version, mods)
+	}
+}
+
+// TestControlRepoAuthoring_RejectedOverwriteDoesNotApply is the rejected half of
+// the negative ladder: a rejected overwrite never applies, a rejection must say
+// why, and a decision is terminal. It is independent of the end-to-end walk: a
+// fresh host, one environment, one module so that the next write is an
+// overwrite.
+//
+// The apply refusal carries no structured error detail, so it is asserted by
+// gRPC code only, never by message.
+func TestControlRepoAuthoring_RejectedOverwriteDoesNotApply(t *testing.T) {
+	ctx := context.Background()
+	w := newHost(t)
+	proposer := controlrepoauthoring.NewProposer(w.h)
+	approver := controlrepoauthoring.NewApprover(w.h)
+
+	const (
+		env  = "rejecting"
+		name = "puppetlabs/stdlib"
+	)
+	if _, err := proposer.CreateEnvironment(ctx, env); err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if _, err := proposer.AddModule(ctx, env, forgeModule(name, "9.4.1")); err != nil {
+		t.Fatalf("AddModule: %v", err)
+	}
+
+	const proposalID = "bump-rejected-1"
+	pending, err := proposer.ProposeModuleOverwrite(ctx, proposalID, env, forgeModule(name, "9.6.0"))
+	if err != nil {
+		t.Fatalf("ProposeModuleOverwrite: %v", err)
+	}
+	if pending.Status != approval.StatusPending {
+		t.Fatalf("ProposeModuleOverwrite: expected status %q, got %q", approval.StatusPending, pending.Status)
+	}
+
+	secret := approverToken(t, w.h, "operator-hopper")
+	// A rejection must say why.
+	if _, err := approver.Reject(ctx, proposalID, secret, ""); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("Reject with an empty reason: expected codes.InvalidArgument, got %v (%v)", status.Code(err), err)
+	}
+	const reason = "not this sprint"
+	rejected, err := approver.Reject(ctx, proposalID, secret, reason)
+	if err != nil {
+		t.Fatalf("Reject: %v", err)
+	}
+	if rejected.Status != approval.StatusRejected {
+		t.Fatalf("Reject: expected status %q, got %q", approval.StatusRejected, rejected.Status)
+	}
+	if rejected.Reason != reason {
+		t.Fatalf("Reject: expected stored reason %q, got %q", reason, rejected.Reason)
+	}
+
+	if _, err := proposer.ApplyModuleOverwrite(ctx, proposalID); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ApplyModuleOverwrite on a rejected proposal: expected codes.FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	assertModuleVersion(t, proposer, env, name, "9.4.1", "after the rejection")
+
+	// A decision is terminal: approving the rejected proposal is refused.
+	if _, err := approver.Approve(ctx, proposalID, secret); !approval.IsAlreadyDecided(err) {
+		t.Fatalf("Approve on a rejected proposal: expected IsAlreadyDecided, got %v", err)
+	}
+	assertModuleVersion(t, proposer, env, name, "9.4.1", "after the refused second decision")
+	t.Logf("rejected overwrite %q (%q) did not apply; a second decision was refused; the module stayed at 9.4.1", proposalID, reason)
+}
+
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
 // grounding claim: the host owns every module fact and the model only orders
 // them. A ranked module no registry search produced is dropped with the host's
