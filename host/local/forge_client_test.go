@@ -891,3 +891,38 @@ func TestMapForgeSearchResult_ZeroScoreIsNotOverwritten(t *testing.T) {
 		t.Fatalf("expected version from enrichment, got %q", got.Version)
 	}
 }
+
+// lateErrContext reports context.Canceled from Err() once tripped while its
+// Done channel stays open, so in-flight requests complete normally. It models
+// a caller deadline that expires after enrichment finished, deterministically.
+type lateErrContext struct {
+	context.Context
+	tripped atomic.Bool
+}
+
+func (c *lateErrContext) Err() error {
+	if c.tripped.Load() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// IN-05 regression: a context that ends during enrichment must surface as
+// Unavailable even though every enrichment call itself succeeded.
+func TestForgeHTTPSearchEnrichmentContextEndedIsSurfaced(t *testing.T) {
+	lc := &lateErrContext{Context: context.Background()}
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v3/modules":
+			threeHitPage(w)
+		case "/v3/releases":
+			lc.tripped.Store(true)
+			_, _ = w.Write([]byte(`{"pagination":{"total":1},"results":[{"version":"9.9.9","validation_score":70,"created_at":"2026-04-02 03:04:05 -0700","metadata":{"summary":"s"}}]}`))
+		}
+	})
+	_, _, err := client.Search(lc, ep, "puppet-forge", "x", nil)
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("expected Unavailable when the context ended mid-enrichment, got %v", err)
+	}
+}

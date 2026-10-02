@@ -305,6 +305,13 @@ dispatch:
 	}
 	wg.Wait()
 
+	// The caller's own deadline or cancellation must surface as an error, not
+	// as a quietly thinner page: whatever finished before the context ended
+	// is not a complete enrichment of the page.
+	if err := ctx.Err(); err != nil {
+		return nil, newForgeTransportError("forge: request failed (network error, timeout, or canceled context)")
+	}
+
 	if len(hits) > 0 {
 		allFailed := true
 		for _, err := range errs {
