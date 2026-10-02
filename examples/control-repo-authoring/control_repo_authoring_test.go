@@ -3,6 +3,7 @@ package controlrepoauthoring_test
 import (
 	"context"
 	"os"
+	"reflect"
 	"testing"
 
 	"github.com/puppet-stagehand/stagehand-sdk/approval"
@@ -168,5 +169,72 @@ func assertAuthoredSettings(t *testing.T, label string, s *hostv1.EnvironmentSet
 	}
 	if s.Modulepath != nil || s.Manifest != nil || s.DisablePerEnvironmentManifest != nil || s.StaticCatalogs != nil || s.RichData != nil {
 		t.Fatalf("%s: expected Modulepath, Manifest, DisablePerEnvironmentManifest, StaticCatalogs and RichData to stay unset, got %+v", label, s)
+	}
+}
+
+// TestControlRepoAuthoring_ManifestDeclaresExactly pins the manifest's grant
+// by equality, so an added headroom permission, a renamed route or an
+// approval scope promoted into permissions fails here.
+func TestControlRepoAuthoring_ManifestDeclaresExactly(t *testing.T) {
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, findings := manifest.Parse(raw)
+	if len(findings) > 0 {
+		t.Fatalf("manifest.json failed to parse: %v", findings)
+	}
+	if findings := manifest.Validate(m); len(findings) > 0 {
+		t.Fatalf("manifest.json failed validation: %v", findings)
+	}
+
+	// The registry read permission for the manifest content rule is absent on
+	// purpose: no host/local facet checks it, and the only rule that requires
+	// it fires inside the Content != nil branch, which this manifest's null
+	// content never enters. Do not add it back.
+	wantPerms := []string{"code:rw", "code:import", "forge:rw", "forge:recommend", "secrets:rw", "tokens:issue"}
+	if !reflect.DeepEqual(m.Permissions, wantPerms) {
+		t.Fatalf("permissions: expected exactly %v, got %v", wantPerms, m.Permissions)
+	}
+	for _, p := range m.Permissions {
+		if p == controlrepoauthoring.CodeKind.ApproveScope {
+			t.Fatalf("permissions must never contain %q: the approval scope is a per-decision token, not a standing install-time grant", p)
+		}
+	}
+
+	type wantRoute struct{ opID, scope string }
+	want := []wantRoute{
+		{"proposeImport", ""},
+		{"proposeOverwrite", ""},
+		{"approveProposal", "code:approve"},
+		{"rejectProposal", "code:approve"},
+	}
+	if len(m.Routes) != len(want) {
+		t.Fatalf("routes: expected %d, got %d: %+v", len(want), len(m.Routes), m.Routes)
+	}
+	for i, w := range want {
+		if m.Routes[i].OperationID != w.opID {
+			t.Errorf("route %d: expected operation_id %q, got %q", i, w.opID, m.Routes[i].OperationID)
+		}
+		if m.Routes[i].Access.Scope != w.scope {
+			t.Errorf("route %q: expected access scope %q, got %q", w.opID, w.scope, m.Routes[i].Access.Scope)
+		}
+	}
+
+	if m.Content != nil {
+		t.Errorf("content: expected nil, got %+v", m.Content)
+	}
+	if m.OpenAPIPath == "" {
+		t.Errorf("openapi_path: required because the manifest declares routes")
+	}
+}
+
+// TestControlRepoAuthoring_CodeKindIsPinned keeps the two literals the README
+// and both guides quote from drifting silently: CodeKind is built from the
+// code package constants, and this test is what ties it to the strings.
+func TestControlRepoAuthoring_CodeKindIsPinned(t *testing.T) {
+	want := approval.Kind{Collection: "code-overwrites", ApproveScope: "code:approve"}
+	if controlrepoauthoring.CodeKind != want {
+		t.Fatalf("CodeKind: expected %+v, got %+v", want, controlrepoauthoring.CodeKind)
 	}
 }
