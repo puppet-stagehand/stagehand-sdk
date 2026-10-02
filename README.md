@@ -25,6 +25,8 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `schema/ts/slots.d.ts` | UI slot kinds and props |
 | `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json` |
 | `examples/hello` | A valid pack manifest (node-detail tab + job) |
+| `examples/control-repo-authoring` | Worked proof that the Code facet, the registry search, the suggestion step and the approval gate compose into one workflow; author-only, never deploys |
+| `docs/control-repo-authoring.md` | End-to-end ELI10 authoring guide for that example |
 | `docs/pack-author-guide.md` | ELI10 guide |
 | `docs/AGENT-WALKTHROUGH-uptime.md` | What a good assistant run looks like today |
 

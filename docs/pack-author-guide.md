@@ -80,6 +80,19 @@ permission and a provider whose API key is kept with `secrets:rw`.
 lists every limit and error, and ends with a checklist a human with their own
 API key can follow.
 
+## Authoring a control repo end to end
+The Code facet, the registry search, the suggestion step and the ask-a-human
+gate compose into one workflow: describe a need, check the suggested module,
+write it with its Hiera data, get a person to approve the settings, adopt an
+existing repository, and change a module that is already there, each time with
+a person saying yes before anything is replaced. There is a worked, runnable
+proof of the whole thing in `examples/control-repo-authoring`, with
+`examples/control-repo-authoring/README.md` as the short tour.
+`docs/control-repo-authoring.md` walks through it from the first blank
+environment to the final read-back, and `docs/control-repo-authoring-testing.md`
+is the checklist a human follows by hand. This milestone is author-only: it
+does not deploy and does not write back to a real control repo.
+
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used
   Puppet. Short sentences. A glossary.
