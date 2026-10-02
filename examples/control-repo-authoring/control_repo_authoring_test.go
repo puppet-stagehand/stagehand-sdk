@@ -873,6 +873,46 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	t.Logf("step 15: authored untouched; canary replaced wholesale by its branch; qa_two created; environments %v", gotNames)
 }
 
+// TestControlRepoAuthoring_PendingImportDoesNotApply is the first half of the
+// negative ladder: an import nobody has approved changes nothing at all. It is
+// independent of the end-to-end walk: a fresh host with no environment, an
+// import proposed over both importable branches, and an apply that is refused.
+//
+// The refusal carries no structured error detail, so the assertions are on the
+// gRPC code and on the absence of written state, never on a message string.
+func TestControlRepoAuthoring_PendingImportDoesNotApply(t *testing.T) {
+	ctx := context.Background()
+	w := newHost(t)
+	proposer := controlrepoauthoring.NewProposer(w.h)
+	credential := sealGitCredential(t, w.h)
+
+	const importID = "import-pending-1"
+	if _, err := proposer.ProposeImport(ctx, importID, controlRepoURL, credential, []string{"canary", "qa_two"}, nil); err != nil {
+		t.Fatalf("ProposeImport: %v", err)
+	}
+	// Reading the proposal back is the test's own act (the proposer cannot read
+	// one): it shows the import is genuinely waiting for a decision.
+	pending, err := approval.Get(ctx, w.h, controlrepoauthoring.CodeKind, importID)
+	if err != nil {
+		t.Fatalf("approval.Get: %v", err)
+	}
+	if pending.Status != approval.StatusPending {
+		t.Fatalf("expected the import proposal to be %q, got %q", approval.StatusPending, pending.Status)
+	}
+
+	if _, err := proposer.ApplyImport(ctx, importID); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ApplyImport on a pending proposal: expected codes.FailedPrecondition, got %v (%v)", status.Code(err), err)
+	}
+	envs, err := proposer.ListEnvironments(ctx)
+	if err != nil {
+		t.Fatalf("ListEnvironments: %v", err)
+	}
+	if len(envs) != 0 {
+		t.Fatalf("expected no environment after a refused apply, got %+v", envs)
+	}
+	t.Logf("pending import %q refused with FailedPrecondition; no environment was created", importID)
+}
+
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
 // grounding claim: the host owns every module fact and the model only orders
 // them. A ranked module no registry search produced is dropped with the host's
