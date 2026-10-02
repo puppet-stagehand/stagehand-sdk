@@ -202,8 +202,9 @@ A private repository needs a login. Four rules keep that login safe:
    name in `Credential`. An empty name means an anonymous fetch. The host never
    guesses a login for you, and never reads a list of them. This holds for
    `ssh` as well as `https`. With no name given, an `ssh` fetch carries no key
-   and talks to no `ssh` agent, so a private repository that only the
-   operator's own key can open is **refused** instead of quietly succeeding.
+   and talks to no `ssh` agent. So if a repository can only be opened by the
+   operator's own key, an import with no credential named is **refused**. It
+   does not quietly succeed using that key.
 3. **It is never in the URL, and never on a command line.** A git address with a
    password in it is refused, because the address would end up in logs and in a
    process listing. (An `ssh://` address may carry a bare login name, the part
@@ -242,28 +243,35 @@ Import runs the system `git` program, so the machine running the host needs a
 few things in place:
 
 - **`git` on the `PATH`, version 2.32 or newer.** The host refuses to run an
-  older one. The reason is a safety one: the host tells git to ignore the
-  operator's own git configuration, and an older git does not honour that
-  instruction, so it would read the operator's global settings. Not knowing the
-  version fails closed too. If `git` is missing, every import call says so.
+  older one, and it also refuses if it cannot tell the version. The reason is
+  safety: the host tells git to ignore the operator's own git settings, and an
+  older git does not obey that, so it would read them anyway. If `git` is
+  missing, every import call says so.
 - **For `ssh` addresses, an `ssh` program and a populated `known_hosts` file.**
-  The host reads exactly **one file** from the operator's home directory: the
-  conventional `~/.ssh/known_hosts`. It works out that path once, when it
-  starts, and hands it to `ssh` by name. Everything else under the home
-  directory is out of reach. The operator's own `ssh` configuration file, any
-  `ssh` agent, and the operator's default keys (`~/.ssh/id_rsa`,
-  `~/.ssh/id_ed25519` and the rest) are all **deliberately not used**. The only
-  login an `ssh` import ever offers is the key you named in `Credential`. What
-  an operator loses by this: a host alias or a jump host (`ProxyJump`) defined in
-  their own `~/.ssh/config` will **not** resolve, so the address must name the
-  real host. The machine-wide known-hosts file still applies, because it holds
-  host keys, not logins. Host-key checking is **strict**: an `ssh` server whose
-  key is not already listed is refused, not trusted on first use. Add the host
-  to `known_hosts` first (an operator does this once, for example by connecting
-  to it by hand and confirming the key). If the home directory cannot be worked
-  out at all, the host points at an empty file instead, so every `ssh` host
-  fails verification with the same refusal an unlisted host gets. It fails
-  closed; it never relaxes the check.
+  (`known_hosts` is the file where `ssh` remembers which servers you have
+  already checked and trust. Strict checking means an unlisted server is
+  refused.)
+
+  - **What the host reads.** Exactly **one file** from the operator's home
+    directory: the usual `~/.ssh/known_hosts`. It works out that path once, when
+    it starts, and hands it to `ssh` by name. Nothing else under the home
+    directory is reachable. The machine-wide known-hosts file still applies,
+    because it holds server keys, not logins.
+  - **What the host does not use, on purpose.** The operator's own `ssh`
+    configuration file, any `ssh` agent, and the default keys (`~/.ssh/id_rsa`,
+    `~/.ssh/id_ed25519` and the rest). The only login an `ssh` import ever
+    offers is the key you named in `Credential`.
+  - **What an operator loses by this.** A host alias or a jump host
+    (`ProxyJump`, a way of reaching one server through another) defined in
+    their own `~/.ssh/config` will **not** work. The address must name the real
+    host, and you need a full URL plus a sealed `ssh_key` credential.
+  - **Unknown servers are refused, not trusted on first use.** Add the host to
+    `known_hosts` first. An operator does this once, for example by connecting
+    to it by hand and confirming the key.
+  - **If the home directory cannot be found at all,** the host points at an
+    empty file instead, so every `ssh` host fails the check with the same
+    refusal an unlisted host gets. It fails closed (it refuses, it never
+    relaxes the check).
 - **Network reach** to whatever git host you name. See section 6.
 
 `git` is the **one host-side subprocess this SDK runs**, and it runs only to
