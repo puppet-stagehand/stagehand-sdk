@@ -240,7 +240,8 @@ func ptr[T any](v T) *T { return &v }
 // TestControlRepoAuthoring_EndToEnd walks one blank host through the whole
 // slice: create environments, turn a sentence into a ranked real module, check
 // it against the registry and its dependency tree, write it to a Puppetfile,
-// then author settings through the approval gate, and read every byte back. Run with -v to read it as a transcript.
+// author a Hiera level and key, then author settings through the approval
+// gate, and read every byte back. Run with -v to read it as a transcript.
 func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	w := newHost(t)
@@ -379,7 +380,34 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		t.Logf("step 5: accepted module %s at %s into authored", mod.Name, mod.GetForge().GetVersion())
 	}
 
-	// Step 6: propose the environment settings through the gate.
+	// Step 6: the Hiera half. A first level needs the insert flag; its datadir
+	// is one no Puppet default would produce, and the data path agrees with it.
+	put, err := proposer.AuthorHieraLevel(ctx, "authored", &hostv1.HieraLevel{Name: "common", Path: "common.yaml", Datadir: "hieradata"})
+	if err != nil {
+		t.Fatalf("AuthorHieraLevel: %v", err)
+	}
+	if len(put.Warnings) != 0 {
+		t.Fatalf("AuthorHieraLevel: expected no lint warnings, got %+v", put.Warnings)
+	}
+	assertCommonLevel(t, "AuthorHieraLevel", put.Hierarchy)
+	df, err := proposer.AuthorHieraDataKey(ctx, "authored", "common.yaml", "profile::ntp::servers", "ntp1.example.test")
+	if err != nil {
+		t.Fatalf("AuthorHieraDataKey: %v", err)
+	}
+	assertScalarKey(t, "AuthorHieraDataKey", df, "profile::ntp::servers", "ntp1.example.test")
+	reread, err := proposer.DataFile(ctx, "authored", "common.yaml")
+	if err != nil {
+		t.Fatalf("DataFile: %v", err)
+	}
+	assertScalarKey(t, "DataFile", reread, "profile::ntp::servers", "ntp1.example.test")
+	hier, err := proposer.Hierarchy(ctx, "authored")
+	if err != nil {
+		t.Fatalf("Hierarchy: %v", err)
+	}
+	assertCommonLevel(t, "Hierarchy", hier)
+	t.Logf("step 6: authored level %q (datadir %s) and key profile::ntp::servers = ntp1.example.test", hier.Levels[0].Name, hier.Levels[0].Datadir)
+
+	// Step 7: propose the environment settings through the gate.
 	const proposalID = "settings-authored-1"
 	proposal, err := proposer.ProposeSettings(ctx, proposalID, &hostv1.EnvironmentSettings{
 		Environment:        "authored",
@@ -392,9 +420,9 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if proposal.Status != approval.StatusPending {
 		t.Fatalf("ProposeSettings: expected status %q, got %q", approval.StatusPending, proposal.Status)
 	}
-	t.Logf("step 6: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
+	t.Logf("step 7: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
 
-	// Step 7: a second persona, holding a token the proposer never saw, approves.
+	// Step 8: a second persona, holding a token the proposer never saw, approves.
 	secret := approverToken(t, h, "operator-ada")
 	approved, err := approver.Approve(ctx, proposalID, secret)
 	if err != nil {
@@ -406,17 +434,17 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if approved.DecidedBy != "operator-ada" {
 		t.Fatalf("Approve: expected DecidedBy %q, got %q", "operator-ada", approved.DecidedBy)
 	}
-	t.Logf("step 7: %s approved %q", approved.DecidedBy, proposalID)
+	t.Logf("step 8: %s approved %q", approved.DecidedBy, proposalID)
 
-	// Step 8: apply immediately after Approve, with no intervening read.
+	// Step 9: apply immediately after Approve, with no intervening read.
 	applied, err := proposer.ApplySettings(ctx, proposalID)
 	if err != nil {
 		t.Fatalf("ApplySettings: %v", err)
 	}
 	assertAuthoredSettings(t, "ApplySettings", applied)
-	t.Logf("step 8: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
+	t.Logf("step 9: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
 
-	// Step 9: read everything back.
+	// Step 10: read everything back.
 	got, err := proposer.Settings(ctx, "authored")
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
@@ -445,7 +473,62 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if len(envs) != 2 || envs[0].Name != "authored" || envs[1].Name != "canary" {
 		t.Fatalf("ListEnvironments: expected [authored canary], got %+v", envs)
 	}
-	t.Logf("step 9: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
+	t.Logf("step 10: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
+}
+
+// TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
+// grounding claim: the host owns every module fact and the model only orders
+// them. A ranked module no registry search produced is dropped with the host's
+// warning rather than shown as a suggestion.
+func TestControlRepoAuthoring_RecommendIsGrounded(t *testing.T) {
+	w := newHost(t)
+	w.llm.rankingReply = rankingReplyFor(
+		rankedEntry{"puppetlabs/ntp", "puppet-forge", "Keeps clocks in sync."},
+		rankedEntry{"acme/not-real", "puppet-forge", "A module the model made up."},
+	)
+	rec, err := controlrepoauthoring.NewProposer(w.h).RecommendModules(context.Background(), "keep the clocks on my servers in sync", w.provider)
+	if err != nil {
+		t.Fatalf("RecommendModules: %v", err)
+	}
+	if len(rec.Suggestions) != 1 || rec.Suggestions[0].Module.Name != "puppetlabs/ntp" {
+		t.Fatalf("expected exactly one suggestion, puppetlabs/ntp, got %+v", rec.Suggestions)
+	}
+	dropped := false
+	for _, warn := range rec.Warnings {
+		if warn.Code == "recommend_unknown_module_dropped" && warn.Module == "acme/not-real" {
+			dropped = true
+		}
+	}
+	if !dropped {
+		t.Fatalf("expected a recommend_unknown_module_dropped warning for acme/not-real, got %+v", rec.Warnings)
+	}
+	t.Logf("grounded: the invented module was dropped with warning %q; one real suggestion remains", "recommend_unknown_module_dropped")
+}
+
+// assertCommonLevel checks the one authored hierarchy level and the schema
+// version the Code facet reports for it.
+func assertCommonLevel(t *testing.T, label string, hier *hostv1.HieraHierarchy) {
+	t.Helper()
+	if hier.GetVersion() != 5 || len(hier.GetLevels()) != 1 {
+		t.Fatalf("%s: expected hierarchy version 5 with one level, got %+v", label, hier)
+	}
+	lvl := hier.Levels[0]
+	if lvl.Name != "common" || lvl.Path != "common.yaml" || lvl.Datadir != "hieradata" {
+		t.Fatalf("%s: expected level common / common.yaml / hieradata, got %+v", label, lvl)
+	}
+}
+
+// assertScalarKey reads a data key back through the single-field "v"
+// convention, not by comparing structs.
+func assertScalarKey(t *testing.T, label string, df *hostv1.HieraDataFile, key string, want any) {
+	t.Helper()
+	v, ok := df.GetValues()[key]
+	if !ok || v.GetValue() == nil {
+		t.Fatalf("%s: expected key %q in %+v", label, key, df)
+	}
+	if got := v.GetValue().AsMap()["v"]; got != want {
+		t.Fatalf("%s: expected %q = %v, got %v", label, key, want, got)
+	}
 }
 
 // assertAuthoredSettings checks the two written fields and that the five

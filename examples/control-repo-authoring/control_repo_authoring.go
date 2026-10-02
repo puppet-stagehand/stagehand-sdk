@@ -187,9 +187,37 @@ func (p *ProposerBackend) ResolveModule(ctx context.Context, name, version, env 
 	return p.h.Forge.Resolve(ctx, &hostv1.ResolveRequest{Name: name, Version: version, Environment: env})
 }
 
+// AuthorHieraLevel adds a new hierarchy level to env. It sets the insert flag:
+// a level write without it replaces in place and errors when the level is
+// absent, so a first level needs it. Replacing an existing level is an
+// overwrite and goes through the approval gate instead.
+func (p *ProposerBackend) AuthorHieraLevel(ctx context.Context, env string, lvl *hostv1.HieraLevel) (*hostv1.PutHieraLevelResponse, error) {
+	return p.h.Code.PutHieraLevel(ctx, &hostv1.PutHieraLevelRequest{Environment: env, Level: lvl, Insert: true})
+}
+
+// AuthorHieraDataKey writes one new key into the data file at path. value is
+// wrapped in the single-field "v" convention by scalarValue.
+func (p *ProposerBackend) AuthorHieraDataKey(ctx context.Context, env, path, key string, value any) (*hostv1.HieraDataFile, error) {
+	v, err := scalarValue(value)
+	if err != nil {
+		return nil, err
+	}
+	return p.h.Code.PutHieraDataKey(ctx, &hostv1.PutHieraDataKeyRequest{Environment: env, Path: path, Key: key, Value: v})
+}
+
+// Hierarchy reads env's Hiera hierarchy.
+func (p *ProposerBackend) Hierarchy(ctx context.Context, env string) (*hostv1.HieraHierarchy, error) {
+	return p.h.Code.GetHieraHierarchy(ctx, &hostv1.GetHieraHierarchyRequest{Environment: env})
+}
+
+// DataFile reads one Hiera data file from env.
+func (p *ProposerBackend) DataFile(ctx context.Context, env, path string) (*hostv1.HieraDataFile, error) {
+	return p.h.Code.GetHieraDataFile(ctx, &hostv1.GetHieraDataFileRequest{Environment: env, Path: path})
+}
+
 // scalarValue wraps v in the single-field "v" convention that Hiera data keys
-// use across the host.Local and approval package boundaries. Later plans use
-// it to write Hiera data values.
+// use across the host.Local and approval package boundaries. AuthorHieraDataKey
+// uses it to write Hiera data values.
 func scalarValue(v any) (*hostv1.Json, error) {
 	s, err := structpb.NewStruct(map[string]any{"v": v})
 	if err != nil {
