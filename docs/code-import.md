@@ -164,7 +164,7 @@ a finding rather than lost silently. Each row names the real finding kind.
 | What you have | Finding kind | Severity | What happens, and what you can do |
 |---|---|---|---|
 | A `forge` line at the top of a Puppetfile | `puppetfile_forge_directive` | warning | The line is skipped (the model has no field for a forge address). The rest imports. Nothing to do; the line is harmless here. |
-| Ruby in a Puppetfile (a variable, an `if`, a method call, a bare symbol) | `puppetfile_unsupported_ruby` | warning | That statement is skipped. Write the module as a plain `mod` line to bring it in. |
+| Ruby in a Puppetfile (a variable, an `if`, a method call, a bare symbol) | `puppetfile_unsupported_ruby` | warning | The Ruby line itself is skipped. Write the module as a plain `mod` line to bring it in. **Be careful with structure:** the warning lands on the structural line (the `if`, `else`, `end` or `=begin`), not on the modules around it. A `mod` line inside a conditional, inside a block comment (`=begin` ... `=end`), or after the end-of-source marker (`__END__`) is **still imported**, with no finding of its own. For `if`/`else` that means the first arm comes in as if it were unconditional, and the other arm is flagged as a duplicate. The report is weaker than it looks, so for a repository that uses these constructs, read the imported module list against the Puppetfile before approving. |
 | A `mod` line with an attribute the facet has no field for | `puppetfile_unmodelled_attribute` | warning | The **whole** `mod` statement is skipped, because bringing in the module without the attribute would deploy something the author did not write. |
 | A `mod` line naming two conflicting refs, or a duplicate module or `moduledir` | `puppetfile_conflicting_ref`, `puppetfile_duplicate_module`, `puppetfile_duplicate_moduledir` | warning | The conflicting statement is skipped; for a duplicate module the first is kept; for a duplicate `moduledir` the last is kept. |
 | A module the facet would not accept | `puppetfile_invalid_module` | warning | Skipped. |
@@ -174,7 +174,7 @@ a finding rather than lost silently. Each row names the real finding kind.
 | Unnamed or duplicate levels, or a `datadir` that cannot be resolved | `hiera_level_unnamed`, `hiera_duplicate_level`, `hiera_datadir_unresolvable` | warning | Levels are matched by name, so these are flagged; no files are imported for an unresolvable `datadir`. |
 | A data file the facet cannot read back (a list or plain value at the top, an unquoted timestamp, invalid text, too deeply nested) | `data_file_unparseable` | **error** | That file does not come in. The message names the cause. Fix the file in the repository. |
 | A data file that is not YAML, a symlink, a submodule pointer, over the size limit, a duplicate path, outside the data folder, or with extra YAML documents | `data_file_not_yaml`, `data_file_symlink`, `data_file_gitlink`, `data_file_too_large`, `data_file_collision`, `data_file_outside_datadir`, `data_file_extra_documents` | warning | Skipped (for extra documents, only the first document counts). A symlink is never followed. |
-| An `environment.conf` line the facet does not know, a section header, a line with no `=`, or a true/false setting holding something else | `envconf_unrecognized_key`, `envconf_malformed_line`, `envconf_invalid_boolean` | warning | The line is skipped; the rest of the file is kept. |
+| An `environment.conf` line the facet does not know, a section header, a line with no `=` (or a value that cannot be stored faithfully), or a true/false setting holding something else | `envconf_unrecognized_key`, `envconf_malformed_line`, `envconf_invalid_boolean` | warning | The line is skipped; the rest of the file is kept. |
 | A `Puppetfile`, `hiera.yaml` or `environment.conf` that is a symlink, a submodule pointer, over the size limit or unreadable | `branch_file_unreadable` | **error** | That file does not come in. |
 | A branch with more content than the limits allow | `branch_data_cap_exceeded`, `findings_truncated` | warning | The data walk stops at the limit with a note; past 200 findings one last note says more were left out. |
 | A branch whose **name** breaks the environment-name rule | `branch_name_invalid` | **error** | The branch is **not importable** and is never fetched. See below. |
@@ -200,7 +200,10 @@ A private repository needs a login. Four rules keep that login safe:
    Documents unsealed and never in your image.
 2. **It is named in the request, and there is no default.** You pass the secret's
    name in `Credential`. An empty name means an anonymous fetch. The host never
-   guesses a login for you, and never reads a list of them.
+   guesses a login for you, and never reads a list of them. This holds for
+   `ssh` as well as `https`. With no name given, an `ssh` fetch carries no key
+   and talks to no `ssh` agent, so a private repository that only the
+   operator's own key can open is **refused** instead of quietly succeeding.
 3. **It is never in the URL, and never on a command line.** A git address with a
    password in it is refused, because the address would end up in logs and in a
    process listing. (An `ssh://` address may carry a bare login name, the part
@@ -244,10 +247,23 @@ few things in place:
   instruction, so it would read the operator's global settings. Not knowing the
   version fails closed too. If `git` is missing, every import call says so.
 - **For `ssh` addresses, an `ssh` program and a populated `known_hosts` file.**
-  The host reads the operator's existing `~/.ssh/known_hosts`. Host-key checking
-  is **strict**: an `ssh` server whose key is not already listed is refused, not
-  trusted on first use. Add the host to `known_hosts` first (an operator does
-  this once, for example by connecting to it by hand and confirming the key).
+  The host reads exactly **one file** from the operator's home directory: the
+  conventional `~/.ssh/known_hosts`. It works out that path once, when it
+  starts, and hands it to `ssh` by name. Everything else under the home
+  directory is out of reach. The operator's own `ssh` configuration file, any
+  `ssh` agent, and the operator's default keys (`~/.ssh/id_rsa`,
+  `~/.ssh/id_ed25519` and the rest) are all **deliberately not used**. The only
+  login an `ssh` import ever offers is the key you named in `Credential`. What
+  an operator loses by this: a host alias or a jump host (`ProxyJump`) defined in
+  their own `~/.ssh/config` will **not** resolve, so the address must name the
+  real host. The machine-wide known-hosts file still applies, because it holds
+  host keys, not logins. Host-key checking is **strict**: an `ssh` server whose
+  key is not already listed is refused, not trusted on first use. Add the host
+  to `known_hosts` first (an operator does this once, for example by connecting
+  to it by hand and confirming the key). If the home directory cannot be worked
+  out at all, the host points at an empty file instead, so every `ssh` host
+  fails verification with the same refusal an unlisted host gets. It fails
+  closed; it never relaxes the check.
 - **Network reach** to whatever git host you name. See section 6.
 
 `git` is the **one host-side subprocess this SDK runs**, and it runs only to
@@ -264,8 +280,11 @@ block private address ranges. This is deliberate: a site's own control repo
 usually lives on an internal git server, so blocking internal addresses would
 make import useless on the deployments it exists for. The protections that do
 exist are narrower: only `https` and `ssh` addresses are accepted, a credential
-must be named and cannot ride in the address, the fetch is size- and
-time-bounded, and nothing is written without a human's approval.
+must be named and cannot ride in the address, a fetch with no credential named
+cannot borrow the operator's own `ssh` key or agent, the fetch is size- and
+time-bounded, and nothing is written without a human's approval. So granting
+`code:import` grants network reach to the git hosts the pack names. It does
+**not** grant the operator's own git access.
 
 Decide the grant knowing that. If a pack should not be able to probe your
 internal network, do not give it `code:import`.
@@ -276,7 +295,7 @@ These are fixed in code.
 
 | What | Limit |
 |---|---|
-| Branches discovered or fetched in one call | 100 |
+| Branches discovered or fetched in one call | 100. The cap is applied to the branches the remote reports, **before any** branch list you pass narrows the work. A repository with more than 100 branches therefore cannot be imported today, even if you name a single branch. This is a known limitation; naming fewer branches is not a way round it. |
 | One file | 1 MiB |
 | One branch's stored content | 4 MiB |
 | One whole import's stored content | 8 MiB (over it, the call is refused and asks for a narrower branch list) |
@@ -648,7 +667,10 @@ not leak. It is also a place to judge by eye whether those messages are clear.
 
 **Prerequisite:** a real git server reachable over `ssh`, an **unencrypted**
 private key whose public half the server accepts, and that server's host key
-already listed in your `~/.ssh/known_hosts`. No automated test in this SDK can
+already listed in your `~/.ssh/known_hosts`. For the last step the first host
+must also be one that **your own key would normally open** (for example a private
+repository your day-to-day login can read), because a host that refuses everyone
+proves nothing there. No automated test in this SDK can
 do this walk. It exists because no `ssh` server was available to research, so
 this walk is the only verification of the `ssh` path beyond the arguments the
 host builds. Skip it if you have no such server.
@@ -697,10 +719,19 @@ host builds. Skip it if you have no such server.
            _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: unknown, Credential: "key"})
            t.Logf("unknown host: %v", err)
        }
+
+       // 5c: the same host, no credential named. Your own key and agent must
+       // not be used, so this has to be refused.
+       _, err = h.Code.InspectImport(ctx, &hostv1.InspectImportRequest{Url: url})
+       t.Logf("no credential: %v", err)
    }
    ```
 
 3. Run `go test ./manualcheck -run TestSSH -v`.
+
+4. Read the 5c line on its own. It runs the import against the first host with
+   the credential name left empty. Your own key is in `~/.ssh` and your `ssh`
+   agent may well be running, and the host must ignore both.
 
 **Expected:**
 
@@ -708,9 +739,16 @@ host builds. Skip it if you have no such server.
 - 5b: `FailedPrecondition`, "git ssh host key could not be verified against the
   host's known_hosts". The host is **not** trusted on first use and nothing is
   added to your `known_hosts`.
+- 5c: `FailedPrecondition`, "git remote rejected the credential or requires
+  one" (or "git repository was not found or is not readable with the supplied
+  credential", which is the same refusal worded for servers that hide private
+  repositories). **No branches are listed.** If 5c lists branches, the fetch fell back to
+  your own key or agent: stop and report it as a bug.
 
 **What this proves:** an `ssh` key reaches a real host under strict host-key
-checking, and an unknown host fails rather than being trusted.
+checking, an unknown host fails rather than being trusted, and a fetch with no
+credential named cannot fall back to your own key, your `ssh` agent or your
+`ssh` configuration.
 
 ### One more read, by a human
 
