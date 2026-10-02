@@ -1310,6 +1310,29 @@ func TestControlRepoAuthoring_CodeKindIsPinned(t *testing.T) {
 	}
 }
 
+// TestControlRepoAuthoring_ReadmeStatesTheBoundary makes ROADMAP criterion 3
+// mechanical. That criterion is a documentation claim: this workflow is
+// author-only, it does not deploy and it does not write back to a real control
+// repo. A documentation claim with no check decays silently, so this test fails
+// when either sentence is deleted or softened. The working directory under go
+// test is this package's directory, the same convention the manifest test uses.
+func TestControlRepoAuthoring_ReadmeStatesTheBoundary(t *testing.T) {
+	raw, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+	readme := strings.ToLower(string(raw))
+
+	const noDeploy = "does not deploy"
+	if !strings.Contains(readme, noDeploy) {
+		t.Errorf("ROADMAP criterion 3: README.md must say, in plain words, that the workflow %q; the phrase is missing", noDeploy)
+	}
+	const noWriteBack = "does not write back"
+	if !strings.Contains(readme, noWriteBack) {
+		t.Errorf("ROADMAP criterion 3: README.md must say, in plain words, that the workflow %q to a real control repo; the phrase is missing", noWriteBack)
+	}
+}
+
 // --- Static call-graph analysis backing TestControlRepoAuthoring_ProposerCannotSelfApprove ---
 
 // packageIndex holds every declaration in control_repo_authoring.go's
