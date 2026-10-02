@@ -868,3 +868,26 @@ func TestForgeHTTPSearchEnrichmentFailuresAreSurfaced(t *testing.T) {
 		}
 	})
 }
+
+// IN-04 regression: a legitimate validation_score of 0 from the
+// highest-precedence source must not be replaced by a lower-precedence one.
+func TestMapForgeSearchResult_ZeroScoreIsNotOverwritten(t *testing.T) {
+	zero, seventy := 0, 70
+	m := forgeModuleJSON{
+		Slug:           "ns-a",
+		Name:           "a",
+		Owner:          forgeModuleOwnerJSON{Slug: "ns"},
+		CurrentRelease: &forgeReleaseSummaryJSON{Version: "1.0.0", ValidationScore: &seventy},
+	}
+	enrich := &forgeReleaseSummaryJSON{Version: "2.0.0", ValidationScore: &zero}
+	got, err := mapForgeSearchResult(m, enrich, "puppet-forge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.QualityScore != 0 {
+		t.Fatalf("expected the enrichment's score of 0 to win, got %v", got.QualityScore)
+	}
+	if got.Version != "2.0.0" {
+		t.Fatalf("expected version from enrichment, got %q", got.Version)
+	}
+}

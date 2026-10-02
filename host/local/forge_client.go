@@ -779,12 +779,17 @@ func mapForgeSearchResult(m forgeModuleJSON, enrich *forgeReleaseSummaryJSON, so
 	}
 
 	createdAt := ""
+	// scoreSet records that a source supplied a validation_score, so a
+	// legitimate score of 0 is kept rather than treated as "unset" and
+	// replaced by a score from a lower-precedence source.
+	scoreSet := false
 	for _, rel := range sources {
 		if r.Version == "" {
 			r.Version = rel.Version
 		}
-		if r.QualityScore == 0 && rel.ValidationScore != nil {
+		if !scoreSet && rel.ValidationScore != nil {
 			r.QualityScore = float64(*rel.ValidationScore)
+			scoreSet = true
 		}
 		if createdAt == "" {
 			createdAt = rel.CreatedAt
