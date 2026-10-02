@@ -3,13 +3,13 @@ module github.com/puppet-stagehand/stagehand-sdk
 go 1.25.0
 
 require (
+	github.com/Masterminds/semver/v3 v3.5.0
 	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
 )
 
 require (
-	github.com/Masterminds/semver/v3 v3.5.0 // indirect
 	golang.org/x/net v0.58.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
