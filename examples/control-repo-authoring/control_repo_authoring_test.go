@@ -2,6 +2,7 @@ package controlrepoauthoring_test
 
 import (
 	"context"
+	"encoding/json"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/puppet-stagehand/stagehand-sdk/approval"
@@ -17,13 +19,30 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 	"github.com/puppet-stagehand/stagehand-sdk/manifest"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// fixtureAPIKey is the sealed LLM provider key every test host is configured
+// with. Tests assert it reaches the LLM client and never a prompt.
+const fixtureAPIKey = "sk-proof-11-key"
+
+// world is one test host plus the fixtures it was built over, so a test can
+// read what the fixtures observed and override what they answer.
+type world struct {
+	h        *host.Host
+	forge    *forgeFixture
+	llm      *llmFixture
+	provider string
+}
 
 // newHost loads manifest.json from this example's own directory, refuses any
 // parse or validation finding, and builds one *host.Host scoped to exactly the
 // permissions that manifest declares. The host's grant therefore comes from
-// the manifest and nowhere else.
-func newHost(t *testing.T) *host.Host {
+// the manifest and nowhere else. The host runs against a registry fixture and
+// an LLM fixture, so nothing here touches the network, and its LLM provider is
+// configured the way an operator would configure it.
+func newHost(t *testing.T) *world {
 	t.Helper()
 	raw, err := os.ReadFile("manifest.json")
 	if err != nil {
@@ -36,7 +55,164 @@ func newHost(t *testing.T) *host.Host {
 	if findings := manifest.Validate(m); len(findings) > 0 {
 		t.Fatalf("manifest.json failed validation: %v", findings)
 	}
-	return local.New(m.Permissions, m.ID)
+	forge := &forgeFixture{}
+	llm := &llmFixture{rankingReply: rankingReplyFor(rankedEntry{"puppetlabs/ntp", "puppet-forge", "Keeps clocks in sync across the fleet."})}
+	h := local.New(m.Permissions, m.ID, local.WithForgeClient(forge), local.WithLLMClient(llm))
+	return &world{h: h, forge: forge, llm: llm, provider: configureLLMProvider(t, h)}
+}
+
+// configureLLMProvider is operator setup, performed the way docs/forge-recommend.md
+// asks a pack to do it for itself: seal the provider's config as one Secrets
+// value, then write a name/label/ref-only index document into the llm-providers
+// collection. It returns the provider name Recommend is called with.
+//
+// It lives in this test file, and nowhere in the production file, on purpose:
+// the index write needs a Documents selector, which the proposing persona is
+// structurally barred from carrying (see TestControlRepoAuthoring_ProposerCannotSelfApprove).
+//
+// The collection literal and the JSON tags below are unexported in host/local,
+// so this helper is the single place they are repeated. A wrong collection
+// gives a not-found provider error; a wrong tag gives a no-model-configured
+// error. The secret ref is copied verbatim from the store call, never rebuilt.
+func configureLLMProvider(t *testing.T, h *host.Host) string {
+	t.Helper()
+	const name = "primary"
+	sealed, err := json.Marshal(map[string]string{
+		"kind":             "anthropic",
+		"base_url":         "",
+		"model":            "claude-sonnet-4-5",
+		"api_key":          fixtureAPIKey,
+		"max_tokens_field": "max_tokens",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref, err := h.Secrets.Store(context.Background(), &hostv1.StoreSecretRequest{Name: "llm-provider-" + name, Plaintext: sealed})
+	if err != nil {
+		t.Fatalf("configureLLMProvider: Secrets.Store: %v", err)
+	}
+	body, err := structpb.NewStruct(map[string]any{"name": name, "label": "Primary", "secret_ref": ref.Ref})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: "llm-providers", DocId: name, Body: &hostv1.Json{Value: body}, IfVersion: 0,
+	}); err != nil {
+		t.Fatalf("configureLLMProvider: Documents.Put: %v", err)
+	}
+	return name
+}
+
+// forgeFixture is a three-module registry. Every value is deliberately unlike
+// the real registry's, so no assertion can pass by accident.
+type forgeFixture struct{}
+
+var forgeCatalog = []*hostv1.ForgeSearchResult{
+	{
+		Name: "puppetlabs/ntp", Version: "13.2.1", Endorsement: "supported", QualityScore: 4.6,
+		Summary: "Installs, configures and manages the NTP service for time synchronisation",
+		Tags:    []string{"ntp", "time"},
+	},
+	{
+		Name: "puppetlabs/stdlib", Version: "9.6.0", Endorsement: "supported", QualityScore: 4.8,
+		Summary: "Standard library of resources for Puppet modules",
+		Tags:    []string{"stdlib", "functions"},
+	},
+	{
+		Name: "example/timekeeper", Version: "0.4.0", Deprecated: true, SupersededBy: "puppetlabs/ntp",
+		Summary: "Legacy clock helper, use ntp instead",
+		Tags:    []string{"legacy"},
+	},
+}
+
+// Search matches an entry when any whitespace-separated term of the query is
+// contained in the entry's name or summary. It stamps Source with the source
+// argument it was handed: the host joins ranked entries to candidates on
+// lower-cased name plus source, so an empty source would make every ranked
+// entry an unknown-module drop. It never returns the not-found sentinel.
+func (*forgeFixture) Search(_ context.Context, _ local.ForgeEndpoint, source, query string, _ *hostv1.Page) ([]*hostv1.ForgeSearchResult, *hostv1.PageInfo, error) {
+	terms := strings.Fields(strings.ToLower(query))
+	out := []*hostv1.ForgeSearchResult{}
+	for _, entry := range forgeCatalog {
+		hay := strings.ToLower(entry.Name + " " + entry.Summary)
+		for _, term := range terms {
+			if strings.Contains(hay, term) {
+				c := proto.Clone(entry).(*hostv1.ForgeSearchResult)
+				c.Source = source
+				out = append(out, c)
+				break
+			}
+		}
+	}
+	return out, &hostv1.PageInfo{}, nil
+}
+
+func (*forgeFixture) ListReleases(_ context.Context, _ local.ForgeEndpoint, name string) ([]string, error) {
+	switch name {
+	case "puppetlabs/ntp":
+		return []string{"12.0.1", "13.0.0", "13.2.1"}, nil
+	case "puppetlabs/stdlib":
+		return []string{"9.4.1", "9.6.0"}, nil
+	}
+	return nil, local.ErrForgeNotFound
+}
+
+func (*forgeFixture) GetRelease(_ context.Context, _ local.ForgeEndpoint, name, version string) (*local.ForgeRelease, error) {
+	switch {
+	case name == "puppetlabs/ntp" && version == "13.2.1":
+		return &local.ForgeRelease{Name: name, Version: version, Dependencies: []local.ForgeDependency{
+			{Name: "puppetlabs/stdlib", VersionRequirement: ">= 9.0.0 < 10.0.0"},
+		}}, nil
+	case name == "puppetlabs/stdlib" && version == "9.6.0":
+		return &local.ForgeRelease{Name: name, Version: version, Dependencies: []local.ForgeDependency{}}, nil
+	}
+	return nil, local.ErrForgeNotFound
+}
+
+// llmCall is one observed LLM request, with the key the client was handed.
+type llmCall struct{ APIKey, System, User string }
+
+// llmFixture is a scripted LLM. It records every call under a mutex because
+// the suite runs under -race, and answers by the shape of the schema it is
+// asked for, never by call order.
+type llmFixture struct {
+	mu           sync.Mutex
+	calls        []llmCall
+	rankingReply string
+}
+
+// Complete returns the extraction reply when the schema asks for queries, and
+// rankingReply otherwise. The key is read from the APIKey field directly: a
+// fmt verb on the provider redacts it.
+func (f *llmFixture) Complete(_ context.Context, p local.LLMProvider, req local.LLMRequest) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, llmCall{APIKey: p.APIKey, System: req.System, User: req.User})
+	if props, ok := req.Schema["properties"].(map[string]any); ok {
+		if _, asksQueries := props["queries"]; asksQueries {
+			b, _ := json.Marshal(map[string]any{"queries": []string{"ntp time synchronisation"}})
+			return string(b), nil
+		}
+	}
+	return f.rankingReply, nil
+}
+
+func (f *llmFixture) observed() []llmCall {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]llmCall(nil), f.calls...)
+}
+
+type rankedEntry struct{ Name, Source, Reasoning string }
+
+// rankingReplyFor builds the model's ranking answer: names and reasoning only.
+func rankingReplyFor(entries ...rankedEntry) string {
+	out := make([]map[string]string, 0, len(entries))
+	for _, e := range entries {
+		out = append(out, map[string]string{"name": e.Name, "source": e.Source, "reasoning": e.Reasoning})
+	}
+	b, _ := json.Marshal(map[string]any{"suggestions": out})
+	return string(b)
 }
 
 // approverToken mints a CodeKind.ApproveScope-scoped token and returns only
@@ -62,12 +238,13 @@ func approverToken(t *testing.T, h *host.Host, label string) string {
 func ptr[T any](v T) *T { return &v }
 
 // TestControlRepoAuthoring_EndToEnd walks one blank host through the whole
-// slice: create environments, author a module, then author settings through
-// the approval gate, and read every byte back. Run with -v to read it as a
-// transcript.
+// slice: create environments, turn a sentence into a ranked real module, write
+// it to a Puppetfile, then author settings through the approval gate, and read
+// every byte back. Run with -v to read it as a transcript.
 func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	ctx := context.Background()
-	h := newHost(t)
+	w := newHost(t)
+	h := w.h
 	proposer := controlrepoauthoring.NewProposer(h)
 	approver := controlrepoauthoring.NewApprover(h)
 
@@ -83,10 +260,40 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		t.Logf("step 1: created blank environment %q", env.Name)
 	}
 
-	// Step 2: author one Puppetfile module (an ungated, additive write).
+	// Step 2: a sentence becomes a ranked, real module. The model only orders
+	// and describes; every module fact is a copy of a registry search result.
+	rec, err := proposer.RecommendModules(ctx, "keep the clocks on my servers in sync", w.provider)
+	if err != nil {
+		t.Fatalf("RecommendModules: %v", err)
+	}
+	if len(rec.Suggestions) < 1 {
+		t.Fatalf("RecommendModules: expected at least one suggestion, got %+v", rec)
+	}
+	top := rec.Suggestions[0]
+	if top.Module.Name != "puppetlabs/ntp" || top.Module.Source != "puppet-forge" || top.Rank != 1 || top.Reasoning == "" {
+		t.Fatalf("RecommendModules: expected rank 1 puppetlabs/ntp from puppet-forge with reasoning, got %+v", top)
+	}
+	if len(rec.Queries) != 1 || rec.Queries[0] != "ntp time synchronisation" {
+		t.Fatalf("RecommendModules: expected the single extracted query to be echoed, got %v", rec.Queries)
+	}
+	calls := w.llm.observed()
+	if len(calls) != 2 {
+		t.Fatalf("RecommendModules: expected exactly 2 LLM calls, got %d", len(calls))
+	}
+	for i, c := range calls {
+		if c.APIKey != fixtureAPIKey {
+			t.Errorf("LLM call %d: expected the sealed provider key to reach the client", i+1)
+		}
+		if strings.Contains(c.System, fixtureAPIKey) || strings.Contains(c.User, fixtureAPIKey) {
+			t.Errorf("LLM call %d: the provider key leaked into a prompt", i+1)
+		}
+	}
+	t.Logf("step 2: recommended %s (rank %d, %s) from query %q; key reached the client, not the prompts", top.Module.Name, top.Rank, top.Module.Source, rec.Queries[0])
+
+	// Step 3: author one Puppetfile module (an ungated, additive write).
 	mod, err := proposer.AddModule(ctx, "authored", &hostv1.PuppetfileModule{
-		Name:   "puppetlabs/ntp",
-		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "13.2.1"}},
+		Name:   top.Module.Name,
+		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: top.Module.Version}},
 	})
 	if err != nil {
 		t.Fatalf("AddModule: %v", err)
@@ -94,9 +301,9 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if mod.Name != "puppetlabs/ntp" || mod.GetForge().GetVersion() != "13.2.1" {
 		t.Fatalf("AddModule: expected puppetlabs/ntp at 13.2.1, got %+v", mod)
 	}
-	t.Logf("step 2: added module %s at %s to authored", mod.Name, mod.GetForge().GetVersion())
+	t.Logf("step 3: added module %s at %s to authored", mod.Name, mod.GetForge().GetVersion())
 
-	// Step 3: propose the environment settings through the gate.
+	// Step 4: propose the environment settings through the gate.
 	const proposalID = "settings-authored-1"
 	proposal, err := proposer.ProposeSettings(ctx, proposalID, &hostv1.EnvironmentSettings{
 		Environment:        "authored",
@@ -109,9 +316,9 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if proposal.Status != approval.StatusPending {
 		t.Fatalf("ProposeSettings: expected status %q, got %q", approval.StatusPending, proposal.Status)
 	}
-	t.Logf("step 3: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
+	t.Logf("step 4: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
 
-	// Step 4: a second persona, holding a token the proposer never saw, approves.
+	// Step 5: a second persona, holding a token the proposer never saw, approves.
 	secret := approverToken(t, h, "operator-ada")
 	approved, err := approver.Approve(ctx, proposalID, secret)
 	if err != nil {
@@ -123,17 +330,17 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if approved.DecidedBy != "operator-ada" {
 		t.Fatalf("Approve: expected DecidedBy %q, got %q", "operator-ada", approved.DecidedBy)
 	}
-	t.Logf("step 4: %s approved %q", approved.DecidedBy, proposalID)
+	t.Logf("step 5: %s approved %q", approved.DecidedBy, proposalID)
 
-	// Step 5: apply immediately after Approve, with no intervening read.
+	// Step 6: apply immediately after Approve, with no intervening read.
 	applied, err := proposer.ApplySettings(ctx, proposalID)
 	if err != nil {
 		t.Fatalf("ApplySettings: %v", err)
 	}
 	assertAuthoredSettings(t, "ApplySettings", applied)
-	t.Logf("step 5: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
+	t.Logf("step 6: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
 
-	// Step 6: read everything back.
+	// Step 7: read everything back.
 	got, err := proposer.Settings(ctx, "authored")
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
@@ -147,7 +354,6 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if want := "mod 'puppetlabs/ntp', '13.2.1'\n"; text != want {
 		t.Fatalf("RenderPuppetfile: expected %q, got %q", want, text)
 	}
-
 	envs, err := proposer.ListEnvironments(ctx)
 	if err != nil {
 		t.Fatalf("ListEnvironments: %v", err)
@@ -155,7 +361,7 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if len(envs) != 2 || envs[0].Name != "authored" || envs[1].Name != "canary" {
 		t.Fatalf("ListEnvironments: expected [authored canary], got %+v", envs)
 	}
-	t.Logf("step 6: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
+	t.Logf("step 7: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
 }
 
 // assertAuthoredSettings checks the two written fields and that the five

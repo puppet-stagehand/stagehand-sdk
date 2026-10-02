@@ -162,6 +162,16 @@ func (a *ApproverBackend) Reject(ctx context.Context, proposalID, tokenSecret, r
 	return approval.Reject(ctx, a.h, approval.RejectRequest{Kind: CodeKind, ProposalID: proposalID, TokenSecret: tokenSecret, Reason: reason})
 }
 
+// RecommendModules turns a free-text need into ranked module suggestions. The
+// host asks the named LLM provider for search queries, runs real registry
+// searches, then asks the provider to rank the real results; every module fact
+// in the response is a host-owned copy of a search result, so a module the
+// model invents is dropped with a warning rather than returned. provider names
+// an operator-configured entry and has no default.
+func (p *ProposerBackend) RecommendModules(ctx context.Context, text, provider string) (*hostv1.RecommendResponse, error) {
+	return p.h.Forge.Recommend(ctx, &hostv1.RecommendRequest{Text: text, LlmProvider: provider, MaxSuggestions: 3})
+}
+
 // scalarValue wraps v in the single-field "v" convention that Hiera data keys
 // use across the host.Local and approval package boundaries. Later plans use
 // it to write Hiera data values.
