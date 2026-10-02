@@ -692,6 +692,33 @@ func TestForgeHTTPClient_GetReleaseRejectsPathyVersion(t *testing.T) {
 	}
 }
 
+// WR-01 (review): a module name containing percent-encoding or path syntax
+// must be refused before any request, since JoinPath would otherwise emit it
+// verbatim or drop the path entirely.
+func TestForgeHTTPClient_RejectsPathyModuleName(t *testing.T) {
+	var calls atomic.Int32
+	ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusOK)
+	})
+	for _, n := range []string{"%2e%2e%2fadmin", "a%zzb", "puppetlabs/../x", "a/b/c", "ns/na me", "ns/name?x=y", "ns/name#f", "../x", "-ns/name"} {
+		if _, err := client.GetRelease(context.Background(), ep, n, "1.0.0"); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("GetRelease name %q: expected InvalidArgument, got %v", n, err)
+		}
+		if _, err := client.ListReleases(context.Background(), ep, n); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("ListReleases name %q: expected InvalidArgument, got %v", n, err)
+		}
+	}
+	if n := calls.Load(); n != 0 {
+		t.Fatalf("expected no upstream request for an invalid name, saw %d", n)
+	}
+	for _, n := range []string{"puppetlabs/apache", "puppetlabs-apache", "ns/sce_windows"} {
+		if _, err := client.GetRelease(context.Background(), ep, n, "1.0.0"); status.Code(err) == codes.InvalidArgument {
+			t.Fatalf("name %q was wrongly rejected: %v", n, err)
+		}
+	}
+}
+
 // WR-03: a malformed or non-https base URL must not echo any part of the raw
 // (possibly credential-bearing) value in the error it returns.
 func TestValidateForgeBaseURL_ErrorsDoNotEchoTheRawURL(t *testing.T) {

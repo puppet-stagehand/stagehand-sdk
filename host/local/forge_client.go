@@ -21,7 +21,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -576,6 +575,11 @@ func validateForgeBaseURL(raw string) (*url.URL, error) {
 // version can never become more than one path segment.
 var forgeVersionRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,63}$`)
 
+// forgeNameRe bounds a module identity to the characters Forge slugs use:
+// one optional "/" or none (already-hyphenated form), no "." "%" "?" "#" or
+// whitespace, so a name can never become more than one clean path segment.
+var forgeNameRe = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z_-]*(/[0-9A-Za-z][0-9A-Za-z_-]*)?$`)
+
 // forgeModuleSlug converts this project's "namespace/name" module identity
 // (matching PuppetfileModule.name) into Forge's native hyphenated slug
 // form ("namespace-name"). Only the first separator is replaced: a name
@@ -586,8 +590,13 @@ func forgeModuleSlug(name string) (string, error) {
 	if name == "" {
 		return "", errors.New("module name is required")
 	}
-	if strings.Count(name, "/") > 1 {
-		return "", fmt.Errorf("module name %q must be a single namespace/name identity", name)
+	// The slug becomes a URL path segment (GetRelease) and JoinPath cleans
+	// "."/".." before unescaping, so percent-encoded content such as
+	// "%2e%2e%2fadmin" would pass through verbatim, and an invalid escape such
+	// as "a%zz" makes JoinPath drop the whole path. Admit only Forge's own slug
+	// characters; the message is static so it never echoes the input (WR-01).
+	if !forgeNameRe.MatchString(name) {
+		return "", errors.New("module name must be a single namespace/name identity of letters, digits, '_' and '-'")
 	}
 	return strings.Replace(name, "/", "-", 1), nil
 }
