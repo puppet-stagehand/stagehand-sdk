@@ -216,6 +216,14 @@ func (s *forgeServer) currentPuppetfileModuleNames(env string) map[string]bool {
 	}
 	names := make(map[string]bool, len(pf.Modules))
 	for _, m := range pf.Modules {
+		// A Git module's name is the bare module name (see
+		// PuppetfileModule.name), never a Forge ns-name slug, so a hyphen in
+		// it is part of the name and must not be rewritten into a namespace
+		// separator. Only Forge-sourced entries carry the slug forms.
+		if m.GetGit() != nil {
+			names[m.GetName()] = true
+			continue
+		}
 		names[normalizeModuleName(m.GetName())] = true
 	}
 	return names

@@ -352,6 +352,47 @@ func TestForgeResolvePuppetfileStatusRecognizesHyphenSlugForm(t *testing.T) {
 	}
 }
 
+// IN-02 regression: a namespace-less Git module whose bare name contains a
+// hyphen (mod 'my-module', :git => ...) must not be rewritten to my/module,
+// which would falsely mark a Forge my/module as already_in_puppetfile.
+func TestForgeResolvePuppetfileStatusIgnoresHyphenatedGitModuleName(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "my/module", VersionRequirement: ">= 1.0.0"})
+	c.versions["my/module"] = []string{"1.0.0"}
+	c.addRelease("my/module", "1.0.0")
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Code.PutPuppetfileModule(context.Background(), &hostv1.PutPuppetfileModuleRequest{
+		Environment: "production",
+		Module: &hostv1.PuppetfileModule{
+			Name: "my-module",
+			Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+				Url:     "https://example.com/my-module.git",
+				RefKind: &hostv1.GitSource_Tag{Tag: "v1.0.0"},
+			}},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := findChild(resp.Root, "my/module")
+	if dep == nil {
+		t.Fatal("expected my/module in the resolved tree")
+	}
+	if dep.AlreadyInPuppetfile {
+		t.Fatal("Git module my-module must not mark Forge my/module as already_in_puppetfile")
+	}
+}
+
 func TestForgeResolveWithoutEnvironmentLeavesStatusFalse(t *testing.T) {
 	c := newResolverFixtureClient()
 	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "acme/child", VersionRequirement: ">= 1.0.0"})
