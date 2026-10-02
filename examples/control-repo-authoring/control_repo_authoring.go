@@ -89,6 +89,36 @@ func (p *ProposerBackend) AddModule(ctx context.Context, env string, m *hostv1.P
 	return p.h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: env, Module: m})
 }
 
+// ProposeModuleOverwrite freezes m as a proposal body and files it with the
+// approval gate. Replacing a Puppetfile module that env already holds is the
+// second gated path: the body is built by code.OverwriteBodyForPuppetfileModule
+// and filed with approval.ProposeBody, and this method never builds a document
+// write itself. m.Name must be spelled exactly as the module already is in env;
+// the facet decides "already exists" by exact name string.
+func (p *ProposerBackend) ProposeModuleOverwrite(ctx context.Context, proposalID, env string, m *hostv1.PuppetfileModule) (*approval.Proposal, error) {
+	body, err := code.OverwriteBodyForPuppetfileModule(env, m)
+	if err != nil {
+		return nil, err
+	}
+	return approval.ProposeBody(ctx, p.h, CodeKind, proposalID, body)
+}
+
+// ApplyModuleOverwrite materializes proposalID's approved module overwrite into
+// the Code facet. It passes only the proposal id: the module written is exactly
+// the payload frozen when the proposal was filed. An approval covers one
+// application: repeating the call is honoured only when it would change nothing.
+func (p *ProposerBackend) ApplyModuleOverwrite(ctx context.Context, proposalID string) (*hostv1.PuppetfileModule, error) {
+	return p.h.Code.ApplyPuppetfileModuleOverwrite(ctx, &hostv1.ApplyPuppetfileModuleOverwriteRequest{ProposalId: proposalID})
+}
+
+// RemoveModule removes the module called name from env's Puppetfile. Removal is
+// not an overwrite, so it is ungated; it is also how a target is changed by a
+// route the approval gate does not cover.
+func (p *ProposerBackend) RemoveModule(ctx context.Context, env, name string) error {
+	_, err := p.h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: env, Name: name})
+	return err
+}
+
 // ProposeSettings freezes s as a proposal body and files it with the approval
 // gate. Environment settings are authored only through this path: the body is
 // built by code.OverwriteBodyForSettings and filed with approval.ProposeBody,

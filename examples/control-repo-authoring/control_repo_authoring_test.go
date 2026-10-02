@@ -871,6 +871,92 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		t.Fatalf("ListEnvironments(final): expected %v in ascending order, got %v", want, gotNames)
 	}
 	t.Logf("step 15: authored untouched; canary replaced wholesale by its branch; qa_two created; environments %v", gotNames)
+
+	// Step 16: bump a module that already exists. This is the second gated path,
+	// per item rather than per branch: the ladder is refused, proposed, still
+	// refused while pending, approved, apply-pending on a further write, applied.
+	//
+	// The module name is the hyphenated spelling the imported Puppetfile produced.
+	// The facet decides "already exists" by exact name string, so the slug form
+	// used in the authored environment (puppetlabs/stdlib) and the hyphenated form
+	// the import produced (puppetlabs-stdlib) are different modules to this gate:
+	// the slug form would be an ungated append, and the refusal below would fail
+	// for the wrong reason.
+	bumped := &hostv1.PuppetfileModule{
+		Name:   canaryMods[0].Name,
+		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.6.0"}},
+	}
+	if bumped.Name != "puppetlabs-stdlib" {
+		t.Fatalf("overwrite target: expected the imported spelling puppetlabs-stdlib, got %q", bumped.Name)
+	}
+
+	// 16a: refused. A write that would replace existing content needs approval.
+	_, err = proposer.AddModule(ctx, "canary", bumped)
+	if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("AddModule over an existing module: expected a requires-approval refusal with FailedPrecondition, got %v", err)
+	}
+	if cur, err := proposer.ListModules(ctx, "canary"); err != nil || len(cur) != 1 || cur[0].GetForge().GetVersion() != "9.4.1" {
+		t.Fatalf("refused AddModule: expected canary to still carry 9.4.1, got %+v (err %v)", cur, err)
+	}
+	t.Logf("step 16a: bumping %s to 9.6.0 is refused as requiring approval; canary still carries 9.4.1", bumped.Name)
+
+	// 16b: propose the bump.
+	const bumpID = "bump-stdlib-1"
+	bumpProposal, err := proposer.ProposeModuleOverwrite(ctx, bumpID, "canary", bumped)
+	if err != nil {
+		t.Fatalf("ProposeModuleOverwrite: %v", err)
+	}
+	if bumpProposal.Status != approval.StatusPending {
+		t.Fatalf("ProposeModuleOverwrite: expected status %q, got %q", approval.StatusPending, bumpProposal.Status)
+	}
+	t.Logf("step 16b: proposed the bump as %q (status %s)", bumpID, bumpProposal.Status)
+
+	// 16c: a pending proposal is not an approval. The refusal is still
+	// requires-approval, and it is not the apply-pending refusal.
+	_, err = proposer.AddModule(ctx, "canary", bumped)
+	if !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+		t.Fatalf("AddModule with a pending proposal: expected requires-approval and not apply-pending, got %v", err)
+	}
+	t.Logf("step 16c: a pending proposal does not unlock the write; still refused as requiring approval")
+
+	// 16d: approve. Verifying a token does not consume it, so the token minted for
+	// the import is still valid inside its lifetime and serves this cycle too.
+	bumpDecided, err := approver.Approve(ctx, bumpID, importSecret)
+	if err != nil {
+		t.Fatalf("Approve(bump): %v", err)
+	}
+	if bumpDecided.Status != approval.StatusApproved || bumpDecided.DecidedBy != "operator-grace" {
+		t.Fatalf("Approve(bump): expected approved by operator-grace, got status %q by %q", bumpDecided.Status, bumpDecided.DecidedBy)
+	}
+	t.Logf("step 16d: %s approved %q", bumpDecided.DecidedBy, bumpID)
+
+	// 16e: the refusal changes shape. A write never applies an approval; only the
+	// apply RPC does.
+	_, err = proposer.AddModule(ctx, "canary", bumped)
+	if !local.IsCodeOverwriteApplyPending(err) {
+		t.Fatalf("AddModule after approval: expected an apply-pending refusal, got %v", err)
+	}
+	if cur, err := proposer.ListModules(ctx, "canary"); err != nil || len(cur) != 1 || cur[0].GetForge().GetVersion() != "9.4.1" {
+		t.Fatalf("apply-pending AddModule: expected canary to still carry 9.4.1, got %+v (err %v)", cur, err)
+	}
+	t.Logf("step 16e: the write now reports apply-pending; the content has still not changed")
+
+	// 16f: apply. The replacement is one module, not two.
+	appliedMod, err := proposer.ApplyModuleOverwrite(ctx, bumpID)
+	if err != nil {
+		t.Fatalf("ApplyModuleOverwrite: %v", err)
+	}
+	if appliedMod.Name != bumped.Name || appliedMod.GetForge().GetVersion() != "9.6.0" {
+		t.Fatalf("ApplyModuleOverwrite: expected %s at 9.6.0, got %+v", bumped.Name, appliedMod)
+	}
+	finalMods, err := proposer.ListModules(ctx, "canary")
+	if err != nil {
+		t.Fatalf("ListModules(canary) after apply: %v", err)
+	}
+	if len(finalMods) != 1 || finalMods[0].Name != "puppetlabs-stdlib" || finalMods[0].GetForge().GetVersion() != "9.6.0" {
+		t.Fatalf("canary modules after apply: expected exactly puppetlabs-stdlib 9.6.0, got %+v", finalMods)
+	}
+	t.Logf("step 16f: applied; canary holds exactly one module, %s at %s", finalMods[0].Name, finalMods[0].GetForge().GetVersion())
 }
 
 // TestControlRepoAuthoring_PendingImportDoesNotApply is the first half of the
