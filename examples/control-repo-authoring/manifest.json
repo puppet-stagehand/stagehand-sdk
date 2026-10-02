@@ -1,0 +1,24 @@
+{
+  "id": "control_repo_authoring",
+  "name": "Control Repo Authoring",
+  "version": "0.1.0",
+  "contract_version": 1,
+  "publisher": "Perforce",
+  "publisher_key_id": "SHA256:controlrepoauthoringexamplekeyfingerprint00",
+  "licence": "Apache-2.0",
+  "entitlement": "none",
+  "tier": "core",
+  "default_enabled": true,
+  "summary": "Authors control-repo content and asks a human before replacing anything; it is author-only and never deploys.",
+  "nav": null,
+  "permissions": ["code:rw", "code:import", "forge:rw", "forge:recommend", "secrets:rw", "tokens:issue"],
+  "routes": [
+    { "method": "POST", "path": "imports/proposals", "access": {}, "operation_id": "proposeImport" },
+    { "method": "POST", "path": "overwrites/proposals", "access": {}, "operation_id": "proposeOverwrite" },
+    { "method": "POST", "path": "proposals/{proposal_id}/approve", "access": { "scope": "code:approve" }, "operation_id": "approveProposal" },
+    { "method": "POST", "path": "proposals/{proposal_id}/reject", "access": { "scope": "code:approve" }, "operation_id": "rejectProposal" }
+  ],
+  "content": null,
+  "resources": { "cpu": "100m", "memory": "64Mi" },
+  "openapi_path": "/stagehand/openapi.json"
+}
