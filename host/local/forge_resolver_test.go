@@ -2,6 +2,7 @@ package local
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -346,5 +347,44 @@ func TestForgeResolverNormalisesSpellingForCycleAndCache(t *testing.T) {
 	}
 	if n := c.releaseCalls[forgeCacheKey{"acme/a", "1.0.0"}]; n != 1 {
 		t.Fatalf("expected acme/a@1.0.0 to be fetched exactly once, got %d", n)
+	}
+}
+
+// WR-03 (review): a diamond-heavy graph must hit the node budget instead of
+// expanding to 2^N nodes.
+func TestForgeResolverNodeBudgetStopsDiamondExplosion(t *testing.T) {
+	c := newResolverFixtureClient()
+	const depth = 40
+	for i := 0; i < depth; i++ {
+		name := fmt.Sprintf("acme/m%d", i)
+		next := fmt.Sprintf("acme/m%d", i+1)
+		c.versions[name] = []string{"1.0.0"}
+		c.addRelease(name, "1.0.0",
+			ForgeDependency{Name: next, VersionRequirement: ">= 1.0.0"},
+			ForgeDependency{Name: next, VersionRequirement: ">= 1.0.0, < 2.0.0"})
+	}
+	last := fmt.Sprintf("acme/m%d", depth)
+	c.versions[last] = []string{"1.0.0"}
+	c.addRelease(last, "1.0.0")
+
+	_, err := resolveDependencyTree(context.Background(), c, ForgeEndpoint{}, "puppet-forge", "acme/m0", "1.0.0")
+	if status.Code(err) != codes.ResourceExhausted {
+		t.Fatalf("expected ResourceExhausted for an exploding tree, got %v", err)
+	}
+}
+
+// WR-03 (review): a cancelled context must abort the walk, not finish it from
+// cached metadata.
+func TestForgeResolverCancelledContextAbortsWalk(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/a", "1.0.0", ForgeDependency{Name: "acme/b", VersionRequirement: ">= 1.0.0"})
+	c.versions["acme/b"] = []string{"1.0.0"}
+	c.addRelease("acme/b", "1.0.0")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := resolveDependencyTree(ctx, c, ForgeEndpoint{}, "puppet-forge", "acme/a", "1.0.0")
+	if status.Code(err) != codes.Canceled {
+		t.Fatalf("expected Canceled, got %v", err)
 	}
 }

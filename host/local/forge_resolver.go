@@ -22,9 +22,18 @@ import (
 	"strings"
 
 	semver "github.com/Masterminds/semver/v3"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
+
+// forgeMaxResolveNodes bounds how many dependency edges one Resolve call may
+// expand. Release metadata is cached but the tree is not memoised, so a
+// diamond-heavy graph (each module depending on the next twice) would
+// otherwise build 2^N nodes from O(N) HTTP calls (WR-03). Exceeding it aborts
+// the walk with ResourceExhausted rather than exhausting host memory.
+const forgeMaxResolveNodes = 5000
 
 // forgeResolveWalk holds the state of exactly one Resolve call: the
 // client/endpoint metadata is fetched through, a (name,version) release
@@ -48,6 +57,10 @@ type forgeResolveWalk struct {
 	// failure (D-03), which aborts the whole walk rather than becoming
 	// advisory data. Only a typed not-found is advisory (D-12).
 	fatal error
+
+	// nodes counts the dependency edges expanded so far, against
+	// forgeMaxResolveNodes.
+	nodes int
 }
 
 type forgeCacheKey struct{ name, version string }
@@ -198,6 +211,18 @@ func (w *forgeResolveWalk) walkKnownVersion(name, version string, path []string)
 // caller reviewing the tree can always find every path that named a given
 // module, and so detectConflicts has full data once the walk completes.
 func (w *forgeResolveWalk) resolveEdge(name, requirement string, path []string) *hostv1.DependencyNode {
+	// A cancelled call must stop walking cached subtrees, and the tree size
+	// is bounded (WR-03). Either sets fatal so every enclosing loop unwinds.
+	if w.fatal == nil {
+		if err := w.ctx.Err(); err != nil {
+			w.fatal = status.FromContextError(err).Err()
+		} else if w.nodes++; w.nodes > forgeMaxResolveNodes {
+			w.fatal = status.Errorf(codes.ResourceExhausted, "forge: dependency tree exceeds the adapter's limit of %d edges", forgeMaxResolveNodes)
+		}
+	}
+	if w.fatal != nil {
+		return &hostv1.DependencyNode{Name: normalizeModuleName(name), Source: w.source, VersionRequirement: requirement}
+	}
 	// Normalise the spelling (ns/name vs ns-name) before it keys the cycle
 	// guard, caches and ledger (WR-02).
 	name = normalizeModuleName(name)
