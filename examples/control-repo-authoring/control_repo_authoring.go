@@ -172,6 +172,21 @@ func (p *ProposerBackend) RecommendModules(ctx context.Context, text, provider s
 	return p.h.Forge.Recommend(ctx, &hostv1.RecommendRequest{Text: text, LlmProvider: provider, MaxSuggestions: 3})
 }
 
+// SearchModules checks a candidate against one registry source. Searching is
+// read-only: it confirms a module exists and shows its registry metadata.
+func (p *ProposerBackend) SearchModules(ctx context.Context, query, source string) (*hostv1.SearchResponse, error) {
+	return p.h.Forge.Search(ctx, &hostv1.SearchRequest{Query: query, Source: &hostv1.ForgeSourceSelection{Name: source}})
+}
+
+// ResolveModule returns the advisory dependency tree for one module release,
+// annotated against env's current Puppetfile. name and version are required
+// by the facet and are passed through unmodified. The tree is advice, never a
+// preview of a real deploy, and resolving never writes a Puppetfile: each
+// module still needs its own explicit AddModule.
+func (p *ProposerBackend) ResolveModule(ctx context.Context, name, version, env string) (*hostv1.ResolveResponse, error) {
+	return p.h.Forge.Resolve(ctx, &hostv1.ResolveRequest{Name: name, Version: version, Environment: env})
+}
+
 // scalarValue wraps v in the single-field "v" convention that Hiera data keys
 // use across the host.Local and approval package boundaries. Later plans use
 // it to write Hiera data values.

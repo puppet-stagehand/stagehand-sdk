@@ -238,9 +238,9 @@ func approverToken(t *testing.T, h *host.Host, label string) string {
 func ptr[T any](v T) *T { return &v }
 
 // TestControlRepoAuthoring_EndToEnd walks one blank host through the whole
-// slice: create environments, turn a sentence into a ranked real module, write
-// it to a Puppetfile, then author settings through the approval gate, and read
-// every byte back. Run with -v to read it as a transcript.
+// slice: create environments, turn a sentence into a ranked real module, check
+// it against the registry and its dependency tree, write it to a Puppetfile,
+// then author settings through the approval gate, and read every byte back. Run with -v to read it as a transcript.
 func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	ctx := context.Background()
 	w := newHost(t)
@@ -290,20 +290,96 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	}
 	t.Logf("step 2: recommended %s (rank %d, %s) from query %q; key reached the client, not the prompts", top.Module.Name, top.Rank, top.Module.Source, rec.Queries[0])
 
-	// Step 3: author one Puppetfile module (an ungated, additive write).
-	mod, err := proposer.AddModule(ctx, "authored", &hostv1.PuppetfileModule{
-		Name:   top.Module.Name,
-		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: top.Module.Version}},
-	})
+	// Step 3: confirm the suggestion against the registry before trusting it.
+	found, err := proposer.SearchModules(ctx, top.Module.Name, top.Module.Source)
 	if err != nil {
-		t.Fatalf("AddModule: %v", err)
+		t.Fatalf("SearchModules(%q): %v", top.Module.Name, err)
 	}
-	if mod.Name != "puppetlabs/ntp" || mod.GetForge().GetVersion() != "13.2.1" {
-		t.Fatalf("AddModule: expected puppetlabs/ntp at 13.2.1, got %+v", mod)
+	var exact *hostv1.ForgeSearchResult
+	for _, r := range found.Results {
+		if r.Name == top.Module.Name {
+			exact = r
+		}
 	}
-	t.Logf("step 3: added module %s at %s to authored", mod.Name, mod.GetForge().GetVersion())
+	if exact == nil || exact.Deprecated {
+		t.Fatalf("SearchModules: expected a live exact-name hit for %q, got %+v", top.Module.Name, found.Results)
+	}
+	// A broader search shows the deprecated decoy next to the real module, and
+	// the two are told apart by the registry's own fields.
+	broad, err := proposer.SearchModules(ctx, "ntp", top.Module.Source)
+	if err != nil {
+		t.Fatalf("SearchModules(ntp): %v", err)
+	}
+	var live, decoy *hostv1.ForgeSearchResult
+	for _, r := range broad.Results {
+		switch r.Name {
+		case "puppetlabs/ntp":
+			live = r
+		case "example/timekeeper":
+			decoy = r
+		}
+	}
+	if live == nil || decoy == nil {
+		t.Fatalf("SearchModules(ntp): expected both the live module and the decoy, got %+v", broad.Results)
+	}
+	if live.SupersededBy != "" || live.Deprecated || !decoy.Deprecated || decoy.SupersededBy != "puppetlabs/ntp" {
+		t.Fatalf("SearchModules(ntp): expected only the decoy to be deprecated and superseded, got live=%+v decoy=%+v", live, decoy)
+	}
+	t.Logf("step 3: registry confirms %s %s; decoy %s is deprecated, superseded by %s", exact.Name, exact.Version, decoy.Name, decoy.SupersededBy)
 
-	// Step 4: propose the environment settings through the gate.
+	// Step 4: resolve its dependency tree against the environment's current
+	// Puppetfile. The tree is advice; nothing is written yet.
+	tree, err := proposer.ResolveModule(ctx, top.Module.Name, "13.2.1", "authored")
+	if err != nil {
+		t.Fatalf("ResolveModule: %v", err)
+	}
+	root := tree.Root
+	if root.Name != "puppetlabs/ntp" || root.Version != "13.2.1" || len(root.Dependencies) != 1 {
+		t.Fatalf("ResolveModule: expected puppetlabs/ntp 13.2.1 with one dependency, got %+v", root)
+	}
+	dep := root.Dependencies[0]
+	if dep.Name != "puppetlabs/stdlib" || dep.Version != "9.6.0" || dep.Unresolved || dep.AlreadyInPuppetfile {
+		t.Fatalf("ResolveModule: expected an unresolved-false, not-yet-present puppetlabs/stdlib 9.6.0, got %+v", dep)
+	}
+	if !tree.AdvisoryOnly || tree.AdvisoryMessage == "" {
+		t.Fatalf("ResolveModule: expected an advisory-only tree with a message, got advisory_only=%v message=%q", tree.AdvisoryOnly, tree.AdvisoryMessage)
+	}
+	t.Logf("step 4: resolved %s %s -> %s %s (advisory only: %s)", root.Name, root.Version, dep.Name, dep.Version, tree.AdvisoryMessage)
+
+	// Step 5: write the root, then accept each dependency the tree selected and
+	// the Puppetfile does not yet hold. Resolve never writes; this is the
+	// explicit per-module accept. Names are used exactly as the resolver
+	// returned them.
+	var accepted []*hostv1.DependencyNode
+	var walk func(n *hostv1.DependencyNode)
+	walk = func(n *hostv1.DependencyNode) {
+		for _, d := range n.Dependencies {
+			if d.Unresolved {
+				t.Fatalf("ResolveModule: dependency %s is unresolved; refusing to write it", d.Name)
+			}
+			if !d.AlreadyInPuppetfile {
+				accepted = append(accepted, d)
+			}
+			walk(d)
+		}
+	}
+	accepted = append(accepted, root)
+	walk(root)
+	for _, n := range accepted {
+		mod, err := proposer.AddModule(ctx, "authored", &hostv1.PuppetfileModule{
+			Name:   n.Name,
+			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: n.Version}},
+		})
+		if err != nil {
+			t.Fatalf("AddModule(%s): %v", n.Name, err)
+		}
+		if mod.Name != n.Name || mod.GetForge().GetVersion() != n.Version {
+			t.Fatalf("AddModule: expected %s at %s, got %+v", n.Name, n.Version, mod)
+		}
+		t.Logf("step 5: accepted module %s at %s into authored", mod.Name, mod.GetForge().GetVersion())
+	}
+
+	// Step 6: propose the environment settings through the gate.
 	const proposalID = "settings-authored-1"
 	proposal, err := proposer.ProposeSettings(ctx, proposalID, &hostv1.EnvironmentSettings{
 		Environment:        "authored",
@@ -316,9 +392,9 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if proposal.Status != approval.StatusPending {
 		t.Fatalf("ProposeSettings: expected status %q, got %q", approval.StatusPending, proposal.Status)
 	}
-	t.Logf("step 4: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
+	t.Logf("step 6: proposed settings for authored as %q (status %s)", proposalID, proposal.Status)
 
-	// Step 5: a second persona, holding a token the proposer never saw, approves.
+	// Step 7: a second persona, holding a token the proposer never saw, approves.
 	secret := approverToken(t, h, "operator-ada")
 	approved, err := approver.Approve(ctx, proposalID, secret)
 	if err != nil {
@@ -330,17 +406,17 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if approved.DecidedBy != "operator-ada" {
 		t.Fatalf("Approve: expected DecidedBy %q, got %q", "operator-ada", approved.DecidedBy)
 	}
-	t.Logf("step 5: %s approved %q", approved.DecidedBy, proposalID)
+	t.Logf("step 7: %s approved %q", approved.DecidedBy, proposalID)
 
-	// Step 6: apply immediately after Approve, with no intervening read.
+	// Step 8: apply immediately after Approve, with no intervening read.
 	applied, err := proposer.ApplySettings(ctx, proposalID)
 	if err != nil {
 		t.Fatalf("ApplySettings: %v", err)
 	}
 	assertAuthoredSettings(t, "ApplySettings", applied)
-	t.Logf("step 6: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
+	t.Logf("step 8: applied settings: config_version=%s environment_timeout=%s", applied.GetConfigVersion(), applied.GetEnvironmentTimeout())
 
-	// Step 7: read everything back.
+	// Step 9: read everything back.
 	got, err := proposer.Settings(ctx, "authored")
 	if err != nil {
 		t.Fatalf("Settings: %v", err)
@@ -351,9 +427,17 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderPuppetfile: %v", err)
 	}
-	if want := "mod 'puppetlabs/ntp', '13.2.1'\n"; text != want {
+	if want := "mod 'puppetlabs/ntp', '13.2.1'\nmod 'puppetlabs/stdlib', '9.6.0'\n"; text != want {
 		t.Fatalf("RenderPuppetfile: expected %q, got %q", want, text)
 	}
+	mods, err := proposer.ListModules(ctx, "authored")
+	if err != nil {
+		t.Fatalf("ListModules: %v", err)
+	}
+	if len(mods) != 2 || mods[0].Name != "puppetlabs/ntp" || mods[1].Name != "puppetlabs/stdlib" {
+		t.Fatalf("ListModules: expected [puppetlabs/ntp puppetlabs/stdlib] in insertion order, got %+v", mods)
+	}
+
 	envs, err := proposer.ListEnvironments(ctx)
 	if err != nil {
 		t.Fatalf("ListEnvironments: %v", err)
@@ -361,7 +445,7 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if len(envs) != 2 || envs[0].Name != "authored" || envs[1].Name != "canary" {
 		t.Fatalf("ListEnvironments: expected [authored canary], got %+v", envs)
 	}
-	t.Logf("step 7: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
+	t.Logf("step 9: read back settings, Puppetfile %q and environments [%s %s]", text, envs[0].Name, envs[1].Name)
 }
 
 // assertAuthoredSettings checks the two written fields and that the five
