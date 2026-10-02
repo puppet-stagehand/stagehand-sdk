@@ -25,7 +25,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 
 	"github.com/puppet-stagehand/stagehand-sdk/code"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
@@ -144,10 +143,6 @@ func (s *forgeServer) Search(ctx context.Context, req *hostv1.SearchRequest) (*h
 	if req == nil || req.Query == "" {
 		return nil, status.Error(codes.InvalidArgument, "search query is required")
 	}
-	req = proto.Clone(req).(*hostv1.SearchRequest)
-	if s.client == nil {
-		return nil, status.Error(codes.Unavailable, "forge client is not configured")
-	}
 
 	ep, source, err := s.resolveSource(ctx, req.Source)
 	if err != nil {
@@ -166,10 +161,6 @@ func (s *forgeServer) Search(ctx context.Context, req *hostv1.SearchRequest) (*h
 func (s *forgeServer) Resolve(ctx context.Context, req *hostv1.ResolveRequest) (*hostv1.ResolveResponse, error) {
 	if req == nil || req.Name == "" || req.Version == "" {
 		return nil, status.Error(codes.InvalidArgument, "module name and version are required")
-	}
-	req = proto.Clone(req).(*hostv1.ResolveRequest)
-	if s.client == nil {
-		return nil, status.Error(codes.Unavailable, "forge client is not configured")
 	}
 
 	ep, source, err := s.resolveSource(ctx, req.Source)

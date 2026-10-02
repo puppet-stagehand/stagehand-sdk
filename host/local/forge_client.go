@@ -542,11 +542,6 @@ func newForgeTransportError(msg string) error {
 func (e *forgeTransportError) Error() string              { return e.st.Err().Error() }
 func (e *forgeTransportError) GRPCStatus() *status.Status { return e.st }
 
-func isForgeTransportError(err error) bool {
-	var te *forgeTransportError
-	return errors.As(err, &te)
-}
-
 // ------------------------------------------------------------- validation
 
 // validateForgeBaseURL enforces T-07-05: an absolute https:// URL with a
