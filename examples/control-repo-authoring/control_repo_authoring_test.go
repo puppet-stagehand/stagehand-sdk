@@ -717,6 +717,160 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		}
 	}
 	t.Logf("step 11: inspected %s read-only: canary will overwrite an existing environment, qa_two is new, feature-spike is refused by name and never opened; credential %q reached %d fixture calls and no URL", controlRepoURL, credential, len(remotes))
+
+	// Step 12: propose the import. Both selected branches are pinned to the SHAs
+	// the report showed; a partially pinned selection would be refused.
+	const importID = "import-adopt-1"
+	proposed, err := proposer.ProposeImport(ctx, importID, controlRepoURL, credential, []string{"canary", "qa_two"},
+		map[string]string{"canary": report["canary"].Commit, "qa_two": report["qa_two"].Commit})
+	if err != nil {
+		t.Fatalf("ProposeImport: %v", err)
+	}
+	if proposed.ProposalId != importID || len(proposed.Snapshot.Branches) != 2 ||
+		proposed.Snapshot.Branches[0].Branch != "canary" || proposed.Snapshot.Branches[1].Branch != "qa_two" {
+		t.Fatalf("ProposeImport: expected proposal %q frozen over canary and qa_two, got %+v", importID, proposed)
+	}
+	t.Logf("step 12: proposed import %q over branches canary and qa_two, pinned to the commits the report showed", importID)
+
+	// Step 13: a pending import writes nothing. This refusal carries no
+	// structured error detail, so the assertion is on the gRPC code and on the
+	// absence of written state, never on a message string.
+	if _, err := proposer.ApplyImport(ctx, importID); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("ApplyImport before approval: expected FailedPrecondition, got %v", err)
+	}
+	pendingEnvs, err := proposer.ListEnvironments(ctx)
+	if err != nil {
+		t.Fatalf("ListEnvironments: %v", err)
+	}
+	if len(pendingEnvs) != 2 || pendingEnvs[0].Name != "authored" || pendingEnvs[1].Name != "canary" {
+		t.Fatalf("ApplyImport before approval: expected environments to stay [authored canary], got %+v", pendingEnvs)
+	}
+	if pendingMods, err := proposer.ListModules(ctx, "canary"); err != nil || len(pendingMods) != 0 {
+		t.Fatalf("ApplyImport before approval: expected canary to hold no module, got %+v (err %v)", pendingMods, err)
+	}
+	t.Logf("step 13: apply refused while pending (FailedPrecondition); environments still [authored canary], canary still has no module")
+
+	// Step 14: a person approves, and the apply follows on the same path.
+	importSecret := approverToken(t, h, "operator-grace")
+	decided, err := approver.Approve(ctx, importID, importSecret)
+	if err != nil {
+		t.Fatalf("Approve(import): %v", err)
+	}
+	if decided.Status != approval.StatusApproved {
+		t.Fatalf("Approve(import): expected status %q, got %q", approval.StatusApproved, decided.Status)
+	}
+	imported, err := proposer.ApplyImport(ctx, importID)
+	if err != nil {
+		t.Fatalf("ApplyImport: %v", err)
+	}
+	if len(imported.Environments) != 2 {
+		t.Fatalf("ApplyImport: expected two environments, got %+v", imported.Environments)
+	}
+	t.Logf("step 14: %s approved %q and the apply wrote %d environments", decided.DecidedBy, importID, len(imported.Environments))
+
+	// Step 15: the merge happens at the set-of-environments level. An environment
+	// with no matching branch is outside the import's blast radius.
+	authoredText, err := proposer.RenderPuppetfile(ctx, "authored")
+	if err != nil {
+		t.Fatalf("RenderPuppetfile(authored): %v", err)
+	}
+	if authoredText != text {
+		t.Fatalf("authored Puppetfile changed by the import: expected %q, got %q", text, authoredText)
+	}
+	authoredMods, err := proposer.ListModules(ctx, "authored")
+	if err != nil || len(authoredMods) != 2 {
+		t.Fatalf("authored modules changed by the import: %+v (err %v)", authoredMods, err)
+	}
+	authoredHier, err := proposer.Hierarchy(ctx, "authored")
+	if err != nil {
+		t.Fatalf("Hierarchy(authored): %v", err)
+	}
+	assertCommonLevel(t, "authored hierarchy after import", authoredHier)
+	authoredData, err := proposer.DataFile(ctx, "authored", "common.yaml")
+	if err != nil {
+		t.Fatalf("DataFile(authored): %v", err)
+	}
+	assertScalarKey(t, "authored data after import", authoredData, "profile::ntp::servers", "ntp1.example.test")
+	authoredSettings, err := proposer.Settings(ctx, "authored")
+	if err != nil {
+		t.Fatalf("Settings(authored): %v", err)
+	}
+	assertAuthoredSettings(t, "authored settings after import", authoredSettings)
+
+	// canary was blank, and an existing environment is replaced as a whole: the
+	// apply deletes every document the environment owns before writing the
+	// snapshot. That is why the author step put its content in a different
+	// environment, and why canary now holds the imported content and only that.
+	// The Puppetfile module keeps the hyphenated name exactly as the fixture
+	// Puppetfile spells it, and the data path is relative to the declared
+	// datadir, so hieradata/common.yaml reads back at the bare common.yaml.
+	canaryMods, err := proposer.ListModules(ctx, "canary")
+	if err != nil {
+		t.Fatalf("ListModules(canary): %v", err)
+	}
+	if len(canaryMods) != 1 || canaryMods[0].Name != "puppetlabs-stdlib" || canaryMods[0].GetForge().GetVersion() != "9.4.1" {
+		t.Fatalf("canary modules: expected exactly puppetlabs-stdlib 9.4.1, got %+v", canaryMods)
+	}
+	canaryHier, err := proposer.Hierarchy(ctx, "canary")
+	if err != nil {
+		t.Fatalf("Hierarchy(canary): %v", err)
+	}
+	assertImportedLevel(t, "canary hierarchy", canaryHier)
+	canaryData, err := proposer.DataFile(ctx, "canary", "common.yaml")
+	if err != nil {
+		t.Fatalf("DataFile(canary): %v", err)
+	}
+	assertScalarKey(t, "canary data", canaryData, "profile::ntp::servers", "ntp-canary.example.test")
+	canarySettings, err := proposer.Settings(ctx, "canary")
+	if err != nil {
+		t.Fatalf("Settings(canary): %v", err)
+	}
+	if canarySettings.ConfigVersion == nil || *canarySettings.ConfigVersion != "scripts/canary_config_version.sh" ||
+		canarySettings.EnvironmentTimeout == nil || *canarySettings.EnvironmentTimeout != "10m" {
+		t.Fatalf("canary settings: expected the imported config_version and 10m, got %+v", canarySettings)
+	}
+	if canarySettings.ConfigVersion != nil && *canarySettings.ConfigVersion == "scripts/config_version.sh" {
+		t.Fatalf("canary settings: carry the authored environment's value")
+	}
+
+	// qa_two is new: it exists only because the import created it.
+	qaMods, err := proposer.ListModules(ctx, "qa_two")
+	if err != nil {
+		t.Fatalf("ListModules(qa_two): %v", err)
+	}
+	if len(qaMods) != 1 || qaMods[0].Name != "puppetlabs/apache" || qaMods[0].GetForge().GetVersion() != "12.3.0" {
+		t.Fatalf("qa_two modules: expected exactly puppetlabs/apache 12.3.0, got %+v", qaMods)
+	}
+	qaHier, err := proposer.Hierarchy(ctx, "qa_two")
+	if err != nil {
+		t.Fatalf("Hierarchy(qa_two): %v", err)
+	}
+	assertImportedLevel(t, "qa_two hierarchy", qaHier)
+	qaData, err := proposer.DataFile(ctx, "qa_two", "common.yaml")
+	if err != nil {
+		t.Fatalf("DataFile(qa_two): %v", err)
+	}
+	assertScalarKey(t, "qa_two data", qaData, "profile::apache::docroot", "/srv/qa_two")
+	qaSettings, err := proposer.Settings(ctx, "qa_two")
+	if err != nil {
+		t.Fatalf("Settings(qa_two): %v", err)
+	}
+	if qaSettings.ConfigVersion == nil || *qaSettings.ConfigVersion != "scripts/qa_two_config_version.sh" || qaSettings.EnvironmentTimeout != nil {
+		t.Fatalf("qa_two settings: expected only the imported config_version, got %+v", qaSettings)
+	}
+
+	finalEnvs, err := proposer.ListEnvironments(ctx)
+	if err != nil {
+		t.Fatalf("ListEnvironments(final): %v", err)
+	}
+	gotNames := make([]string, 0, len(finalEnvs))
+	for _, e := range finalEnvs {
+		gotNames = append(gotNames, e.Name)
+	}
+	if want := []string{"authored", "canary", "qa_two"}; !reflect.DeepEqual(gotNames, want) {
+		t.Fatalf("ListEnvironments(final): expected %v in ascending order, got %v", want, gotNames)
+	}
+	t.Logf("step 15: authored untouched; canary replaced wholesale by its branch; qa_two created; environments %v", gotNames)
 }
 
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
@@ -758,6 +912,24 @@ func assertCommonLevel(t *testing.T, label string, hier *hostv1.HieraHierarchy) 
 	lvl := hier.Levels[0]
 	if lvl.Name != "common" || lvl.Path != "common.yaml" || lvl.Datadir != "hieradata" {
 		t.Fatalf("%s: expected level common / common.yaml / hieradata, got %+v", label, lvl)
+	}
+}
+
+// assertImportedLevel checks an imported hierarchy: version 5, one level named
+// common reading common.yaml, and the hieradata datadir the imported hiera.yaml
+// declared as its default.
+func assertImportedLevel(t *testing.T, label string, hier *hostv1.HieraHierarchy) {
+	t.Helper()
+	if hier.GetVersion() != 5 || len(hier.GetLevels()) != 1 {
+		t.Fatalf("%s: expected hierarchy version 5 with one level, got %+v", label, hier)
+	}
+	lvl := hier.Levels[0]
+	datadir := lvl.Datadir
+	if datadir == "" {
+		datadir = hier.DefaultDatadir
+	}
+	if lvl.Name != "common" || lvl.Path != "common.yaml" || datadir != "hieradata" {
+		t.Fatalf("%s: expected level common / common.yaml under datadir hieradata, got %+v", label, hier)
 	}
 }
 
