@@ -735,3 +735,203 @@ func mustStructForTest(t *testing.T, m map[string]any) *structpb.Struct {
 	}
 	return s
 }
+
+// contentFreeCorpus is the exact input list TestDecodeDocEmptyDocument's "empty"
+// half uses, so the read-path relaxation and the write-path guard below cannot
+// drift apart. TestPutDataKeyContentFreeCorpusMatchesDecodeDoc asserts the tie.
+var contentFreeCorpus = []struct{ name, text string }{
+	{"empty", ""},
+	{"whitespace_only", "   \n"},
+	{"bare_document_marker", "---\n"},
+	{"comment_only", "# just a comment\n"},
+	{"document_marker_and_comments", "---\n# a placeholder\n"},
+	{"null_tilde", "~\n"},
+	{"null_word", "null\n"},
+}
+
+// commentLines returns every line of text that starts a comment, in order.
+func commentLines(text string) []string {
+	var out []string
+	for _, l := range strings.Split(text, "\n") {
+		if t := strings.TrimSpace(l); strings.HasPrefix(t, "#") {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func TestPutDataKeyContentFreeCorpusMatchesDecodeDoc(t *testing.T) {
+	for _, tc := range contentFreeCorpus {
+		if doc, err := decodeDoc(tc.text); err != nil || doc != nil {
+			t.Errorf("%s: decodeDoc(%q) = %v, %v; the corpus must stay content-free", tc.name, tc.text, doc, err)
+		}
+	}
+}
+
+// TestPutDataKeyKeepsContentFreeComments pins WR-01: decodeDoc's empty-document
+// relaxation is a read-path relaxation, and before the guard PutDataKey treated
+// "no document" as "unauthored" and re-encoded from scratch, silently deleting a
+// comment-only data file's text (Phase 6 HIERA-04, DQ-6-R). Flattening the
+// doc == nil branch in PutDataKey again fails this test.
+func TestPutDataKeyKeepsContentFreeComments(t *testing.T) {
+	// Every shape the read path accepts as empty is writable, and every comment in
+	// the input survives into the output.
+	for _, tc := range contentFreeCorpus {
+		t.Run("corpus/"+tc.name, func(t *testing.T) {
+			out, err := PutDataKey(tc.text, "written", jsonScalar(t, "v"))
+			if err != nil {
+				t.Fatalf("PutDataKey(%q): %v", tc.text, err)
+			}
+			want, got := commentLines(tc.text), commentLines(out)
+			if strings.Join(want, "|") != strings.Join(got, "|") {
+				t.Errorf("comments = %q, want %q; output:\n%s", got, want, out)
+			}
+			df, err := ParseDataFile(out)
+			if err != nil {
+				t.Fatalf("ParseDataFile(output): %v\n%s", err, out)
+			}
+			if len(df.Values) != 1 || df.Values["written"] == nil {
+				t.Errorf("Values = %v, want exactly the written key", df.Values)
+			}
+		})
+	}
+
+	t.Run("blank_text_has_no_preamble", func(t *testing.T) {
+		for _, in := range []string{"", "   \n", "\n\n"} {
+			out, err := PutDataKey(in, "k", jsonScalar(t, "v"))
+			if err != nil || out != "k: v\n" {
+				t.Errorf("PutDataKey(%q) = %q, %v; want a bare one-key document", in, out, err)
+			}
+		}
+	})
+
+	t.Run("multi_line_header_keeps_order_and_spacing", func(t *testing.T) {
+		in := "# IMPORTANT: do not edit by hand\n# owner: team-a\n\n# second paragraph\n"
+		out, err := PutDataKey(in, "k", jsonScalar(t, "v"))
+		if err != nil {
+			t.Fatalf("PutDataKey: %v", err)
+		}
+		if !strings.HasPrefix(out, in) {
+			t.Errorf("output does not begin with the original text verbatim:\n%s", out)
+		}
+		df, err := ParseDataFile(out)
+		if err != nil || len(df.Values) != 1 {
+			t.Fatalf("ParseDataFile = %v, %v", df, err)
+		}
+	})
+
+	t.Run("comment_above_marker_and_null_root", func(t *testing.T) {
+		for _, in := range []string{
+			"# header\n---\n",
+			"# header\n~\n",
+			"# header\nnull\n",
+			"# header\n---\n~\n# footer\n",
+		} {
+			out, err := PutDataKey(in, "k", jsonScalar(t, "v"))
+			if err != nil {
+				t.Fatalf("PutDataKey(%q): %v", in, err)
+			}
+			if !strings.Contains(out, "# header") {
+				t.Errorf("PutDataKey(%q) lost the header:\n%s", in, out)
+			}
+			if strings.Contains(out, "---") || strings.Contains(out, "~") || strings.Contains(out, "null") {
+				t.Errorf("PutDataKey(%q) kept a token line:\n%s", in, out)
+			}
+			if _, err := ParseDataFile(out); err != nil {
+				t.Errorf("ParseDataFile(%q output): %v", in, err)
+			}
+		}
+	})
+
+	t.Run("trailing_comment_on_token_line_is_kept", func(t *testing.T) {
+		for _, tc := range []struct{ in, comment string }{
+			{"~ # nothing here yet\n", "# nothing here yet"},
+			{"--- # placeholder\n", "# placeholder"},
+			{"null   # unset\n", "# unset"},
+		} {
+			out, err := PutDataKey(tc.in, "k", jsonScalar(t, "v"))
+			if err != nil {
+				t.Fatalf("PutDataKey(%q): %v", tc.in, err)
+			}
+			if !strings.HasPrefix(out, tc.comment+"\n") {
+				t.Errorf("PutDataKey(%q) = %q, want it to begin with the kept comment %q on its own line", tc.in, out, tc.comment)
+			}
+			if _, err := ParseDataFile(out); err != nil {
+				t.Errorf("ParseDataFile(%q output): %v", tc.in, err)
+			}
+		}
+	})
+
+	t.Run("byte_order_mark_is_tolerated_and_kept", func(t *testing.T) {
+		in := "\ufeff# header\n"
+		out, err := PutDataKey(in, "k", jsonScalar(t, "v"))
+		if err != nil {
+			t.Fatalf("PutDataKey: %v", err)
+		}
+		if !strings.HasPrefix(out, "\ufeff# header\n") {
+			t.Errorf("BOM or header lost: %q", out)
+		}
+		if _, err := ParseDataFile(out); err != nil {
+			t.Errorf("ParseDataFile(output): %v", err)
+		}
+	})
+
+	t.Run("crlf_comment_file", func(t *testing.T) {
+		out, err := PutDataKey("# header\r\n# more\r\n", "k", jsonScalar(t, "v"))
+		if err != nil {
+			t.Fatalf("PutDataKey: %v", err)
+		}
+		if got := commentLines(out); len(got) != 2 || got[0] != "# header" || got[1] != "# more" {
+			t.Errorf("comments = %q", got)
+		}
+	})
+
+	t.Run("a_second_write_keeps_the_preserved_comments", func(t *testing.T) {
+		first, err := PutDataKey("# header\n", "a", jsonScalar(t, "1"))
+		if err != nil {
+			t.Fatalf("first PutDataKey: %v", err)
+		}
+		second, err := PutDataKey(first, "b", jsonScalar(t, "2"))
+		if err != nil {
+			t.Fatalf("second PutDataKey: %v", err)
+		}
+		if !strings.Contains(second, "# header") {
+			t.Errorf("header lost on the second write:\n%s", second)
+		}
+	})
+
+	// Content-free text the classifier does not understand is refused, never
+	// rewritten, and the return is empty. These all decode to "no document" in
+	// decodeDoc (a tagged or anchored null root) but are not a token the
+	// preserving helper recognises, so dropping the line would be a guess.
+	for _, tc := range []struct{ name, text string }{
+		{"tagged_null_after_marker", "# c\n--- !!null\n"},
+		{"tagged_null_alone", "!!null\n"},
+		{"anchored_null", "# c\n&a ~\n"},
+		{"tagged_null_with_comment", "--- !!null # c\n"},
+	} {
+		t.Run("refused/"+tc.name, func(t *testing.T) {
+			if doc, err := decodeDoc(tc.text); err != nil || doc != nil {
+				t.Fatalf("test premise broken: decodeDoc(%q) = %v, %v; want content-free", tc.text, doc, err)
+			}
+			out, err := PutDataKey(tc.text, "k", jsonScalar(t, "v"))
+			if !errors.Is(err, ErrHieraInvalid) {
+				t.Fatalf("PutDataKey(%q) err = %v, want ErrHieraInvalid", tc.text, err)
+			}
+			if out != "" {
+				t.Errorf("PutDataKey(%q) returned %q alongside an error", tc.text, out)
+			}
+			if !strings.Contains(err.Error(), "no content") || !strings.Contains(err.Error(), "refused") {
+				t.Errorf("error does not explain the refusal: %v", err)
+			}
+		})
+	}
+
+	// Text with real (but non-mapping) content never reaches the helper: it is
+	// still the read path's parse error, unchanged.
+	for _, in := range []string{"# c\n--- foo\n", "---# c\n", "# c\nnull foo\n"} {
+		if _, err := PutDataKey(in, "k", jsonScalar(t, "v")); !errors.Is(err, ErrHieraParse) {
+			t.Errorf("PutDataKey(%q) err = %v, want ErrHieraParse", in, err)
+		}
+	}
+}

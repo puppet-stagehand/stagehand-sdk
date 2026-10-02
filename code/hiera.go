@@ -97,6 +97,70 @@ func decodeDoc(text string) (*yaml.Node, error) {
 	return &doc, nil
 }
 
+// contentFreePreamble classifies text that decodeDoc reported as having no
+// document, and returns the comment preamble a write path must keep above
+// whatever it writes. It must be called only for non-blank text for which
+// decodeDoc returned no document.
+//
+// decodeDoc's empty-document relaxation (a comment-only file, a bare "---", a
+// null root) is a read-path relaxation: it is what lets a placeholder
+// common.yaml import and read without a false error. On a write path the same
+// text is a third state, neither "unauthored" (blank) nor "a document": re-encoding
+// it from scratch would silently destroy the operator's comments, which is the
+// WR-01 regression (Phase 6's HIERA-04 promise that an edit never destroys
+// comments, DQ-6-R). So the comment lines are preserved here, and anything the
+// helper cannot classify is refused rather than rewritten on a guess.
+//
+// Every line is exactly one of three things. A blank line or a comment line is
+// kept verbatim, which preserves both the comment text and the spacing between
+// comments. A line made only of document-start, document-end or null tokens (the
+// shapes decodeDoc treats as empty) is dropped, because the written mapping
+// replaces it, except that a trailing comment on such a line is kept as its own
+// line. Anything else returns an error wrapping ErrHieraInvalid. A leading
+// byte-order mark is tolerated and kept. The result is empty, or ends in exactly
+// one newline.
+func contentFreePreamble(text string) (string, error) {
+	const bom = "\ufeff"
+	hasBOM := strings.HasPrefix(text, bom)
+	text = strings.TrimPrefix(text, bom)
+
+	var kept []string
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			kept = append(kept, line)
+			continue
+		}
+		rest := trimmed
+		for rest != "" {
+			if rest[0] == '#' {
+				kept = append(kept, rest)
+				break
+			}
+			end := strings.IndexAny(rest, " \t")
+			if end < 0 {
+				end = len(rest)
+			}
+			switch rest[:end] {
+			case "---", "...", "~", "null", "Null", "NULL":
+			default:
+				return "", fmt.Errorf("%w: the document has comments or markers but no content, and %q cannot be classified as either; the write was refused rather than rewriting the file and dropping it", ErrHieraInvalid, trimmed)
+			}
+			rest = strings.TrimLeft(rest[end:], " \t")
+		}
+	}
+
+	out := strings.TrimRight(strings.Join(kept, "\n"), "\n \t")
+	if strings.TrimSpace(out) == "" {
+		return "", nil
+	}
+	if hasBOM {
+		out = bom + out
+	}
+	return out + "\n", nil
+}
+
 // encodeDoc re-encodes doc (a document node, as returned by decodeDoc or
 // built by emptyMappingDoc) to text with two-space indentation at every
 // nesting level. The encoder is explicitly closed before the buffer is
@@ -812,7 +876,11 @@ func formatNumber(f float64) string {
 // refused write cannot leave a half-decoded document behind:
 // lookup_options is readable for display and not writable this
 // milestone (HIERA-03). Empty or whitespace-only input text starts from
-// a fresh empty mapping document.
+// a fresh empty mapping document. Text that carries only comments or
+// empty-document markers (a placeholder "# do not edit by hand" file, a bare
+// "---", a null root) keeps its comments above the written key; content-free
+// text that cannot be classified that way is refused with an error wrapping
+// ErrHieraInvalid and an empty return, never rewritten (DQ-6-R, WR-01).
 func PutDataKey(yamlText string, key string, value *hostv1.Json) (string, error) {
 	if key == "lookup_options" {
 		return "", fmt.Errorf("%w: lookup_options is read-only this milestone", ErrHieraInvalid)
@@ -821,7 +889,13 @@ func PutDataKey(yamlText string, key string, value *hostv1.Json) (string, error)
 	if err != nil {
 		return "", err
 	}
+	preamble := ""
 	if doc == nil {
+		if strings.TrimSpace(yamlText) != "" {
+			if preamble, err = contentFreePreamble(yamlText); err != nil {
+				return "", err
+			}
+		}
 		doc = emptyMappingDoc()
 	}
 	m := rootMapping(doc)
@@ -830,7 +904,11 @@ func PutDataKey(yamlText string, key string, value *hostv1.Json) (string, error)
 		return "", err
 	}
 	setMapValue(m, key, valNode)
-	return encodeDoc(doc)
+	out, err := encodeDoc(doc)
+	if err != nil {
+		return "", err
+	}
+	return preamble + out, nil
 }
 
 // DataKeyExists reports whether yamlText's top-level mapping holds a key named
