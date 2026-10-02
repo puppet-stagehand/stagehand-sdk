@@ -524,14 +524,23 @@ func LevelByName(yamlText, name string) (*hostv1.HieraLevel, bool, error) {
 // bounds); insert=false replaces the level whose name matches level.Name
 // in place and ignores index, returning an error wrapping ErrHieraInvalid
 // when no level carries that name. Empty or whitespace-only input text
-// starts from EmptyHierarchy(). Every failure returns an error and an
-// empty string, never a partially-edited document.
+// starts from EmptyHierarchy(). Text that carries only comments or
+// empty-document markers keeps its comments above the emitted hierarchy;
+// content-free text that cannot be classified that way is refused with an error
+// wrapping ErrHieraInvalid (DQ-6-R, WR-01). Every failure returns an error and
+// an empty string, never a partially-edited document.
 func PutLevel(yamlText string, level *hostv1.HieraLevel, index int32, insert bool) (string, error) {
 	doc, err := decodeDoc(yamlText)
 	if err != nil {
 		return "", err
 	}
+	preamble := ""
 	if doc == nil {
+		if strings.TrimSpace(yamlText) != "" {
+			if preamble, err = contentFreePreamble(yamlText); err != nil {
+				return "", err
+			}
+		}
 		doc, err = decodeDoc(EmptyHierarchy())
 		if err != nil {
 			return "", err
@@ -563,7 +572,11 @@ func PutLevel(yamlText string, level *hostv1.HieraLevel, index int32, insert boo
 		seq.Content[i] = newNode
 	}
 
-	return encodeDoc(doc)
+	out, err := encodeDoc(doc)
+	if err != nil {
+		return "", err
+	}
+	return preamble + out, nil
 }
 
 // RemoveLevel drops the named level from yamlText's hierarchy sequence

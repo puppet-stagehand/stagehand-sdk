@@ -935,3 +935,90 @@ func TestPutDataKeyKeepsContentFreeComments(t *testing.T) {
 		}
 	}
 }
+
+// TestPutLevelKeepsContentFreeComments is the hierarchy half of the WR-01 pin:
+// PutLevel against a comment-only hiera.yaml used to start from EmptyHierarchy()
+// and drop the text. Flattening the doc == nil branch in PutLevel fails this.
+func TestPutLevelKeepsContentFreeComments(t *testing.T) {
+	level := &hostv1.HieraLevel{Name: "common", Path: "common.yaml"}
+
+	for _, tc := range contentFreeCorpus {
+		t.Run("corpus/"+tc.name, func(t *testing.T) {
+			out, err := PutLevel(tc.text, level, 0, true)
+			if err != nil {
+				t.Fatalf("PutLevel(%q): %v", tc.text, err)
+			}
+			if want, got := commentLines(tc.text), commentLines(out); strings.Join(want, "|") != strings.Join(got, "|") {
+				t.Errorf("comments = %q, want %q; output:\n%s", got, want, out)
+			}
+			h, err := ParseHierarchy(out)
+			if err != nil {
+				t.Fatalf("ParseHierarchy(output): %v\n%s", err, out)
+			}
+			if h.Version != 5 || len(h.Levels) != 1 || h.Levels[0].Name != "common" {
+				t.Errorf("hierarchy = %+v, want version 5 with the one written level", h)
+			}
+		})
+	}
+
+	t.Run("comment_only_file_keeps_header_verbatim", func(t *testing.T) {
+		in := "# managed by team-a\n# do not reorder\n"
+		out, err := PutLevel(in, level, 0, true)
+		if err != nil {
+			t.Fatalf("PutLevel: %v", err)
+		}
+		if !strings.HasPrefix(out, in+"version: 5\n") {
+			t.Errorf("output = %q, want the header followed by the skeleton", out)
+		}
+	})
+
+	t.Run("blank_text_has_no_preamble", func(t *testing.T) {
+		for _, in := range []string{"", "   \n"} {
+			out, err := PutLevel(in, level, 0, true)
+			if err != nil || !strings.HasPrefix(out, "version: 5\n") {
+				t.Errorf("PutLevel(%q) = %q, %v; want the bare skeleton", in, out, err)
+			}
+		}
+	})
+
+	t.Run("byte_order_mark_is_tolerated_and_kept", func(t *testing.T) {
+		out, err := PutLevel("\ufeff# header\n", level, 0, true)
+		if err != nil || !strings.HasPrefix(out, "\ufeff# header\n") {
+			t.Fatalf("PutLevel = %q, %v", out, err)
+		}
+		if _, err := ParseHierarchy(out); err != nil {
+			t.Errorf("ParseHierarchy(output): %v", err)
+		}
+	})
+
+	for _, tc := range []struct{ name, text string }{
+		{"tagged_null_after_marker", "# c\n--- !!null\n"},
+		{"anchored_null", "# c\n&a ~\n"},
+	} {
+		t.Run("refused/"+tc.name, func(t *testing.T) {
+			out, err := PutLevel(tc.text, level, 0, true)
+			if !errors.Is(err, ErrHieraInvalid) || out != "" {
+				t.Errorf("PutLevel(%q) = %q, %v; want empty and ErrHieraInvalid", tc.text, out, err)
+			}
+		})
+	}
+}
+
+// TestSiblingMutatorsRefuseContentFreeDocuments records the WR-01 audit: the
+// node-tree mutators other than the two Put functions never rebuild a document
+// from nothing, they refuse one, so there is no second instance of the defect.
+func TestSiblingMutatorsRefuseContentFreeDocuments(t *testing.T) {
+	for _, tc := range contentFreeCorpus {
+		t.Run(tc.name, func(t *testing.T) {
+			if out, err := RemoveLevel(tc.text, "x"); !errors.Is(err, ErrHieraInvalid) || out != "" {
+				t.Errorf("RemoveLevel = %q, %v", out, err)
+			}
+			if out, err := ReorderLevels(tc.text, []string{"x"}); !errors.Is(err, ErrHieraInvalid) || out != "" {
+				t.Errorf("ReorderLevels = %q, %v", out, err)
+			}
+			if out, err := RemoveDataKey(tc.text, "x"); !errors.Is(err, ErrHieraInvalid) || out != "" {
+				t.Errorf("RemoveDataKey = %q, %v", out, err)
+			}
+		})
+	}
+}

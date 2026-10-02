@@ -1480,6 +1480,71 @@ func TestCodeOverwriteHieraDataKey(t *testing.T) {
 	})
 }
 
+// TestCodeOverwriteHieraDataKeyKeepsCommentOnlyHeader proves the approved write
+// path does not erase a comment-only data file's text (WR-01, IMP-05). The
+// approval gate exists so a human sees exactly what will be written; a write
+// that silently deletes the header they were looking at defeats the gate rather
+// than merely losing a comment, so this is a distinct case from the direct-path
+// comment test and must not be folded into it.
+func TestCodeOverwriteHieraDataKeyKeepsCommentOnlyHeader(t *testing.T) {
+	ctx := context.Background()
+	const header = "# IMPORTANT: do not edit by hand\n# owner: team-a\n"
+	seed := func(t *testing.T, text string) *host.Host {
+		h := newHieraHost(t)
+		seedDoc(t, h, ctx, "code-hiera-data", "prod/placeholder.yaml", map[string]any{"path": "placeholder.yaml", "yaml": text})
+		return h
+	}
+
+	t.Run("an approved overwrite keeps the comment and writes the key once", func(t *testing.T) {
+		h := seed(t, header)
+		proposeHieraDataKey(t, h, "p1", "prod", "placeholder.yaml", "port", scalarJSON(t, float64(9090)))
+		approveOverwrite(t, h, "p1")
+		df, err := applyHieraDataKey(h, "p1")
+		if err != nil {
+			t.Fatalf("ApplyHieraDataKeyOverwrite: %v", err)
+		}
+		if got := df.Values["port"].Value.AsMap()["v"]; got != float64(9090) {
+			t.Fatalf("port = %v, want 9090", got)
+		}
+		text := hieraDataTextRaw(t, h, ctx, "prod", "placeholder.yaml")
+		if !strings.HasPrefix(text, header) || !strings.Contains(text, "9090") {
+			t.Fatalf("the header was not kept above the written key:\n%s", text)
+		}
+		// The proposal is spent exactly once: a replay is idempotent and does not rewrite.
+		again, err := applyHieraDataKey(h, "p1")
+		if err != nil || !proto.Equal(df, again) {
+			t.Fatalf("replay: %v, %v", again, err)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "placeholder.yaml"); got != text {
+			t.Fatalf("replay changed the yaml:\n%q\n%q", text, got)
+		}
+	})
+
+	t.Run("a refused write leaves the file untouched and the proposal unspent", func(t *testing.T) {
+		const unclassifiable = "# header\n--- !!null\n"
+		h := seed(t, unclassifiable)
+		proposeHieraDataKey(t, h, "p1", "prod", "placeholder.yaml", "port", scalarJSON(t, float64(9090)))
+		approveOverwrite(t, h, "p1")
+		if _, err := applyHieraDataKey(h, "p1"); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("unclassifiable content-free file: got %v, want InvalidArgument", err)
+		}
+		if got := hieraDataTextRaw(t, h, ctx, "prod", "placeholder.yaml"); got != unclassifiable {
+			t.Fatalf("a refused Apply wrote:\n%q", got)
+		}
+		// Fix the file; the same proposal still applies, so the refusal did not spend it.
+		cur, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/placeholder.yaml")
+		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: "code-hiera-data", DocId: "prod/placeholder.yaml", IfVersion: cur.Version,
+			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"path": "placeholder.yaml", "yaml": header})},
+		}); err != nil {
+			t.Fatalf("fixing the file: %v", err)
+		}
+		if _, err := applyHieraDataKey(h, "p1"); err != nil {
+			t.Fatalf("Apply after fixing the file: %v", err)
+		}
+	})
+}
+
 // TestCodeOverwriteAllApplyRPCsRequireCodeRW proves each of the five Apply
 // RPCs is reachable only through the gate and needs code:rw and nothing
 // narrower: a host with no code:rw is denied before any proposal is read, and
