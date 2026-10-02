@@ -111,6 +111,14 @@ type execGitClient struct {
 	// OS default. A test points it at a private directory so it can assert
 	// that nothing survives.
 	tempRoot string
+	// knownHostsPath is the one file from the operator's home that an ssh child
+	// may read: the host keys StrictHostKeyChecking=yes verifies against. It is
+	// resolved once at construction and handed to ssh as an explicit
+	// -o UserKnownHostsFile= argument, so the child's HOME can stay the scratch
+	// directory. It is /dev/null when the home directory cannot be worked out,
+	// which makes every host unverifiable and so refused (DQ-7-R-a). A test may
+	// point it at a scratch file.
+	knownHostsPath string
 
 	discoveryTimeout time.Duration
 	fetchTimeout     time.Duration
@@ -133,6 +141,7 @@ func newExecGitClient() *execGitClient {
 	c := &execGitClient{
 		allowedProtocols: "https:ssh",
 		validateURL:      validateGitURL,
+		knownHostsPath:   defaultKnownHostsPath(),
 		discoveryTimeout: gitDiscoveryTimeout,
 		fetchTimeout:     gitFetchTimeout,
 		localTimeout:     gitLocalTimeout,
@@ -188,8 +197,8 @@ func (c *execGitClient) probeVersion() error {
 }
 
 // gitCall is the per-call scratch space: one private temp directory, which is
-// also the child's working directory and HOME (except on the ssh path, see
-// newCall), and the child's environments. env is the network environment and
+// also the child's working directory and HOME on every path, and the child's
+// environments. env is the network environment and
 // may carry a credential; localEnv never does and is the only environment the
 // long-lived repo reader keeps.
 type gitCall struct {
@@ -267,16 +276,45 @@ case "$1" in
 esac
 `
 
-// sshCommand builds GIT_SSH_COMMAND. The key is named by path, never by
-// content. StrictHostKeyChecking=yes checks the host against the operator's
-// existing known_hosts and BatchMode=yes forbids any prompt; IdentitiesOnly
-// stops ssh offering other keys when one is supplied (DQ-7, T-10-37).
-func sshCommand(keyPath string) string {
-	cmd := "ssh"
-	if keyPath != "" {
-		cmd += " -i " + shellSingleQuote(keyPath) + " -o IdentitiesOnly=yes"
+// defaultKnownHostsPath resolves the operator's conventional known_hosts file
+// once, at client construction. It is the only thing an ssh child learns about
+// the operator's home directory. When the home directory cannot be determined
+// it returns /dev/null: every host then fails verification, which is the
+// documented host-key refusal rather than a laxer policy. Not knowing something
+// is never a reason to widen (DQ-7-R-a, the DQ-11 precedent, T-10-37).
+func defaultKnownHostsPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "/dev/null"
 	}
-	return cmd + " -o BatchMode=yes -o StrictHostKeyChecking=yes"
+	return filepath.Join(home, ".ssh", "known_hosts")
+}
+
+// sshCommand builds GIT_SSH_COMMAND. ssh is configured entirely from this
+// command line and reads nothing else: -F /dev/null drops the operator's ssh
+// configuration (and the system-wide one), IdentityAgent=none drops any agent,
+// and exactly one identity selector is given. With no credential named that is
+// IdentityFile=none, which is what makes an empty credential name a genuinely
+// anonymous fetch instead of implicitly the operator (D-02, CR-01, T-10-50).
+// With a credential it is -i on the 0600 key file, which suppresses ssh's
+// default ~/.ssh/id_* list only while that file is readable: the host writes
+// the key before building this command, and the test that proves it uses a file
+// that exists. IdentitiesOnly=yes stops ssh offering anything beyond that one
+// identity. The key travels as a path, never as content.
+//
+// Host-key verification is unchanged and strict: StrictHostKeyChecking=yes
+// against the single explicit knownHosts file, BatchMode=yes forbids any
+// prompt, and an unknown host is refused rather than trusted on first use
+// (T-10-37, T-10-52). Both paths are single-quoted because git runs this string
+// through a shell.
+func sshCommand(keyPath, knownHosts string) string {
+	identity := "-o IdentityFile=none"
+	if keyPath != "" {
+		identity = "-i " + shellSingleQuote(keyPath)
+	}
+	return "ssh -F /dev/null -o BatchMode=yes -o StrictHostKeyChecking=yes" +
+		" -o UserKnownHostsFile=" + shellSingleQuote(knownHosts) +
+		" -o IdentityAgent=none -o IdentitiesOnly=yes " + identity
 }
 
 // shellSingleQuote quotes s for the POSIX shell git runs GIT_SSH_COMMAND with.
@@ -290,11 +328,14 @@ func shellSingleQuote(s string) string { return "'" + strings.ReplaceAll(s, "'",
 // 0600 file named by GIT_SSH_COMMAND -i. Never argv, never the URL, never
 // persisted (D-02, RESEARCH Pitfall 7, T-10-11).
 //
-// HOME is the temp directory on every path except ssh. The ssh path needs the
-// operator's real HOME for exactly one reason: StrictHostKeyChecking=yes reads
-// the operator's ~/.ssh/known_hosts. That single passthrough is what the
-// host-key policy costs (DQ-7, T-10-37); nothing else reads it, and the
-// operator's git config is still ignored through GIT_CONFIG_GLOBAL.
+// HOME is the temp directory on every path, ssh included. An earlier design
+// passed the operator's real HOME to the ssh child so known_hosts was readable
+// and claimed nothing else read it. That claim was false: ssh resolved the
+// operator's ~/.ssh/config, agent socket and default ~/.ssh/id_* keys, so a
+// credential-less import fetched private repositories as the operator (CR-01).
+// Now the one thing ssh needs from the operator's home, the known_hosts file,
+// crosses as an explicit -o UserKnownHostsFile= argument (c.knownHostsPath) and
+// nothing else does (D-02, D-04, DQ-7-R).
 //
 // Documented fallback, not used: git >= 2.31 can carry an https token as
 // GIT_CONFIG_COUNT/GIT_CONFIG_KEY_0=http.<url>.extraHeader. It would need URL
@@ -305,15 +346,7 @@ func (c *execGitClient) newCall(r GitRemote) (*gitCall, error) {
 	if err != nil {
 		return nil, status.Error(codes.Internal, "git scratch directory could not be created")
 	}
-	call := &gitCall{dir: dir, localEnv: c.baseEnv(dir)}
-	ssh := isSSHRemote(r.URL)
-	home := dir
-	if ssh {
-		if h := os.Getenv("HOME"); h != "" {
-			home = h
-		}
-	}
-	call.env = c.baseEnv(home)
+	call := &gitCall{dir: dir, localEnv: c.baseEnv(dir), env: c.baseEnv(dir)}
 
 	fail := func() (*gitCall, error) {
 		call.cleanup()
@@ -347,8 +380,8 @@ func (c *execGitClient) newCall(r GitRemote) (*gitCall, error) {
 			}
 		}
 	}
-	if ssh {
-		call.env = append(call.env, "GIT_SSH_COMMAND="+sshCommand(keyPath))
+	if isSSHRemote(r.URL) {
+		call.env = append(call.env, "GIT_SSH_COMMAND="+sshCommand(keyPath, c.knownHostsPath))
 	}
 	return call, nil
 }
@@ -363,8 +396,10 @@ func writeFileMode(path string, data []byte, mode os.FileMode) error {
 
 // baseEnv is the scrubbed environment every git child runs under: no operator
 // config (GIT_CONFIG_GLOBAL, GIT_CONFIG_NOSYSTEM), no prompting, only the
-// allowed transports, and HOME pointed at the temp directory so nothing under
-// the operator's home is read (D-04).
+// allowed transports, and HOME pointed at the per-call temp directory on every
+// path, ssh included, so nothing under the operator's home is reachable by a
+// child; the one known_hosts file ssh needs is named explicitly instead
+// (D-04, DQ-7-R).
 func (c *execGitClient) baseEnv(home string) []string {
 	return []string{
 		"PATH=" + os.Getenv("PATH"),

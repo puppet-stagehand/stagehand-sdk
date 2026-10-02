@@ -1069,16 +1069,28 @@ func TestGitExec_CredentialHygiene(t *testing.T) {
 		if keyPath == "" || !strings.Contains(cmdline, keyPath) {
 			t.Fatalf("GIT_SSH_COMMAND %q does not name the key file %q", cmdline, keyPath)
 		}
-		for _, want := range []string{"StrictHostKeyChecking=yes", "IdentitiesOnly=yes", "BatchMode=yes"} {
+		for _, want := range []string{
+			"-F /dev/null", "StrictHostKeyChecking=yes", "IdentitiesOnly=yes", "BatchMode=yes",
+			"IdentityAgent=none", "UserKnownHostsFile=",
+		} {
 			if !strings.Contains(cmdline, want) {
 				t.Fatalf("GIT_SSH_COMMAND %q lacks %s", cmdline, want)
 			}
 		}
+		if !strings.Contains(cmdline, shellSingleQuote(c.knownHostsPath)) {
+			t.Fatalf("GIT_SSH_COMMAND %q does not name the pinned known_hosts %q", cmdline, c.knownHostsPath)
+		}
+		if strings.Contains(cmdline, "IdentityFile=none") {
+			t.Fatalf("a keyed fetch must not pin IdentityFile=none: %q", cmdline)
+		}
 		if ls, _ := net.has("KEY-LS: "); !strings.HasPrefix(ls, "-rw-------") {
 			t.Fatalf("key file listing = %q, want mode 0600", ls)
 		}
-		if v, _ := net.has("HOME="); v != os.Getenv("HOME") {
-			t.Fatalf("HOME on the ssh path = %q, want the operator's %q so known_hosts is readable", v, os.Getenv("HOME"))
+		if v, _ := net.has("HOME="); strings.HasPrefix(v, os.Getenv("HOME")) && os.Getenv("HOME") != "" {
+			t.Fatalf("HOME on the ssh path is the operator's home: %q", v)
+		}
+		if v, _ := net.has("HOME="); !strings.HasPrefix(v, c.tempRoot) {
+			t.Fatalf("HOME on the ssh path = %q, want inside %q", v, c.tempRoot)
 		}
 		if _, err := os.Stat(keyPath); !os.IsNotExist(err) {
 			t.Fatalf("the key file survived the call: %s (%v)", keyPath, err)
@@ -1090,7 +1102,7 @@ func TestGitExec_CredentialHygiene(t *testing.T) {
 		assertTempRootEmpty(t, c.tempRoot)
 	})
 
-	t.Run("an anonymous ssh fetch still gets the strict policy and no key", func(t *testing.T) {
+	t.Run("an anonymous ssh fetch still gets the strict policy and no identity at all", func(t *testing.T) {
 		if _, err := exec.LookPath("ssh"); err != nil {
 			t.Skip("ssh is not on PATH; the ssh path needs it to be invoked")
 		}
@@ -1108,13 +1120,291 @@ func TestGitExec_CredentialHygiene(t *testing.T) {
 				cmdline, _ = b.has("GIT_SSH_COMMAND=")
 			}
 		}
-		for _, want := range []string{"StrictHostKeyChecking=yes", "BatchMode=yes"} {
+		for _, want := range []string{
+			"-F /dev/null", "StrictHostKeyChecking=yes", "BatchMode=yes", "IdentityAgent=none",
+			"IdentitiesOnly=yes", "IdentityFile=none", "UserKnownHostsFile=",
+		} {
 			if !strings.Contains(cmdline, want) {
 				t.Fatalf("GIT_SSH_COMMAND %q lacks %s", cmdline, want)
 			}
 		}
+		if !strings.Contains(cmdline, shellSingleQuote(c.knownHostsPath)) {
+			t.Fatalf("GIT_SSH_COMMAND %q does not name the pinned known_hosts %q", cmdline, c.knownHostsPath)
+		}
 		if strings.Contains(cmdline, " -i ") {
 			t.Fatalf("an anonymous fetch named a key: %q", cmdline)
 		}
+		var home string
+		for _, b := range readShimLog(t, logPath) {
+			if strings.Contains(b.argv, "ls-remote") {
+				home, _ = b.has("HOME=")
+			}
+		}
+		if home == "" || !strings.HasPrefix(home, c.tempRoot) || (os.Getenv("HOME") != "" && strings.HasPrefix(home, os.Getenv("HOME"))) {
+			t.Fatalf("HOME on the anonymous ssh path = %q, want inside %q and never the operator's", home, c.tempRoot)
+		}
+	})
+}
+
+// sshCallCommand builds an ssh per-call scratch space for remote on client c
+// and returns the GIT_SSH_COMMAND the child would be handed, the child's HOME,
+// and the call itself (so a test can inspect the credential directory). The
+// call is cleaned up with the test.
+func sshCallCommand(t *testing.T, c *execGitClient, remote GitRemote) (cmdline, home string, call *gitCall) {
+	t.Helper()
+	call, err := c.newCall(remote)
+	if err != nil {
+		t.Fatalf("newCall: %v", err)
+	}
+	t.Cleanup(func() { _ = call.cleanup() })
+	for _, kv := range call.env {
+		if v, ok := strings.CutPrefix(kv, "GIT_SSH_COMMAND="); ok {
+			cmdline = v
+		}
+		if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+			home = v
+		}
+	}
+	if cmdline == "" {
+		t.Fatal("GIT_SSH_COMMAND was not set on the ssh path")
+	}
+	return cmdline, home, call
+}
+
+// sshArgv runs cmdline through sh -c with the leading "ssh" replaced by printf,
+// exactly as git would run it, and returns the argv elements the shell
+// produced. It proves the quoting of every path survives a real shell without
+// re-implementing the quoting in the test.
+func sshArgv(t *testing.T, cmdline string) []string {
+	t.Helper()
+	rest, ok := strings.CutPrefix(cmdline, "ssh ")
+	if !ok {
+		t.Fatalf("GIT_SSH_COMMAND does not start with ssh: %q", cmdline)
+	}
+	out, err := exec.Command("sh", "-c", "printf '%s\\n' "+rest).Output()
+	if err != nil {
+		t.Fatalf("the shell could not parse %q: %v", cmdline, err)
+	}
+	return strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+}
+
+// argvHasPair reports whether argv contains flag immediately followed by value.
+func argvHasPair(argv []string, flag, value string) bool {
+	for i := 0; i+1 < len(argv); i++ {
+		if argv[i] == flag && argv[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+// TestGitExec_SSHHermetic pins CR-01 / D-02 on the ssh path: a credential-less
+// import authenticates as nobody, a named key is the only identity, and
+// nothing under the operator's home reaches the child except one pinned
+// known_hosts file passed as an explicit argument. The first group needs no
+// ssh binary; only the "ssh -G" group is skipped without one.
+func TestGitExec_SSHHermetic(t *testing.T) {
+	const sshURL = "ssh://git@example.invalid/org/repo.git"
+	newClient := func(t *testing.T, knownHosts string) *execGitClient {
+		t.Helper()
+		c := newExecGitClient()
+		c.tempRoot = t.TempDir()
+		c.knownHostsPath = knownHosts
+		return c
+	}
+	commonFlags := func(t *testing.T, argv []string, knownHosts string) {
+		t.Helper()
+		for _, p := range [][2]string{
+			{"-F", "/dev/null"},
+			{"-o", "BatchMode=yes"},
+			{"-o", "StrictHostKeyChecking=yes"},
+			{"-o", "UserKnownHostsFile=" + knownHosts},
+			{"-o", "IdentityAgent=none"},
+			{"-o", "IdentitiesOnly=yes"},
+		} {
+			if !argvHasPair(argv, p[0], p[1]) {
+				t.Fatalf("ssh argv %q lacks %s %s", argv, p[0], p[1])
+			}
+		}
+	}
+
+	t.Run("no credential: every ambient identity source is switched off", func(t *testing.T) {
+		kh := filepath.Join(t.TempDir(), "known_hosts")
+		c := newClient(t, kh)
+		cmdline, _, _ := sshCallCommand(t, c, GitRemote{URL: sshURL})
+		argv := sshArgv(t, cmdline)
+		commonFlags(t, argv, kh)
+		if !argvHasPair(argv, "-o", "IdentityFile=none") {
+			t.Fatalf("an anonymous ssh fetch must pin IdentityFile=none: %q", argv)
+		}
+		for _, a := range argv {
+			if a == "-i" {
+				t.Fatalf("an anonymous ssh fetch named a key: %q", argv)
+			}
+		}
+	})
+
+	t.Run("named credential: the 0600 key file is the only identity", func(t *testing.T) {
+		kh := filepath.Join(t.TempDir(), "known_hosts")
+		c := newClient(t, kh)
+		cmdline, _, call := sshCallCommand(t, c, GitRemote{
+			URL:        sshURL,
+			Credential: &GitCredential{Kind: GitCredentialSSHKey, PrivateKey: hygieneKey},
+		})
+		argv := sshArgv(t, cmdline)
+		commonFlags(t, argv, kh)
+		key := filepath.Join(call.credDir, "id_key")
+		if !argvHasPair(argv, "-i", key) {
+			t.Fatalf("ssh argv %q does not name the key file %s", argv, key)
+		}
+		for _, a := range argv {
+			if a == "IdentityFile=none" {
+				t.Fatalf("a keyed fetch must not also pin IdentityFile=none: %q", argv)
+			}
+		}
+		fi, err := os.Stat(key)
+		if err != nil || fi.Mode().Perm() != 0o600 {
+			t.Fatalf("key file = %v, %v, want a readable 0600 file", fi, err)
+		}
+		if strings.Contains(cmdline, "KEYBODY") {
+			t.Fatal("key material appears in GIT_SSH_COMMAND")
+		}
+	})
+
+	t.Run("a known_hosts path with a quote and a space survives the shell", func(t *testing.T) {
+		kh := filepath.Join(t.TempDir(), "it's a dir", "known_hosts")
+		c := newClient(t, kh)
+		cmdline, _, _ := sshCallCommand(t, c, GitRemote{URL: sshURL})
+		if !argvHasPair(sshArgv(t, cmdline), "-o", "UserKnownHostsFile="+kh) {
+			t.Fatalf("the known_hosts path did not survive quoting: %q", cmdline)
+		}
+	})
+
+	t.Run("an unresolvable home pins /dev/null and keeps the strict policy", func(t *testing.T) {
+		t.Setenv("HOME", "")
+		if got := defaultKnownHostsPath(); got != "/dev/null" {
+			t.Fatalf("defaultKnownHostsPath with no home = %q, want /dev/null (fail closed)", got)
+		}
+		c := newExecGitClient()
+		c.tempRoot = t.TempDir()
+		if c.knownHostsPath != "/dev/null" {
+			t.Fatalf("client knownHostsPath = %q, want /dev/null", c.knownHostsPath)
+		}
+		cmdline, _, _ := sshCallCommand(t, c, GitRemote{URL: sshURL})
+		argv := sshArgv(t, cmdline)
+		commonFlags(t, argv, "/dev/null")
+	})
+
+	t.Run("a resolvable home pins the conventional known_hosts file", func(t *testing.T) {
+		home := t.TempDir()
+		t.Setenv("HOME", home)
+		want := filepath.Join(home, ".ssh", "known_hosts")
+		if got := defaultKnownHostsPath(); got != want {
+			t.Fatalf("defaultKnownHostsPath = %q, want %q", got, want)
+		}
+		if got := newExecGitClient().knownHostsPath; got != want {
+			t.Fatalf("a new client pinned %q, want %q", got, want)
+		}
+	})
+
+	t.Run("HOME is the scratch directory on the ssh path, never the operator's", func(t *testing.T) {
+		realHome := t.TempDir()
+		t.Setenv("HOME", realHome)
+		c := newClient(t, filepath.Join(realHome, ".ssh", "known_hosts"))
+		for name, remote := range map[string]GitRemote{
+			"anonymous": {URL: sshURL},
+			"keyed": {URL: sshURL, Credential: &GitCredential{
+				Kind: GitCredentialSSHKey, PrivateKey: hygieneKey}},
+		} {
+			_, home, call := sshCallCommand(t, c, remote)
+			if strings.HasPrefix(home, realHome) {
+				t.Fatalf("%s: HOME on the ssh path is the operator's home: %q", name, home)
+			}
+			if !strings.HasPrefix(home, c.tempRoot) || home != call.dir {
+				t.Fatalf("%s: HOME = %q, want the per-call scratch dir inside %q", name, home, c.tempRoot)
+			}
+		}
+	})
+
+	// The remaining group runs the real ssh binary under the command the client
+	// builds. "-G" prints the resolved configuration and exits without dialling,
+	// so it needs neither a server nor a network. A hostile ambient environment
+	// is set up on purpose: a fake agent socket the operator's shell might have
+	// exported.
+	t.Run("ssh -G under the built command resolves no ambient identity", func(t *testing.T) {
+		if _, err := exec.LookPath("ssh"); err != nil {
+			t.Skip("ssh is not on PATH; the ssh -G resolution check needs the real ssh binary")
+		}
+		resolve := func(t *testing.T, cmdline string) map[string][]string {
+			t.Helper()
+			cmd := exec.Command("sh", "-c", cmdline+" -G example.invalid")
+			cmd.Env = append(os.Environ(), "SSH_AUTH_SOCK=/nonexistent/stagehand-fake-agent.sock")
+			out, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("ssh -G failed under %q: %v", cmdline, err)
+			}
+			got := map[string][]string{}
+			for _, line := range strings.Split(string(out), "\n") {
+				if k, v, ok := strings.Cut(line, " "); ok {
+					got[k] = append(got[k], v)
+				}
+			}
+			return got
+		}
+		noDefaults := func(t *testing.T, got map[string][]string) {
+			t.Helper()
+			for _, v := range got["identityfile"] {
+				if strings.Contains(v, ".ssh/id_") {
+					t.Fatalf("a default identity %q was resolved: %v", v, got["identityfile"])
+				}
+			}
+			if a := got["identityagent"]; len(a) != 1 || a[0] != "none" {
+				t.Fatalf("identityagent = %v, want [none]", a)
+			}
+			if h := got["identitiesonly"]; len(h) != 1 || h[0] != "yes" {
+				t.Fatalf("identitiesonly = %v, want [yes]", h)
+			}
+			if s := got["stricthostkeychecking"]; len(s) != 1 || s[0] != "true" {
+				t.Fatalf("stricthostkeychecking = %v, want [true]", s)
+			}
+		}
+
+		kh := filepath.Join(t.TempDir(), "known_hosts")
+		c := newClient(t, kh)
+
+		t.Run("anonymous", func(t *testing.T) {
+			cmdline, _, _ := sshCallCommand(t, c, GitRemote{URL: sshURL})
+			got := resolve(t, cmdline)
+			noDefaults(t, got)
+			if ids := got["identityfile"]; len(ids) != 1 || ids[0] != "none" {
+				t.Fatalf("identityfile = %v, want only the none marker", ids)
+			}
+			if u := got["userknownhostsfile"]; len(u) != 1 || u[0] != kh {
+				t.Fatalf("userknownhostsfile = %v, want exactly %q", u, kh)
+			}
+		})
+
+		// The key file exists on disk for this case. ssh silently drops an
+		// unreadable -i entry and puts its default identity list back, so a
+		// non-existent path would pass against the very behaviour this test
+		// exists to catch.
+		t.Run("named credential", func(t *testing.T) {
+			cmdline, _, call := sshCallCommand(t, c, GitRemote{
+				URL:        sshURL,
+				Credential: &GitCredential{Kind: GitCredentialSSHKey, PrivateKey: hygieneKey},
+			})
+			key := filepath.Join(call.credDir, "id_key")
+			if _, err := os.Stat(key); err != nil {
+				t.Fatalf("the key file must exist for this proof to mean anything: %v", err)
+			}
+			got := resolve(t, cmdline)
+			noDefaults(t, got)
+			if ids := got["identityfile"]; len(ids) != 1 || ids[0] != key {
+				t.Fatalf("identityfile = %v, want exactly [%s]", ids, key)
+			}
+			if u := got["userknownhostsfile"]; len(u) != 1 || u[0] != kh {
+				t.Fatalf("userknownhostsfile = %v, want exactly %q", u, kh)
+			}
+		})
 	})
 }
