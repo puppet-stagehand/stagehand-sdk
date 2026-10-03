@@ -348,6 +348,30 @@ func catalogCases() []catalogCase {
 			absent:      []string{"sym"},
 		},
 		{
+			name:        "git_attr_value_is_an_expression",
+			text:        "mod 'a',\n  :git => 'https://example.com/a.git' + system('x')\n",
+			wantKinds:   []string{FindingPuppetfileUnsupportedRuby},
+			wantLines:   []int{1},
+			wantModules: nil,
+			absent:      []string{"a"},
+		},
+		{
+			name:        "git_attr_trailing_garbage",
+			text:        "mod 'a',\n  :git => 'https://example.com/a.git' garbage\n",
+			wantKinds:   []string{FindingPuppetfileUnsupportedRuby},
+			wantLines:   []int{1},
+			wantModules: nil,
+			absent:      []string{"a"},
+		},
+		{
+			name:        "git_attr_trailing_token_after_ref",
+			text:        "mod 'a', :git => 'https://example.com/a.git', :tag => 'v1' trailing\n",
+			wantKinds:   []string{FindingPuppetfileUnsupportedRuby},
+			wantLines:   []int{1},
+			wantModules: nil,
+			absent:      []string{"a"},
+		},
+		{
 			name:        "bom_is_not_a_finding",
 			text:        "\xef\xbb\xbfmod 'puppetlabs/ntp'\n",
 			wantModules: []string{"puppetlabs/ntp"},
@@ -628,6 +652,9 @@ func strictCorpusRejected() []string {
 		"mod 'apache',\n  :git => 'url',\n  :ref => 'x',\n  :commit => 'y'\n",
 		"moduledir 'a'\nmoduledir 'b'\n",
 		"forge 'https://forge.puppet.com'\n",
+		"mod 'a',\n  :git => 'https://example.com/a.git' + system('x')\n",
+		"mod 'a',\n  :git => 'https://example.com/a.git' garbage\n",
+		"mod 'a', :git => 'https://example.com/a.git', :tag => 'v1' trailing\n",
 	}
 }
 

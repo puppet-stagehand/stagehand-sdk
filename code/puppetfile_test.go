@@ -258,6 +258,30 @@ func TestPuppetfile_ParseRejectsTwoRefSelectors(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_ParseRejectsLeftoverText pins WR-01: text after the git
+// attributes that no recognised `:key => value` pair accounts for is refused by
+// strict parsing instead of being silently dropped (the parser/reality
+// differential NEW-2 exploits).
+func TestPuppetfile_ParseRejectsLeftoverText(t *testing.T) {
+	cases := []string{
+		"mod 'a',\n  :git => 'https://example.com/a.git' + system('x')\n",
+		"mod 'a',\n  :git => 'https://example.com/a.git' garbage\n",
+		"mod 'a', :git => 'https://example.com/a.git', :tag => 'v1' trailing\n",
+	}
+	for _, text := range cases {
+		_, err := ParsePuppetfile(text)
+		if !errors.Is(err, ErrPuppetfileParse) {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want wrapping ErrPuppetfileParse", text, err)
+		}
+		if !strings.Contains(err.Error(), "unrecognized text after git attributes") {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want it to name the leftover text", text, err)
+		}
+		if !strings.Contains(err.Error(), "line 1:") {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want a line 1 prefix", text, err)
+		}
+	}
+}
+
 func TestPuppetfile_RenderControlBranchIsABareSymbol(t *testing.T) {
 	model := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{
 		{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
