@@ -43,8 +43,11 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 	seenNames := map[string]bool{}
 	for _, ll := range logicalLines(text) {
 		if m := reModuledir.FindStringSubmatch(ll.text); m != nil {
-			if !utf8.ValidString(m[1]) {
-				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir is not valid UTF-8 and cannot be stored; it was skipped")
+			// scalarSafe is the same rule RenderPuppetfile applies to Moduledir,
+			// so the import path can never return a model the sink refuses
+			// (T-10-15, T-12.1-16). It implies utf8.ValidString.
+			if !scalarSafe(m[1]) {
+				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir value cannot be written back to a Puppetfile (it carries a quote, a backslash, a control character or invalid UTF-8); it was skipped")
 				continue
 			}
 			if seenModuledir {
@@ -65,6 +68,9 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 			if err != nil {
 				// Unreachable after lenientRemainderProblem; kept so a future
 				// grammar change degrades to a finding rather than a panic.
+				// Every refusal parseGitModule makes must be mirrored in
+				// lenientRemainderProblem first: leftover text (via the shared
+				// gitRemainderLeftover) and a repeated :git or :default_branch.
 				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "this mod statement uses a form the module model cannot represent; it was skipped")
 				continue
 			}
@@ -123,7 +129,9 @@ func lenientRemainderProblem(remainder string) (kind, msg string) {
 	}
 	attrs := reGitAttr.FindAllStringSubmatch(norm, -1)
 	var refKeys []string
+	counts := map[string]int{}
 	for _, a := range attrs {
+		counts[a[1]]++
 		switch a[1] {
 		case "ref", "tag", "branch", "commit":
 			refKeys = append(refKeys, a[1])
@@ -133,6 +141,11 @@ func lenientRemainderProblem(remainder string) (kind, msg string) {
 		if strings.HasPrefix(a[2], ":") && !(a[1] == "branch" && a[2] == ":control_branch") {
 			return FindingPuppetfileUnsupportedRuby, fmt.Sprintf("the :%s attribute has a Ruby symbol value the model cannot represent; the statement was skipped", a[1])
 		}
+	}
+	// A repeated :git or :default_branch would be last-wins in the shared
+	// parser; strict parsing refuses it, so refuse it here first.
+	if counts["git"] > 1 || counts["default_branch"] > 1 {
+		return FindingPuppetfileUnsupportedRuby, "the mod statement sets the same :git or :default_branch attribute twice, so the model cannot represent what Ruby would evaluate; it was skipped"
 	}
 	if len(refKeys) > 1 {
 		return FindingPuppetfileConflictingRef, fmt.Sprintf("a git module may pin only one of :ref, :tag, :branch, :commit; this one sets :%s and :%s, so the statement was skipped", refKeys[0], refKeys[1])

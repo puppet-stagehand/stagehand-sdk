@@ -322,6 +322,20 @@ func parseGitModule(name, remainder string, lineNo int) (*hostv1.PuppetfileModul
 	if len(refKeys) > 1 {
 		return nil, fmt.Errorf("%w: line %d: conflicting ref selectors :%s and :%s", ErrPuppetfileParse, lineNo, refKeys[0], refKeys[1])
 	}
+	// A repeated :git or :default_branch is a refusal, not last-wins: an
+	// operator reading the file sees the first value while Ruby evaluates the
+	// last, which is the same renderer/reality differential NEW-2 exploits.
+	// ref, tag, branch and commit are already covered by the mutual-exclusivity
+	// rule above, which also catches a repeat of the same one.
+	counts := map[string]int{}
+	for _, a := range attrs {
+		counts[a.key]++
+	}
+	for _, key := range []string{"git", "default_branch"} {
+		if counts[key] > 1 {
+			return nil, fmt.Errorf("%w: line %d: repeated :%s attribute", ErrPuppetfileParse, lineNo, key)
+		}
+	}
 	if len(refKeys) == 1 {
 		key := refKeys[0]
 		var raw string
