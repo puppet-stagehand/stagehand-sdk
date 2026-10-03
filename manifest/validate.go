@@ -109,6 +109,9 @@ func Validate(m *Manifest) []Finding {
 		}
 		seenPerm[p] = true
 	}
+	if seenPerm["code:import"] && !seenPerm["code:rw"] {
+		add("code_import_requires_code_rw", "/permissions", "code:import is only honoured together with code:rw", "Add \"code:rw\" to permissions.")
+	}
 
 	// nav / slots / ui
 	seenSlot := map[string]bool{}
