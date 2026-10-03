@@ -140,14 +140,9 @@ func lenientRemainderProblem(remainder string) (kind, msg string) {
 	// Whatever the recognised attributes do not account for (an attribute
 	// whose value is a variable or an expression, stray tokens) would be
 	// silently ignored by the shared parser, so refuse the statement instead.
-	left := reGitAttr.ReplaceAllString(norm, "")
-	left = strings.Map(func(r rune) rune {
-		if r == ',' || r == ' ' || r == '\t' {
-			return -1
-		}
-		return r
-	}, left)
-	if left != "" {
+	// The computation lives in puppetfile.go as gitRemainderLeftover so strict
+	// and lenient parsing share one rule and cannot drift.
+	if gitRemainderLeftover(norm) != "" {
 		return FindingPuppetfileUnsupportedRuby, "the mod statement has attribute values the model cannot represent (a variable or expression); it was skipped"
 	}
 	return "", ""

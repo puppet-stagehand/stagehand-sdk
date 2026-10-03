@@ -264,6 +264,26 @@ type gitAttr struct {
 	raw string
 }
 
+// gitRemainderLeftover is the one leftover rule for both strict and lenient
+// parsing. It returns whatever a Git mod statement's remainder carries after
+// every recognised `:key => value` pair, and the separating commas and
+// whitespace, are removed. A non-empty result means the statement holds a value
+// the model cannot represent (a variable, a Ruby expression, or a stray token):
+// importing or storing such a statement minus the part the model cannot
+// represent would silently change what gets deployed (D-09, T-10-18), so both
+// parseGitModule and lenientRemainderProblem refuse it. norm must already be in
+// the hash-rocket key form; the comment has already been stripped by
+// logicalLines, which is quote-aware, so a `#` inside a URL is not leftover.
+func gitRemainderLeftover(norm string) string {
+	left := reGitAttr.ReplaceAllString(norm, "")
+	return strings.Map(func(r rune) rune {
+		if r == ',' || r == ' ' || r == '\t' {
+			return -1
+		}
+		return r
+	}, left)
+}
+
 // parseGitModule parses a Git-sourced mod block's remainder into a
 // *hostv1.GitSource. It enforces D-02 (mutual exclusivity across
 // :ref/:tag/:branch/:commit) at runtime — the oneof ref_kind is D-02's
@@ -281,6 +301,9 @@ func parseGitModule(name, remainder string, lineNo int) (*hostv1.PuppetfileModul
 	var attrs []gitAttr
 	for _, m := range reGitAttr.FindAllStringSubmatch(remainder, -1) {
 		attrs = append(attrs, gitAttr{key: m[1], raw: m[2]})
+	}
+	if left := gitRemainderLeftover(remainder); left != "" {
+		return nil, fmt.Errorf("%w: line %d: unrecognized text after git attributes %q", ErrPuppetfileParse, lineNo, left)
 	}
 
 	gs := &hostv1.GitSource{}
