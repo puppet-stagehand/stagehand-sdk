@@ -276,16 +276,23 @@ func assertExactlyOneOnboardedNode(t *testing.T, ctx context.Context, h *host.Ho
 
 // TestApproval_DocumentsHasNoFieldLevelACL exists to pass, not to catch a
 // regression: it pins a known, accepted property of the Documents facet
-// contract (PITFALLS.md's Pitfall 6) rather than leaving it to be
+// contract (PITFALLS.md's Pitfall 6, INT-4) rather than leaving it to be
 // rediscovered later as a defect. The Documents facet is a generic
 // namespaced JSON document store with no concept of collections, field
-// names or state machines — Put will happily flip a proposal's status to
-// approved for any caller holding *host.Host, with no token presented at
+// names or state machines — Put will happily write any body into a proposal
+// document for any caller holding *host.Host, with no token presented at
 // all. The approval/ package's integrity guarantee lives entirely in
 // being the only code path that is supposed to write this collection past
 // creation; that is a discipline enforced by convention, not by anything
 // the facet itself checks, and this test names the boundary a real
 // console host would have to defend differently.
+//
+// Phase 12 (INT-3) narrowed what that bypass buys. OnboardNode now reads the
+// proposal through approval.RequireApproved, so flipping the status alone is
+// refused; the forger must also write approved_scope and decided_by. The test
+// pins both halves: the status-only flip no longer onboards, and a body that
+// carries all three fields still does, because the store cannot tell a Put
+// from approval.Approve.
 func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
 	ctx := context.Background()
 	h := testHost(t, "inventory:rw", "tokens:issue")
@@ -299,29 +306,46 @@ func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Documents.Get: %v", err)
 	}
+
+	// putBody writes body over the proposal with no token anywhere in the
+	// call — Documents.Put does not require one — and returns the new version.
+	putBody := func(body map[string]any, ifVersion int64) int64 {
+		t.Helper()
+		s, err := structpb.NewStruct(body)
+		if err != nil {
+			t.Fatalf("structpb.NewStruct: %v", err)
+		}
+		put, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: inventoryKind.Collection,
+			DocId:      node.Id,
+			Body:       &hostv1.Json{Value: s},
+			IfVersion:  ifVersion,
+		})
+		if err != nil {
+			t.Fatalf("Documents.Put (direct bypass, no token): %v", err)
+		}
+		return put.Version
+	}
+
+	// Half one: a bare status flip is a forgery OnboardNode now refuses.
 	body := doc.Body.Value.AsMap()
 	body["status"] = approval.StatusApproved
-
-	s, err := structpb.NewStruct(body)
-	if err != nil {
-		t.Fatalf("structpb.NewStruct: %v", err)
+	version := putBody(body, doc.Version)
+	if _, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id}); err == nil {
+		t.Fatalf("OnboardNode accepted a status-only approved record; INT-3 requires the approval provenance")
+	} else if !approval.IsNotApproved(err) {
+		t.Fatalf("expected IsNotApproved for the status-only record, got %v", err)
 	}
 
-	// No token presented anywhere in this call — Documents.Put does not
-	// require one, and this is exactly the bypass the test's name says it
-	// pins.
-	if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: inventoryKind.Collection,
-		DocId:      node.Id,
-		Body:       &hostv1.Json{Value: s},
-		IfVersion:  doc.Version,
-	}); err != nil {
-		t.Fatalf("Documents.Put (direct bypass, no token): %v", err)
-	}
-
+	// Half two: the store still cannot tell a Put from Approve, so a body that
+	// forges the provenance as well is accepted. This is the accepted INT-4
+	// residual, not a defect this package can close.
+	body["approved_scope"] = inventoryKind.ApproveScope
+	body["decided_by"] = "forger"
+	putBody(body, version)
 	onboarded, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id})
 	if err != nil {
-		t.Fatalf("OnboardNode after direct bypass: %v", err)
+		t.Fatalf("OnboardNode after a fully forged record: %v", err)
 	}
 	if onboarded.Status != hostv1.Node_ONBOARDED {
 		t.Fatalf("expected node status ONBOARDED after the unguarded write, got %v", onboarded.Status)

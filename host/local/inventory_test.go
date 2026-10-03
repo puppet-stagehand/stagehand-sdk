@@ -1191,7 +1191,7 @@ func TestInventory_OnboardNodeRequiresApprovedProposal(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := local.New([]string{"inventory:rw"}, "opentofu")
 			if !tc.none {
-				writeProposal(t, h, tc.id, tc.status, tc.node)
+				writeProposalMutated(t, h, tc.id, tc.status, tc.node, tc.mutate)
 			}
 			_, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: tc.id})
 			if err == nil {

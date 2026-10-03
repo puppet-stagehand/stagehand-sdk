@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/puppet-stagehand/stagehand-sdk/approval"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
 
@@ -21,7 +22,15 @@ import (
 // duplicated as OnboardingKind.Collection in
 // examples/inventory-onboarding/inventory_onboarding.go; keep the two in
 // step, because OnboardNode only sees approvals written to this collection.
+// inventoryApprovalKind below pins the approval scope alongside it.
 const proposalCollection = "inventory-proposals"
+
+// inventoryApprovalKind is the code-defined approval.Kind OnboardNode requires
+// a proposal to have been approved under. It is never built from a request
+// field or a proposal body. The "inventory:approve" literal is duplicated as
+// OnboardingKind.ApproveScope in examples/inventory-onboarding and as
+// inventoryKind in approval/approval_test.go; keep the three in step.
+var inventoryApprovalKind = approval.Kind{Collection: proposalCollection, ApproveScope: "inventory:approve"}
 
 // inventoryServer is the real in-memory Inventory facet implementation: an
 // in-process node store keyed by node id, materialized on Discover and
@@ -577,13 +586,19 @@ func nodeFromProposal(m map[string]any, proposalID string) (*hostv1.Node, error)
 // OnboardNode is the one Inventory RPC that reaches outside the facet: it
 // resolves req.ProposalId through the shared Documents store (D-08, the
 // SAME documentsServer instance host.Host.Documents holds) and refuses to
-// materialize anything unless the referenced document's status field reads
-// exactly "approved". This is the only additional check OnboardNode
-// carries beyond the facet-level inventory:rw gate (D-01) — it reads a
-// decision someone else recorded. It never consults a token, never
-// evaluates a scope, and never writes back into proposalCollection; the
-// approval decision and the act of onboarding stay in separate code, which
-// is what keeps this gate from being able to defeat itself (T-03-20).
+// materialize anything unless the referenced document records an approval:
+// approval.RequireApproved(doc, inventoryApprovalKind) requires the status to
+// read "approved", approved_scope to equal inventoryApprovalKind.ApproveScope
+// and decided_by to be non-empty. A status string alone is not enough, because
+// the Documents store has no ACL and anything holding the host can write one;
+// the scope and the decider are the provenance only approval.Approve records,
+// so only forged or hand-written records are refused that it would accept
+// before. This is the only additional check OnboardNode carries beyond the
+// facet-level inventory:rw gate (D-01) — it reads a decision someone else
+// recorded. It never consults a token, never evaluates a scope against one,
+// and never writes back into proposalCollection; the approval decision and
+// the act of onboarding stay in separate code, which is what keeps this gate
+// from being able to defeat itself (T-03-20).
 func (s *inventoryServer) OnboardNode(ctx context.Context, req *hostv1.OnboardNodeRequest) (*hostv1.Node, error) {
 	// Idempotency short-circuit (D-02): a repeat onboard of an
 	// already-ONBOARDED node is a success, not an error, and it must not
@@ -607,13 +622,10 @@ func (s *inventoryServer) OnboardNode(ctx context.Context, req *hostv1.OnboardNo
 	if doc.Body == nil || doc.Body.Value == nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q has no body", req.ProposalId)
 	}
-	m := doc.Body.Value.AsMap()
-
-	statusRaw, ok := m["status"]
-	statusStr, isStr := statusRaw.(string)
-	if !ok || !isStr || statusStr != "approved" {
-		return nil, status.Errorf(codes.FailedPrecondition, "proposal %q is not approved", req.ProposalId)
+	if err := approval.RequireApproved(doc, inventoryApprovalKind); err != nil {
+		return nil, err
 	}
+	m := doc.Body.Value.AsMap()
 
 	proposed, err := nodeFromProposal(m, req.ProposalId)
 	if err != nil {
