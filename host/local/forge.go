@@ -162,6 +162,15 @@ func (s *forgeServer) Resolve(ctx context.Context, req *hostv1.ResolveRequest) (
 	if req == nil || req.Name == "" || req.Version == "" {
 		return nil, status.Error(codes.InvalidArgument, "module name and version are required")
 	}
+	// Environment is optional, but when given it must be a name the Code
+	// facet could have created. Rejecting it here (before any Secrets or
+	// network work) turns a typo into InvalidArgument instead of a silent
+	// all-false already_in_puppetfile (AR-07-01).
+	if req.Environment != "" {
+		if err := validateEnvName(req.Environment); err != nil {
+			return nil, err
+		}
+	}
 
 	ep, source, err := s.resolveSource(ctx, req.Source)
 	if err != nil {

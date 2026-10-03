@@ -412,6 +412,33 @@ func TestForgeResolveWithoutEnvironmentLeavesStatusFalse(t *testing.T) {
 	}
 }
 
+// AR-07-01: a malformed Environment is rejected up front, not treated as an
+// unknown environment that silently yields already_in_puppetfile=false.
+func TestForgeResolveRejectsMalformedEnvironment(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0")
+	h := New([]string{"forge:rw"}, "pkg", WithForgeClient(c))
+
+	for _, env := range []string{"Production", "prod-uction", "../etc", "has space", "prod\nuction"} {
+		_, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+			Name: "acme/root", Version: "1.0.0", Environment: env,
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("environment %q: expected InvalidArgument, got %v", env, err)
+		}
+	}
+
+	// A well-formed name that has no stored Puppetfile is still advisory-only
+	// success, and an empty environment stays optional.
+	for _, env := range []string{"", "staging_2"} {
+		if _, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+			Name: "acme/root", Version: "1.0.0", Environment: env,
+		}); err != nil {
+			t.Fatalf("environment %q: unexpected error %v", env, err)
+		}
+	}
+}
+
 func TestForgeResolveNeverMutatesThePuppetfile(t *testing.T) {
 	c := newResolverFixtureClient()
 	c.addRelease("acme/root", "1.0.0",
