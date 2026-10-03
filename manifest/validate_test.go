@@ -161,6 +161,18 @@ func TestRules(t *testing.T) {
 			m.Content = &Content{ForgeSlug: "souldo-stagehand_hello", Version: ">=1 <2"}
 			m.Permissions = []string{"documents:rw"}
 		}, ""},
+		{"code:import needs code:rw", func(m *Manifest) {
+			m.Permissions = []string{"documents:rw", "code:import"}
+		}, "code_import_requires_code_rw"},
+		{"code:rw alone needs no code:import", func(m *Manifest) {
+			m.Permissions = []string{"documents:rw", "code:rw"}
+		}, ""},
+		{"code:import with code:rw is clean", func(m *Manifest) {
+			m.Permissions = []string{"documents:rw", "code:rw", "code:import"}
+		}, ""},
+		{"empty permissions need no code:rw", func(m *Manifest) {
+			m.Permissions = []string{}
+		}, ""},
 		{"removed forge:read is an unknown permission", func(m *Manifest) {
 			m.Permissions = append(m.Permissions, "forge:read")
 		}, "permission_unknown"},
@@ -791,4 +803,27 @@ func TestCodeRWAndReadSurviveTheCodeImportAddition(t *testing.T) {
 			t.Fatalf("a manifest declaring %q must yield a permission_unknown finding", approve)
 		}
 	})
+}
+
+// TestCodeImportRequiresCodeRWFinding pins the exact finding contract locked by
+// Phase 12 D-11: code, path and fix line.
+func TestCodeImportRequiresCodeRWFinding(t *testing.T) {
+	m := load(t, "../examples/hello/manifest.json")
+	m.Permissions = []string{"documents:rw", "code:import"}
+	var found *Finding
+	fs := Validate(m)
+	for i := range fs {
+		if fs[i].Code == "code_import_requires_code_rw" {
+			found = &fs[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("expected code_import_requires_code_rw, got %v", codes(fs))
+	}
+	if found.Path != "/permissions" {
+		t.Errorf("path = %q, want /permissions", found.Path)
+	}
+	if want := `Add "code:rw" to permissions.`; found.Fix != want {
+		t.Errorf("fix = %q, want %q", found.Fix, want)
+	}
 }
