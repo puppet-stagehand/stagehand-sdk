@@ -93,8 +93,9 @@ func (p *ProposerBackend) AddModule(ctx context.Context, env string, m *hostv1.P
 // approval gate. Replacing a Puppetfile module that env already holds is the
 // second gated path: the body is built by code.OverwriteBodyForPuppetfileModule
 // and filed with approval.ProposeBody, and this method never builds a document
-// write itself. m.Name must be spelled exactly as the module already is in env;
-// the facet decides "already exists" by exact name string.
+// write itself. Either spelling of a Forge module's name (ns/name or ns-name,
+// any owner case) is the same module: the facet decides "already exists" by
+// canonical identity, and a Git module is matched by its raw name.
 func (p *ProposerBackend) ProposeModuleOverwrite(ctx context.Context, proposalID, env string, m *hostv1.PuppetfileModule) (*approval.Proposal, error) {
 	body, err := code.OverwriteBodyForPuppetfileModule(env, m)
 	if err != nil {

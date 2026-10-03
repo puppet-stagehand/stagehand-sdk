@@ -475,3 +475,58 @@ func TestParseOverwriteTargetImportRelaxationIsScoped(t *testing.T) {
 		}
 	})
 }
+
+// TestPuppetfileModuleTargetName pins the one source-aware rule that produces a
+// puppetfile_module overwrite target's Name: a Forge module is folded to its
+// canonical name, a Git module's bare name is never touched.
+func TestPuppetfileModuleTargetName(t *testing.T) {
+	forge := func(name string) *hostv1.PuppetfileModule {
+		return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}}
+	}
+	git := func(name string) *hostv1.PuppetfileModule {
+		return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/m.git"}}}
+	}
+	cases := []struct {
+		name string
+		m    *hostv1.PuppetfileModule
+		want string
+	}{
+		{"forge slash form", forge("puppetlabs/stdlib"), "puppetlabs-stdlib"},
+		{"forge hyphen form", forge("puppetlabs-stdlib"), "puppetlabs-stdlib"},
+		{"forge mixed-case owner", forge("PuppetLabs/stdlib"), "puppetlabs-stdlib"},
+		{"git bare name with capitals is untouched", git("My-Module"), "My-Module"},
+		{"git bare hyphenated name is untouched", git("my-module"), "my-module"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := PuppetfileModuleTargetName(tc.m); got != tc.want {
+				t.Fatalf("PuppetfileModuleTargetName = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestOverwriteBodyForPuppetfileModuleTargetIsCanonical pins that the proposal
+// target carries the canonical name while the frozen payload keeps the module
+// exactly as the approver saw it.
+func TestOverwriteBodyForPuppetfileModuleTargetIsCanonical(t *testing.T) {
+	m := &hostv1.PuppetfileModule{
+		Name:   "puppetlabs/stdlib",
+		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.4.1"}},
+	}
+	body, err := OverwriteBodyForPuppetfileModule("prod", m)
+	if err != nil {
+		t.Fatalf("OverwriteBodyForPuppetfileModule: %v", err)
+	}
+	stored := viaStore(t, body)
+	if got := mustTarget(t, stored).Name; got != "puppetlabs-stdlib" {
+		t.Fatalf("target name = %q, want the canonical puppetlabs-stdlib", got)
+	}
+	frozen, err := OverwritePayloadPuppetfileModule(stored)
+	if err != nil {
+		t.Fatalf("OverwritePayloadPuppetfileModule: %v", err)
+	}
+	if frozen.GetName() != "puppetlabs/stdlib" {
+		t.Fatalf("frozen payload name = %q, want it exactly as supplied", frozen.GetName())
+	}
+}

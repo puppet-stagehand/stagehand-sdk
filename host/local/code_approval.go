@@ -301,7 +301,7 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "overwrite proposal %q: %v", req.ProposalId, err)
 	}
-	if frozen.GetName() != target.Name {
+	if code.PuppetfileModuleTargetName(frozen) != target.Name {
 		return nil, status.Errorf(codes.FailedPrecondition,
 			"overwrite proposal %q names module %q in its target but carries a payload for %q",
 			req.ProposalId, target.Name, frozen.GetName())
@@ -319,14 +319,22 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 		return nil, err
 	}
 
+	// The module that would be written carries the canonical name. It is
+	// built before the idempotency decision, not after: comparing the stored
+	// (canonical) module against the raw frozen payload would make a replay of
+	// a slash-spelled proposal look like a change, skip the no-op branch and
+	// trip the already-applied refusal.
+	written := clonePuppetfileModule(frozen)
+	written.Name = code.PuppetfileModuleTargetName(frozen)
+
 	idx := -1
 	for i, m := range pf.Modules {
-		if m.GetName() == frozen.GetName() {
+		if moduleKey(m) == moduleKey(written) {
 			idx = i
 			break
 		}
 	}
-	if idx >= 0 && proto.Equal(pf.Modules[idx], frozen) {
+	if idx >= 0 && proto.Equal(pf.Modules[idx], written) {
 		if err := s.markOverwriteAppliedLocked(req.ProposalId); err != nil {
 			return nil, err
 		}
@@ -336,7 +344,6 @@ func (s *codeServer) ApplyPuppetfileModuleOverwrite(ctx context.Context, req *ho
 		return nil, errOverwriteAlreadyApplied(req.ProposalId)
 	}
 
-	written := clonePuppetfileModule(frozen)
 	if idx >= 0 {
 		pf.Modules[idx] = written
 	} else {

@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/puppet-stagehand/stagehand-sdk/approval"
+	"github.com/puppet-stagehand/stagehand-sdk/code"
 	controlrepoauthoring "github.com/puppet-stagehand/stagehand-sdk/examples/control-repo-authoring"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 	"github.com/puppet-stagehand/stagehand-sdk/host"
@@ -569,8 +570,9 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("AddModule(%s): %v", n.Name, err)
 		}
-		if mod.Name != n.Name || mod.GetForge().GetVersion() != n.Version {
-			t.Fatalf("AddModule: expected %s at %s, got %+v", n.Name, n.Version, mod)
+		// A Forge module is stored under its canonical name (D-07).
+		if mod.Name != code.CanonicalModuleName(n.Name) || mod.GetForge().GetVersion() != n.Version {
+			t.Fatalf("AddModule: expected %s at %s, got %+v", code.CanonicalModuleName(n.Name), n.Version, mod)
 		}
 		t.Logf("step 5: accepted module %s at %s into authored", mod.Name, mod.GetForge().GetVersion())
 	}
@@ -650,15 +652,15 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RenderPuppetfile: %v", err)
 	}
-	if want := "mod 'puppetlabs/ntp', '13.2.1'\nmod 'puppetlabs/stdlib', '9.6.0'\n"; text != want {
+	if want := "mod 'puppetlabs-ntp', '13.2.1'\nmod 'puppetlabs-stdlib', '9.6.0'\n"; text != want {
 		t.Fatalf("RenderPuppetfile: expected %q, got %q", want, text)
 	}
 	mods, err := proposer.ListModules(ctx, "authored")
 	if err != nil {
 		t.Fatalf("ListModules: %v", err)
 	}
-	if len(mods) != 2 || mods[0].Name != "puppetlabs/ntp" || mods[1].Name != "puppetlabs/stdlib" {
-		t.Fatalf("ListModules: expected [puppetlabs/ntp puppetlabs/stdlib] in insertion order, got %+v", mods)
+	if len(mods) != 2 || mods[0].Name != "puppetlabs-ntp" || mods[1].Name != "puppetlabs-stdlib" {
+		t.Fatalf("ListModules: expected [puppetlabs-ntp puppetlabs-stdlib] in insertion order, got %+v", mods)
 	}
 
 	envs, err := proposer.ListEnvironments(ctx)
@@ -876,18 +878,18 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	// per item rather than per branch: the ladder is refused, proposed, still
 	// refused while pending, approved, apply-pending on a further write, applied.
 	//
-	// The module name is the hyphenated spelling the imported Puppetfile produced.
-	// The facet decides "already exists" by exact name string, so the slug form
-	// used in the authored environment (puppetlabs/stdlib) and the hyphenated form
-	// the import produced (puppetlabs-stdlib) are different modules to this gate:
-	// the slug form would be an ungated append, and the refusal below would fail
-	// for the wrong reason.
-	bumped := &hostv1.PuppetfileModule{
-		Name:   canaryMods[0].Name,
-		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.6.0"}},
+	// The module name is deliberately the slash spelling, while the imported
+	// Puppetfile holds the hyphenated spelling (puppetlabs-stdlib). The facet
+	// decides "already exists" by canonical identity, so both spellings are one
+	// module and the write below is refused as an overwrite rather than appended
+	// as a second entry (INT-1). Before Phase 12 the slash spelling here was an
+	// ungated append that rendered a duplicate.
+	if canaryMods[0].Name != "puppetlabs-stdlib" {
+		t.Fatalf("overwrite target: expected the imported spelling puppetlabs-stdlib, got %q", canaryMods[0].Name)
 	}
-	if bumped.Name != "puppetlabs-stdlib" {
-		t.Fatalf("overwrite target: expected the imported spelling puppetlabs-stdlib, got %q", bumped.Name)
+	bumped := &hostv1.PuppetfileModule{
+		Name:   "puppetlabs/stdlib",
+		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.6.0"}},
 	}
 
 	// 16a: refused. A write that would replace existing content needs approval.
@@ -946,8 +948,8 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyModuleOverwrite: %v", err)
 	}
-	if appliedMod.Name != bumped.Name || appliedMod.GetForge().GetVersion() != "9.6.0" {
-		t.Fatalf("ApplyModuleOverwrite: expected %s at 9.6.0, got %+v", bumped.Name, appliedMod)
+	if appliedMod.Name != "puppetlabs-stdlib" || appliedMod.GetForge().GetVersion() != "9.6.0" {
+		t.Fatalf("ApplyModuleOverwrite: expected puppetlabs-stdlib at 9.6.0, got %+v", appliedMod)
 	}
 	finalMods, err := proposer.ListModules(ctx, "canary")
 	if err != nil {
@@ -1015,7 +1017,7 @@ func assertModuleVersion(t *testing.T, p *controlrepoauthoring.ProposerBackend, 
 	if err != nil {
 		t.Fatalf("%s: ListModules: %v", label, err)
 	}
-	if len(mods) != 1 || mods[0].Name != name || mods[0].GetForge().GetVersion() != version {
+	if len(mods) != 1 || mods[0].Name != code.CanonicalModuleName(name) || mods[0].GetForge().GetVersion() != version {
 		t.Fatalf("%s: expected exactly %s at %s, got %+v", label, name, version, mods)
 	}
 }

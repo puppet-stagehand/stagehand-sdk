@@ -2,6 +2,7 @@ package local_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -100,7 +101,8 @@ func TestCode_PuppetfileForgeModuleLifecycle(t *testing.T) {
 	if len(resp.Modules) != 3 {
 		t.Fatalf("expected 3 modules, got %d", len(resp.Modules))
 	}
-	wantNames := []string{"puppetlabs/ntp", "puppetlabs/apache", "puppetlabs/stdlib"}
+	// D-07: Put stores a Forge module under its canonical name.
+	wantNames := []string{"puppetlabs-ntp", "puppetlabs-apache", "puppetlabs-stdlib"}
 	for i, name := range wantNames {
 		if resp.Modules[i].GetName() != name {
 			t.Fatalf("module %d: got name %q, want %q", i, resp.Modules[i].GetName(), name)
@@ -117,10 +119,10 @@ func TestCode_PuppetfileForgeModuleLifecycle(t *testing.T) {
 	if len(resp.Modules) != 3 {
 		t.Fatalf("expected 3 modules after edit, got %d", len(resp.Modules))
 	}
-	if resp.Modules[1].GetName() != "puppetlabs/apache" || resp.Modules[1].GetForge().GetVersion() != "6.1.0" {
+	if resp.Modules[1].GetName() != "puppetlabs-apache" || resp.Modules[1].GetForge().GetVersion() != "6.1.0" {
 		t.Fatalf("expected apache at index 1 with version 6.1.0, got %+v", resp.Modules[1])
 	}
-	if resp.Modules[0].GetName() != "puppetlabs/ntp" || resp.Modules[2].GetName() != "puppetlabs/stdlib" {
+	if resp.Modules[0].GetName() != "puppetlabs-ntp" || resp.Modules[2].GetName() != "puppetlabs-stdlib" {
 		t.Fatalf("neighbours disturbed: %+v", resp.Modules)
 	}
 
@@ -135,7 +137,7 @@ func TestCode_PuppetfileForgeModuleLifecycle(t *testing.T) {
 	if len(resp.Modules) != 2 {
 		t.Fatalf("expected 2 modules after remove, got %d", len(resp.Modules))
 	}
-	if resp.Modules[0].GetName() != "puppetlabs/apache" || resp.Modules[1].GetName() != "puppetlabs/stdlib" {
+	if resp.Modules[0].GetName() != "puppetlabs-apache" || resp.Modules[1].GetName() != "puppetlabs-stdlib" {
 		t.Fatalf("unexpected modules after remove: %+v", resp.Modules)
 	}
 
@@ -567,9 +569,9 @@ func TestCode_PuppetfileRenderMatchesRenderContract(t *testing.T) {
 
 	want := `moduledir 'thirdparty'
 
-mod 'puppetlabs/ntp'
-mod 'puppetlabs/apache', '0.10.0'
-mod 'puppetlabs/stdlib', :latest
+mod 'puppetlabs-ntp'
+mod 'puppetlabs-apache', '0.10.0'
+mod 'puppetlabs-stdlib', :latest
 mod 'apache',
   :git => 'https://github.com/puppetlabs/puppetlabs-apache'
 mod 'concat',
@@ -587,5 +589,103 @@ mod 'profiles',
 	}
 	if rendered.Text != want {
 		t.Fatalf("render mismatch:\ngot:\n%s\nwant:\n%s", rendered.Text, want)
+	}
+}
+
+// ---------------------------------------------------------------- INT-1
+// Module identity at the overwrite gate. Every refusal row seeds the existing
+// module as raw Puppetfile text through Documents, exactly as an import would
+// leave it, so the stored spelling is preserved and Put's own write path
+// cannot have rewritten it first.
+
+func seedPuppetfileText(t *testing.T, h *host.Host, env, text string) {
+	t.Helper()
+	mustCreateEnv(t, h, env)
+	seedDoc(t, h, context.Background(), "code-puppetfiles", env, map[string]any{"text": text})
+}
+
+func TestCode_PuppetfilePutOtherSpellingIsGated(t *testing.T) {
+	const seeded = "mod 'puppetlabs-stdlib', '9.4.1'\n"
+	for _, spelling := range []string{"puppetlabs/stdlib", "PuppetLabs/stdlib", "puppetlabs-stdlib"} {
+		t.Run(spelling, func(t *testing.T) {
+			h := newOverwriteHost()
+			ctx := context.Background()
+			seedPuppetfileText(t, h, "prod", seeded)
+
+			err := putModuleErr(h, "prod", forgeModule(spelling, "10.0.0"))
+			if !local.IsCodeOverwriteRequiresApproval(err) {
+				t.Fatalf("Put(%q): got %v, want requires-approval", spelling, err)
+			}
+			if status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("Put(%q): code = %v, want FailedPrecondition", spelling, status.Code(err))
+			}
+			if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != seeded {
+				t.Fatalf("stored text changed by a refused Put:\n got: %q\nwant: %q", got, seeded)
+			}
+			if names := listModuleNames(t, h, "prod"); len(names) != 1 {
+				t.Fatalf("module count = %d (%v), want 1", len(names), names)
+			}
+		})
+	}
+}
+
+func TestCode_PuppetfilePutStoresCanonicalName(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+
+	got, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod", Module: forgeModule("puppetlabs/ntp", ""),
+	})
+	if err != nil {
+		t.Fatalf("PutPuppetfileModule: %v", err)
+	}
+	if got.GetName() != "puppetlabs-ntp" {
+		t.Fatalf("returned name = %q, want the canonical puppetlabs-ntp", got.GetName())
+	}
+	text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
+	if !strings.Contains(text, "puppetlabs-ntp") || strings.Contains(text, "puppetlabs/ntp") {
+		t.Fatalf("stored text = %q, want the canonical spelling only", text)
+	}
+
+	// The canonical write is itself gated on the next attempt, so rewrite-on-
+	// write cannot create a self-inflicted duplicate.
+	if err := putModuleErr(h, "prod", forgeModule("puppetlabs/ntp", "")); !local.IsCodeOverwriteRequiresApproval(err) {
+		t.Fatalf("second Put: got %v, want requires-approval", err)
+	}
+	if names := listModuleNames(t, h, "prod"); len(names) != 1 {
+		t.Fatalf("module count = %d (%v), want 1", len(names), names)
+	}
+}
+
+func TestCode_PuppetfilePutGitNameIsNeverFolded(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+
+	got, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod",
+		Module: &hostv1.PuppetfileModule{
+			Name:   "My-Module",
+			Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/m.git"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("PutPuppetfileModule(git): %v", err)
+	}
+	if got.GetName() != "My-Module" {
+		t.Fatalf("returned git name = %q, want it untouched", got.GetName())
+	}
+	if text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); !strings.Contains(text, "My-Module") {
+		t.Fatalf("stored text = %q, want the git name untouched", text)
+	}
+}
+
+func TestCode_PuppetfilePutEmptyNameIsInvalidArgument(t *testing.T) {
+	h := newOverwriteHost()
+	mustCreateEnv(t, h, "prod")
+	err := putModuleErr(h, "prod", forgeModule("", ""))
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("got %v, want InvalidArgument", err)
 	}
 }

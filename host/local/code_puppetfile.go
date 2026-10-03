@@ -100,6 +100,28 @@ func clonePuppetfileModule(m *hostv1.PuppetfileModule) *hostv1.PuppetfileModule 
 	return proto.Clone(m).(*hostv1.PuppetfileModule)
 }
 
+// moduleKey is the source-qualified identity key of a Puppetfile module: the
+// canonical Forge key for a Forge module and the raw-name Git key for any other.
+// Every matching loop in the Code facet compares these, never bare names, so the
+// gate cannot disagree with itself. The discriminator exists because
+// canonicalisation makes a Forge key and a Git bare name collidable (Forge
+// "my/module" canonicalises to "my-module", which is also a legal Git name); the
+// source prefix guarantees they never match. The key definitions live with the
+// Forge facet (forgeModuleKey, gitModuleKey) and delegate to
+// code.CanonicalModuleName, so there is one definition of identity.
+func moduleKey(m *hostv1.PuppetfileModule) string {
+	if m.GetForge() != nil {
+		return forgeModuleKey(m.GetName())
+	}
+	return gitModuleKey(m.GetName())
+}
+
+// moduleKeyForName is the Forge key for a bare request name, used by Remove,
+// whose request carries a name and no source.
+func moduleKeyForName(name string) string {
+	return forgeModuleKey(name)
+}
+
 // ListPuppetfileModules loads the model, paginates Puppetfile.modules with
 // the shared pageBounds helper, clones each returned module, and sets
 // Moduledir on the response so a caller gets the whole picture in one call
@@ -143,8 +165,11 @@ func (s *codeServer) ListPuppetfileModules(ctx context.Context, req *hostv1.List
 // with codes.InvalidArgument, then runs code.ValidateModule and maps its
 // error — this is where D-02's and D-03's rules and the git-URL safety
 // checks are enforced on a caller-supplied module. It then loads the model.
-// A name not present is appended, ungated. A name already present is an
-// overwrite and is refused with codes.FailedPrecondition (D-04): either
+// Presence is decided by canonical identity for a Forge module (the two slug
+// spellings and any owner capitalisation are one module) and by the raw name
+// for a Git module; a Forge module is stored under its canonical lowercase
+// hyphen name. A module not present is appended, ungated. A module already
+// present is an overwrite and is refused with codes.FailedPrecondition (D-04): either
 // ErrCodeOverwriteRequiresApproval, or ErrCodeOverwriteApplyPending when an
 // approved code-overwrites proposal already covers it. A replacement
 // happens only through ApplyPuppetfileModuleOverwrite, which keeps the
@@ -177,7 +202,7 @@ func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPup
 
 	upserted := proto.Clone(req.Module).(*hostv1.PuppetfileModule)
 	for _, m := range pf.Modules {
-		if m.GetName() == upserted.GetName() {
+		if moduleKey(m) == moduleKey(upserted) {
 			// Replacing an existing module is an overwrite, and an
 			// overwrite is never applied silently (D-04). It is decided per
 			// module, not per environment (D-02): the append below stays
@@ -189,7 +214,7 @@ func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPup
 			target := code.OverwriteTarget{
 				Environment: req.Environment,
 				Resource:    code.OverwriteResourcePuppetfileModule,
-				Name:        upserted.GetName(),
+				Name:        code.PuppetfileModuleTargetName(upserted),
 			}
 			if proposalID, covered := s.approvedOverwriteProposalLocked(target); covered {
 				return nil, ErrCodeOverwriteApplyPending(proposalID, applyPuppetfileModuleRPC)
@@ -197,6 +222,10 @@ func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPup
 			return nil, ErrCodeOverwriteRequiresApproval(target, applyPuppetfileModuleRPC)
 		}
 	}
+	// D-07: rewrite on write. A Forge module is stored under its canonical
+	// name; a Git module's name is left alone. This runs inside the one
+	// s.docs.mu acquisition that spans load, match and store.
+	upserted.Name = code.PuppetfileModuleTargetName(upserted)
 	pf.Modules = append(pf.Modules, upserted)
 
 	if err := s.storePuppetfileLocked(req.Environment, pf); err != nil {
@@ -205,9 +234,12 @@ func (s *codeServer) PutPuppetfileModule(ctx context.Context, req *hostv1.PutPup
 	return clonePuppetfileModule(upserted), nil
 }
 
-// RemovePuppetfileModule loads the model, finds the module by exact name,
-// returns codes.NotFound when absent, removes it while preserving the order
-// of the rest, stores, and returns an empty response.
+// RemovePuppetfileModule loads the model, finds the module, returns
+// codes.NotFound when absent, removes it while preserving the order of the
+// rest, stores, and returns an empty response. A stored Forge module matches
+// by canonical identity, so either slug spelling (and any owner case) removes
+// it; a stored Git module matches only by its raw name, because a Git module's
+// bare name is never folded. The first match in render order wins.
 func (s *codeServer) RemovePuppetfileModule(ctx context.Context, req *hostv1.RemovePuppetfileModuleRequest) (*emptypb.Empty, error) {
 	if err := validateEnvName(req.Environment); err != nil {
 		return nil, err
@@ -227,7 +259,12 @@ func (s *codeServer) RemovePuppetfileModule(ctx context.Context, req *hostv1.Rem
 
 	idx := -1
 	for i, m := range pf.Modules {
-		if m.GetName() == req.Name {
+		if m.GetForge() != nil {
+			if moduleKey(m) == moduleKeyForName(req.Name) {
+				idx = i
+				break
+			}
+		} else if m.GetName() == req.Name {
 			idx = i
 			break
 		}

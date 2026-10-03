@@ -189,11 +189,29 @@ func overwriteBody(t OverwriteTarget, payload map[string]any) map[string]any {
 	}
 }
 
+// PuppetfileModuleTargetName is the one rule that produces the Name of a
+// puppetfile_module overwrite target. For a Forge module it is
+// CanonicalModuleName of the module's name, so every spelling of one Forge
+// module (ns/name, ns-name, any owner case) names the same target. For any
+// other module it is the name unchanged: a Git module's name is a bare name
+// with no slug grammar, so folding it would change an author's identifier and
+// could make two distinct Git modules share one overwrite target. This function
+// is the only producer of a puppetfile_module target's Name; the propose side,
+// the Put gate and the apply side all call it, which is what lets the gate
+// compare targets by plain struct equality. It is pure.
+func PuppetfileModuleTargetName(m *hostv1.PuppetfileModule) string {
+	if m.GetForge() != nil {
+		return CanonicalModuleName(m.GetName())
+	}
+	return m.GetName()
+}
+
 // OverwriteBodyForPuppetfileModule builds the body of a proposal to replace
 // the Puppetfile module m in environment env. The target's Resource is
-// OverwriteResourcePuppetfileModule and its Name is the module's name; the
-// payload is protojson's rendering of m, frozen at propose time. The result
-// carries no status key.
+// OverwriteResourcePuppetfileModule and its Name is PuppetfileModuleTargetName
+// of m; the payload is protojson's rendering of m exactly as supplied, frozen
+// at propose time, because it is what the approver saw. The result carries no
+// status key.
 func OverwriteBodyForPuppetfileModule(env string, m *hostv1.PuppetfileModule) (map[string]any, error) {
 	if m == nil || m.GetName() == "" {
 		return nil, fmt.Errorf("%w: a module with a name is required", ErrOverwriteBodyInvalid)
@@ -209,7 +227,7 @@ func OverwriteBodyForPuppetfileModule(env string, m *hostv1.PuppetfileModule) (m
 	return overwriteBody(OverwriteTarget{
 		Environment: env,
 		Resource:    OverwriteResourcePuppetfileModule,
-		Name:        m.GetName(),
+		Name:        PuppetfileModuleTargetName(m),
 	}, payload), nil
 }
 

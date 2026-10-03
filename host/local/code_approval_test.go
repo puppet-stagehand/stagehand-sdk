@@ -200,7 +200,7 @@ func TestCodeOverwriteTracer_PuppetfileModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ApplyPuppetfileModuleOverwrite: %v", err)
 	}
-	if got.GetName() != "puppetlabs/apache" || got.GetForge().GetVersion() != "6.1.0" {
+	if got.GetName() != "puppetlabs-apache" || got.GetForge().GetVersion() != "6.1.0" {
 		t.Fatalf("Apply returned %+v, want apache 6.1.0", got)
 	}
 
@@ -211,10 +211,10 @@ func TestCodeOverwriteTracer_PuppetfileModule(t *testing.T) {
 	if len(resp.Modules) != 3 {
 		t.Fatalf("got %d modules, want 3 (replaced, not appended)", len(resp.Modules))
 	}
-	if resp.Modules[1].GetName() != "puppetlabs/apache" || resp.Modules[1].GetForge().GetVersion() != "6.1.0" {
+	if resp.Modules[1].GetName() != "puppetlabs-apache" || resp.Modules[1].GetForge().GetVersion() != "6.1.0" {
 		t.Fatalf("apache not replaced in place at index 1: %+v", resp.Modules)
 	}
-	if resp.Modules[0].GetName() != "puppetlabs/ntp" || resp.Modules[2].GetName() != "puppetlabs/stdlib" {
+	if resp.Modules[0].GetName() != "puppetlabs-ntp" || resp.Modules[2].GetName() != "puppetlabs-stdlib" {
 		t.Fatalf("neighbours disturbed: %v", listModuleNames(t, h, "prod"))
 	}
 }
@@ -372,7 +372,7 @@ func TestCodeOverwriteApplyConcurrent(t *testing.T) {
 			t.Fatalf("concurrent Apply %d: %v", i, err)
 		}
 	}
-	if names := listModuleNames(t, h, "prod"); len(names) != 2 || names[1] != "puppetlabs/apache" {
+	if names := listModuleNames(t, h, "prod"); len(names) != 2 || names[1] != "puppetlabs-apache" {
 		t.Fatalf("concurrent Apply produced %v, want [ntp apache]", names)
 	}
 	want := "6.1.0"
