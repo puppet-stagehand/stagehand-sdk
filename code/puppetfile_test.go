@@ -282,6 +282,35 @@ func TestPuppetfile_ParseRejectsLeftoverText(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_ParseRejectsRepeatedGitAttribute pins T-12.1-09: a repeated
+// :git or :default_branch is refused rather than last-wins, because an
+// operator reading the file sees the first value while Ruby evaluates the last.
+func TestPuppetfile_ParseRejectsRepeatedGitAttribute(t *testing.T) {
+	cases := []struct {
+		text string
+		key  string
+	}{
+		{"mod 'a', :git => 'https://example.com/a.git', :git => 'https://example.com/b.git'\n", "git"},
+		{"mod 'a', :git => 'https://example.com/a.git', :default_branch => 'main', :default_branch => 'dev'\n", "default_branch"},
+	}
+	for _, tc := range cases {
+		_, err := ParsePuppetfile(tc.text)
+		if !errors.Is(err, ErrPuppetfileParse) {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want wrapping ErrPuppetfileParse", tc.text, err)
+		}
+		if !strings.Contains(err.Error(), "repeated :"+tc.key) {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want it to name repeated :%s", tc.text, err, tc.key)
+		}
+		if !strings.Contains(err.Error(), "line 1:") {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want a line 1 prefix", tc.text, err)
+		}
+	}
+	// One :git and one :default_branch still parse.
+	if _, err := ParsePuppetfile("mod 'a', :git => 'https://example.com/a.git', :default_branch => 'main'\n"); err != nil {
+		t.Fatalf("single :git and :default_branch must still parse: %v", err)
+	}
+}
+
 func TestPuppetfile_RenderControlBranchIsABareSymbol(t *testing.T) {
 	model := &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{
 		{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{

@@ -372,6 +372,57 @@ func catalogCases() []catalogCase {
 			absent:      []string{"a"},
 		},
 		{
+			name:        "repeated_git_attribute",
+			text:        "mod 'a', :git => 'https://example.com/a.git', :git => 'https://example.com/b.git'\n",
+			wantKinds:   []string{FindingPuppetfileUnsupportedRuby},
+			wantLines:   []int{1},
+			wantModules: nil,
+			absent:      []string{"a"},
+		},
+		{
+			name:        "repeated_default_branch_attribute",
+			text:        "mod 'a', :git => 'https://example.com/a.git', :default_branch => 'main', :default_branch => 'dev'\n",
+			wantKinds:   []string{FindingPuppetfileUnsupportedRuby},
+			wantLines:   []int{1},
+			wantModules: nil,
+			absent:      []string{"a"},
+		},
+		{
+			name:      "moduledir_value_is_not_a_safe_scalar",
+			text:      "moduledir 'a\\'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_carries_nul",
+			text:      "moduledir 'a\x00b'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_carries_vertical_tab",
+			text:      "moduledir 'a\vb'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_carries_form_feed",
+			text:      "moduledir 'a\fb'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_carries_line_separator",
+			text:      "moduledir 'a b'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
 			name:        "bom_is_not_a_finding",
 			text:        "\xef\xbb\xbfmod 'puppetlabs/ntp'\n",
 			wantModules: []string{"puppetlabs/ntp"},
@@ -655,6 +706,8 @@ func strictCorpusRejected() []string {
 		"mod 'a',\n  :git => 'https://example.com/a.git' + system('x')\n",
 		"mod 'a',\n  :git => 'https://example.com/a.git' garbage\n",
 		"mod 'a', :git => 'https://example.com/a.git', :tag => 'v1' trailing\n",
+		"mod 'a', :git => 'https://example.com/a.git', :git => 'https://example.com/b.git'\n",
+		"mod 'a', :git => 'https://example.com/a.git', :default_branch => 'main', :default_branch => 'dev'\n",
 	}
 }
 
