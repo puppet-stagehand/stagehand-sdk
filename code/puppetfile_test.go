@@ -344,6 +344,77 @@ func TestPuppetfile_ScalarSafe(t *testing.T) {
 	}
 }
 
+// forgeModuleVersioned builds a Forge-sourced module so a test can vary only
+// the version.
+func forgeModuleVersioned(version string) *hostv1.PuppetfileModule {
+	return &hostv1.PuppetfileModule{Name: "puppetlabs/ntp", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: version}}}
+}
+
+// gitModuleWithURL builds a Git-sourced module so a test can vary only the URL.
+func gitModuleWithURL(url string) *hostv1.PuppetfileModule {
+	return &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: url}}}
+}
+
+// gitModuleWithRef builds a Git-sourced module carrying one ref_kind arm. key
+// is the DSL spelling (ref, tag, branch, commit) or "default_branch"; the
+// default_branch case sets no ref arm.
+func gitModuleWithRef(key, value string) *hostv1.PuppetfileModule {
+	gs := &hostv1.GitSource{Url: "https://example.com/a.git"}
+	switch key {
+	case "ref":
+		gs.RefKind = &hostv1.GitSource_Ref{Ref: value}
+	case "tag":
+		gs.RefKind = &hostv1.GitSource_Tag{Tag: value}
+	case "branch":
+		gs.RefKind = &hostv1.GitSource_Branch{Branch: value}
+	case "commit":
+		gs.RefKind = &hostv1.GitSource_Commit{Commit: value}
+	case "default_branch":
+		gs.DefaultBranch = value
+	}
+	return &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: gs}}
+}
+
+// TestPuppetfile_ValidateModuleRefSelectors is the full vector x field matrix
+// for the five ref-like values (:ref, :tag, :branch, :commit,
+// :default_branch): every hostile value is refused on every field, every
+// real-world value is accepted on every field, and control_branch, which
+// carries no string, is exempt.
+func TestPuppetfile_ValidateModuleRefSelectors(t *testing.T) {
+	keys := []string{"ref", "tag", "branch", "commit", "default_branch"}
+	hostile := map[string]string{
+		"injects_mod_line":  "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#",
+		"injects_statement": "x'\nsystem('id')\n#",
+		"leading_hyphen":    "-x",
+		"whitespace":        "a b",
+		"backslash":         `a\b`,
+		"too_long":          strings.Repeat("a", 256),
+	}
+	for _, key := range keys {
+		for name, v := range hostile {
+			t.Run(key+"_"+name, func(t *testing.T) {
+				if err := ValidateModule(gitModuleWithRef(key, v)); !errors.Is(err, ErrPuppetfileInvalid) {
+					t.Fatalf("ValidateModule(%s=%q) error = %v, want wrapping ErrPuppetfileInvalid", key, v, err)
+				}
+			})
+		}
+		for _, v := range []string{"main", "release/1.x", "v1.2.3", "docs_experiment", "83401079053dca11d61945bd9beef9ecf7576cbf"} {
+			t.Run(key+"_accepts_"+v, func(t *testing.T) {
+				if err := ValidateModule(gitModuleWithRef(key, v)); err != nil {
+					t.Fatalf("ValidateModule(%s=%q) unexpected error = %v", key, v, err)
+				}
+			})
+		}
+	}
+	control := &hostv1.PuppetfileModule{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+		Url:     "https://example.com/a.git",
+		RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}},
+	}}}
+	if err := ValidateModule(control); err != nil {
+		t.Fatalf("ValidateModule(control_branch) unexpected error = %v", err)
+	}
+}
+
 func TestPuppetfile_ValidateModule(t *testing.T) {
 	invalid := []struct {
 		name string
@@ -365,6 +436,26 @@ func TestPuppetfile_ValidateModule(t *testing.T) {
 		{"git_name_with_backslash", gitModuleNamed(`a\b`)},
 		{"git_name_with_double_quote", gitModuleNamed(`a"b`)},
 		{"git_name_invalid_utf8", gitModuleNamed("a\xffb")},
+		{"forge_version_injects_statement", forgeModuleVersioned("1.0'\nsystem('id')\n#")},
+		{"forge_version_trailing_backslash", forgeModuleVersioned(`1.0\`)},
+		{"forge_version_double_quote", forgeModuleVersioned(`1.0"`)},
+		{"forge_version_with_space", forgeModuleVersioned(">= 1.0")},
+		{"forge_version_invalid_utf8", forgeModuleVersioned("1.0\xff")},
+		{"forge_version_too_long", forgeModuleVersioned("1" + strings.Repeat("0", 128))},
+		{"forge_name_trailing_newline", &hostv1.PuppetfileModule{Name: "puppetlabs/ntp\n", Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{}}}},
+		{"git_url_expression_breakout", gitModuleWithURL("https://a/'+`id`+'")},
+		{"git_url_vertical_tab_form_feed_nul", gitModuleWithURL("https://a/\v\fb\x00")},
+		{"git_url_line_separator", gitModuleWithURL("https://a/\u2028b")},
+		{"git_url_invalid_utf8", gitModuleWithURL("https://a/\xffb")},
+		{"git_url_backslash", gitModuleWithURL(`https://a/a\b`)},
+		{"git_ref_injects_mod_line", gitModuleWithRef("ref", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#")},
+		{"git_tag_injects_mod_line", gitModuleWithRef("tag", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#")},
+		{"git_branch_injects_mod_line", gitModuleWithRef("branch", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#")},
+		{"git_commit_injects_mod_line", gitModuleWithRef("commit", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#")},
+		{"git_default_branch_injects_statement", gitModuleWithRef("default_branch", "x'\nsystem('id')\n#")},
+		{"git_ref_leading_hyphen", gitModuleWithRef("ref", "-x")},
+		{"git_ref_with_space", gitModuleWithRef("ref", "a b")},
+		{"git_ref_too_long", gitModuleWithRef("ref", strings.Repeat("a", 256))},
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -390,6 +481,18 @@ func TestPuppetfile_ValidateModule(t *testing.T) {
 		gitModuleNamed("skip_install_path"),
 		gitModuleNamed("conflict"),
 		gitModuleNamed("ntp.v2"),
+		forgeModuleVersioned("1.0"),
+		forgeModuleVersioned("1.0.0"),
+		forgeModuleVersioned("1.2.3-rc.1+build.5"),
+		forgeModuleVersioned("0.10.0"),
+		forgeModuleVersioned("7.0.1"),
+		forgeModuleVersioned("9.9.9"),
+		forgeModuleVersioned(""),
+		gitModuleWithURL("https://example.com/frag.git#branch"),
+		gitModuleWithURL("git@git.example.com:puppet/apache.git"),
+		gitModuleWithURL("file:///var/repos/apache.git"),
+		gitModuleWithURL("git://github.com/puppetlabs/puppetlabs-apache"),
+		gitModuleWithURL("ssh://git@github.com/puppetlabs/puppetlabs-apache"),
 	}
 	for i, mod := range valid {
 		if err := ValidateModule(mod); err != nil {
