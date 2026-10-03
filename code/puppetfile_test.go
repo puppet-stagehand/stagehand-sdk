@@ -285,6 +285,33 @@ func TestPuppetfile_RenderControlBranchIsABareSymbol(t *testing.T) {
 	}
 }
 
+// gitModuleNamed builds a Git-sourced module with a benign URL so a test can
+// vary only the name.
+func gitModuleNamed(name string) *hostv1.PuppetfileModule {
+	return &hostv1.PuppetfileModule{Name: name, Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/a.git"}}}
+}
+
+// TestPuppetfile_RejectsInjectedModuleText is the NEW-2 end-to-end slice: the
+// milestone audit's headline payload, a Git module whose Name carries extra
+// `mod` statements, must be refused by ValidateModule and must never become
+// text out of RenderPuppetfile (GOV-02).
+func TestPuppetfile_RejectsInjectedModuleText(t *testing.T) {
+	hostile := "zz'\nmod 'puppetlabs-stdlib', '99.0.0'\nmod 'qq"
+	mod := gitModuleNamed(hostile)
+
+	if err := ValidateModule(mod); !errors.Is(err, ErrPuppetfileInvalid) {
+		t.Fatalf("ValidateModule(hostile git name) error = %v, want wrapping ErrPuppetfileInvalid", err)
+	}
+
+	got, err := RenderPuppetfile(&hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{mod}})
+	if !errors.Is(err, ErrPuppetfileInvalid) {
+		t.Fatalf("RenderPuppetfile(hostile git name) error = %v, want wrapping ErrPuppetfileInvalid", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("RenderPuppetfile(hostile git name) returned text %q, want the empty string (no partial render)", got)
+	}
+}
+
 func TestPuppetfile_ValidateModule(t *testing.T) {
 	invalid := []struct {
 		name string
@@ -298,6 +325,14 @@ func TestPuppetfile_ValidateModule(t *testing.T) {
 		{"git_url_with_newline", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/a\nb.git"}}}},
 		{"git_url_command_transport", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ext::sh -c 'touch pwned'"}}}},
 		{"git_url_proxycommand", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ssh://-oProxyCommand=touch pwned/repo.git"}}}},
+		{"git_name_injects_mod_lines", gitModuleNamed("zz'\nmod 'puppetlabs-stdlib', '99.0.0'\nmod 'qq")},
+		{"git_name_with_slash", gitModuleNamed("ns/name")},
+		{"git_name_dot", gitModuleNamed(".")},
+		{"git_name_dotdot", gitModuleNamed("..")},
+		{"git_name_leading_hyphen", gitModuleNamed("-x")},
+		{"git_name_with_backslash", gitModuleNamed(`a\b`)},
+		{"git_name_with_double_quote", gitModuleNamed(`a"b`)},
+		{"git_name_invalid_utf8", gitModuleNamed("a\xffb")},
 	}
 	for _, tc := range invalid {
 		t.Run(tc.name, func(t *testing.T) {
@@ -316,6 +351,13 @@ func TestPuppetfile_ValidateModule(t *testing.T) {
 		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "ssh://git@github.com/puppetlabs/puppetlabs-apache"}}},
 		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "file:///var/repos/apache.git"}}},
 		{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "git@git.example.com:puppet/apache.git"}}},
+		gitModuleNamed("ntp-café"),
+		gitModuleNamed("profiles"),
+		gitModuleNamed("apache_docs"),
+		gitModuleNamed("abs_git"),
+		gitModuleNamed("skip_install_path"),
+		gitModuleNamed("conflict"),
+		gitModuleNamed("ntp.v2"),
 	}
 	for i, mod := range valid {
 		if err := ValidateModule(mod); err != nil {
