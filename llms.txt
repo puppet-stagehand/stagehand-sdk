@@ -3,7 +3,7 @@
 
 ## Read first
 - CLAUDE.md: rules and the check loop
-- schema/json/manifest.schema.json: the pack manifest
+- manifest/schema.json: the pack manifest
 - schema/proto/stagehand/host/v1/host.proto: facets the worker may call (permission strings in comments)
 - schema/proto/stagehand/host/v1/worker.proto: services the worker implements
 - schema/ts/slots.d.ts: UI slots and props

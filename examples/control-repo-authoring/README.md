@@ -97,11 +97,6 @@ a short-lived token, not a standing grant. A pack can never grant itself the
 authority to decide its own proposals. `tokens:issue` is present only because
 those two routes carry that scope.
 
-One permission is deliberately absent: the Forge read-only permission
-(`forge:read`). Nothing in the facet checks it, and the only manifest rule that
-requires it applies to packs that ship a `content` block, which this pack does
-not. Declaring it would be a grant with no use, so the manifest leaves it out.
-
 ## How to run it
 
 The example's own tests:

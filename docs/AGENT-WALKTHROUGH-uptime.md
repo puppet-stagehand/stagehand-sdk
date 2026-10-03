@@ -6,7 +6,7 @@ Prompt given to Claude Code, opened in this repository with no other context:
 > a node-detail tab. Core tier, Apache-2.0, published by "Example Org".
 
 Expected assistant behaviour:
-1. Reads CLAUDE.md, then `schema/json/manifest.schema.json` and `examples/hello/manifest.json`.
+1. Reads CLAUDE.md, then `manifest/schema.json` and `examples/hello/manifest.json`.
 2. Writes `packs/uptime/manifest.json` with `id: uptime`, `slots: ["nodeDetailTab"]`,
    `permissions: ["documents:rw", "puppetdb:read"]` (facts carry `system_uptime`),
    a placeholder `ui_digest`, and a `refresh` job.

@@ -6,7 +6,7 @@ console's source; everything a pack may touch is defined here.
 
 ## What a pack is
 A signed container image with three parts:
-- `/stagehand/manifest.json` — the pack's ID card. Schema: `schema/json/manifest.schema.json`.
+- `/stagehand/manifest.json` — the pack's ID card. Schema: `manifest/schema.json`.
 - `/stagehand/ui/` — an optional prebuilt UI bundle that the console mounts into named **slots**. Types: `schema/ts/slots.d.ts`.
 - the **worker** (container entrypoint) — dials the console over mTLS gRPC and calls **host facets**; the console calls it back for routes, assets, health, jobs. Wire: `schema/proto/stagehand/host/v1/*.proto`.
 

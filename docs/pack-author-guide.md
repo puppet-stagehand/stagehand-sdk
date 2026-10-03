@@ -19,7 +19,10 @@ Copy `examples/hello/manifest.json` and change:
     data in the Code facet.
   - `code:import` — read an existing control repo from a git address and
     propose importing it. It is separate from `code:rw` because it reaches a
-    git host outside the console, and you need both to import.
+    git host outside the console, and you need both to import. `code:import`
+    is only honoured together with `code:rw`: if you declare `code:import`
+    without `code:rw`, pack-check refuses the manifest with the finding
+    `code_import_requires_code_rw`. The fix is to add `"code:rw"`.
   - `forge:rw` — search the Puppet Forge for modules and look at what a
     module depends on.
   - `forge:recommend` — ask for ranked module suggestions from a plain
