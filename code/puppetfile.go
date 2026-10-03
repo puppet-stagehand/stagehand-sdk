@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
@@ -419,6 +421,50 @@ func forgeSlugOK(name string) bool {
 	return reForgeSlug.MatchString(name)
 }
 
+// reGitName matches the Git module name grammar: a bare token whose first
+// rune is a Unicode letter, digit or underscore, followed by up to 127 more
+// letters, digits, underscores, dots or hyphens. Unicode letters and digits
+// are deliberate (SD-1): TestPuppetfile_ParseQuoteStyleAndUnicode pins a Git
+// module named "ntp-café". No `(?m)` and no `\Z`: Go RE2 `$` already anchors
+// at end of text, which is what makes reForgeSlug reject a trailing newline.
+var reGitName = regexp.MustCompile(`^[\p{L}\p{N}_][\p{L}\p{N}_.-]{0,127}$`)
+
+// gitNameOK reports whether name is a valid Git module name. This is a
+// security rule, not cosmetics. No quote, backslash, whitespace or control
+// rune can be in a Git module name, so the name can never terminate the
+// single-quoted literal it is rendered into (NEW-2). No `/` can be, so a Git
+// name can never look like a Forge slug or a path. The first rune cannot be
+// `-` or `.`, so ".", ".." and an option-looking name are impossible.
+func gitNameOK(name string) bool {
+	return reGitName.MatchString(name)
+}
+
+// scalarSafe reports whether s can sit inside a single-quoted Ruby literal on
+// one line exactly as written. A value emitted inside such a literal must not
+// be able to terminate that literal or start a new line, which is how NEW-2
+// forged extra `mod` statements. It rejects invalid UTF-8, the single quote,
+// the backslash (Ruby reads `\'` as an escaped quote, so a trailing backslash
+// swallows the next line), every control rune (newline, carriage return,
+// vertical tab, form feed, NUL, U+0085 and the rest of the C0 and C1 ranges)
+// and the Unicode line and paragraph separators U+2028 and U+2029.
+//
+// The double quote is rejected too even though the renderer emits single
+// quotes: the strict reader's reQuoted and reGitAttr groups are `[^']*` and
+// `[^"]*`, so a double quote inside a single-quoted value survives rendering
+// but changes how a double-quoted re-write would read. The project rule is
+// reject, never escape (SD-8). The empty string is safe.
+func scalarSafe(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if r == '\'' || r == '"' || r == '\\' || unicode.IsControl(r) || r == 0x2028 || r == 0x2029 {
+			return false
+		}
+	}
+	return true
+}
+
 // CanonicalModuleName returns the canonical comparison key for a Forge
 // module name: the lowercase owner-name hyphen form, so puppetlabs/stdlib,
 // puppetlabs-stdlib and PuppetLabs/stdlib are all "puppetlabs-stdlib".
@@ -482,7 +528,8 @@ func gitURLOK(url string) bool {
 }
 
 // ValidateModule rejects a Forge module with both version and latest set,
-// a Forge module whose name is not a valid slug, a Git module with an
+// a Forge module whose name is not a valid slug, a Git module whose name is
+// not a bare token (gitNameOK), a Git module with an
 // empty url, a Git module whose url carries whitespace or a newline, and a
 // Git module whose url uses a command-executing transport or carries a
 // proxy-command option.
@@ -501,6 +548,9 @@ func ValidateModule(m *hostv1.PuppetfileModule) error {
 			return fmt.Errorf("%w: module %q is not a valid Forge slug (expected ns/name or ns-name)", ErrPuppetfileInvalid, name)
 		}
 	case m.GetGit() != nil:
+		if !gitNameOK(name) {
+			return fmt.Errorf("%w: module %q is not a valid git module name (expected a bare token of letters, digits, underscore, dot or hyphen, not starting with a dot or hyphen)", ErrPuppetfileInvalid, name)
+		}
 		url := m.GetGit().GetUrl()
 		if !gitURLOK(url) {
 			return fmt.Errorf("%w: module %q has an invalid git url %q", ErrPuppetfileInvalid, name, url)

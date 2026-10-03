@@ -312,6 +312,38 @@ func TestPuppetfile_RejectsInjectedModuleText(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_ScalarSafe pins the safe-scalar predicate behind every
+// free-form rendered value: anything that could end a single-quoted Ruby
+// literal or start a new line is unsafe.
+func TestPuppetfile_ScalarSafe(t *testing.T) {
+	unsafe := map[string]string{
+		"single_quote":        "a'b",
+		"double_quote":        `a"b`,
+		"backslash":           `a\b`,
+		"trailing_backslash":  `a\`,
+		"newline":             "a\nb",
+		"carriage_return":     "a\rb",
+		"tab":                 "a\tb",
+		"vertical_tab":        "a\vb",
+		"form_feed":           "a\fb",
+		"nul":                 "a\x00b",
+		"c1_next_line":        "a\u0085b",
+		"line_separator":      "a\u2028b",
+		"paragraph_separator": "a\u2029b",
+		"invalid_utf8":        "a\xffb",
+	}
+	for name, v := range unsafe {
+		if scalarSafe(v) {
+			t.Errorf("scalarSafe(%s = %q) = true, want false", name, v)
+		}
+	}
+	for _, v := range []string{"", "plain", "a b", "release/1.x", "https://example.com/frag.git#branch", "café", "a`b"} {
+		if !scalarSafe(v) {
+			t.Errorf("scalarSafe(%q) = false, want true", v)
+		}
+	}
+}
+
 func TestPuppetfile_ValidateModule(t *testing.T) {
 	invalid := []struct {
 		name string
