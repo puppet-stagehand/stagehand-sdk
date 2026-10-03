@@ -334,6 +334,41 @@ func TestPuppetfile_RenderRejectsUnsafeModuledir(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_CheckRenderRoundTripDetectsDivergence pins the render-time
+// self-check (SD-3): a text/model pair that does not strict-parse to the same
+// moduledir and modules is refused, while Environment, which ParsePuppetfile
+// never sets, is ignored (12.1-RESEARCH.md Pitfall 5).
+func TestPuppetfile_CheckRenderRoundTripDetectsDivergence(t *testing.T) {
+	divergent := []struct {
+		name string
+		out  string
+		p    *hostv1.Puppetfile
+	}{
+		{"text_has_module_model_has_none", "mod 'puppetlabs/ntp'\n", &hostv1.Puppetfile{}},
+		{"moduledir_differs", "moduledir 'a'\n", &hostv1.Puppetfile{Moduledir: "b"}},
+		{"module_version_differs", "mod 'puppetlabs/ntp', '1.0.0'\n", &hostv1.Puppetfile{Modules: []*hostv1.PuppetfileModule{forgeModuleVersioned("2.0.0")}}},
+		{"text_does_not_parse", "this is not a puppetfile\n", &hostv1.Puppetfile{}},
+	}
+	for _, tc := range divergent {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := checkRenderRoundTrip(tc.out, tc.p); !errors.Is(err, ErrPuppetfileInvalid) {
+				t.Fatalf("checkRenderRoundTrip(%q, %v) error = %v, want wrapping ErrPuppetfileInvalid", tc.out, tc.p, err)
+			}
+		})
+	}
+
+	t.Run("environment_is_ignored", func(t *testing.T) {
+		p := &hostv1.Puppetfile{Environment: "prod", Moduledir: "thirdparty", Modules: []*hostv1.PuppetfileModule{forgeModuleVersioned("1.0.0")}}
+		out, err := RenderPuppetfile(p)
+		if err != nil {
+			t.Fatalf("RenderPuppetfile error: %v", err)
+		}
+		if err := checkRenderRoundTrip(out, p); err != nil {
+			t.Fatalf("checkRenderRoundTrip(%q) with Environment set = %v, want nil", out, err)
+		}
+	})
+}
+
 // gitModuleNamed builds a Git-sourced module with a benign URL so a test can
 // vary only the name.
 func gitModuleNamed(name string) *hostv1.PuppetfileModule {

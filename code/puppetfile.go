@@ -15,6 +15,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"google.golang.org/protobuf/proto"
+
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
 
@@ -336,6 +338,16 @@ func RenderPuppetfile(p *hostv1.Puppetfile) (string, error) {
 	}
 	var b strings.Builder
 	if p.Moduledir != "" {
+		// Moduledir is the fifth sink the audit did not name: SetModuledir
+		// (host/local/code_puppetfile.go) takes a bare string, is documented
+		// as ungated and performs no validation, so Moduledir is the only
+		// rendered value that never passes through ValidateModule. The check
+		// therefore lives here, in the single sink. Path shape (absolute
+		// paths, "..") is deliberately not policed (SD-6): only an unsafe
+		// scalar is refused, and the omission is not an oversight.
+		if !scalarSafe(p.Moduledir) {
+			return "", fmt.Errorf("%w: moduledir %q is not a safe value", ErrPuppetfileInvalid, p.Moduledir)
+		}
 		fmt.Fprintf(&b, "moduledir '%s'\n", p.Moduledir)
 		if len(p.Modules) > 0 {
 			b.WriteString("\n")
@@ -354,7 +366,11 @@ func RenderPuppetfile(p *hostv1.Puppetfile) (string, error) {
 			return "", fmt.Errorf("%w: module %q has no source", ErrPuppetfileInvalid, m.Name)
 		}
 	}
-	return b.String(), nil
+	out := b.String()
+	if err := checkRenderRoundTrip(out, p); err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // renderForge renders a Forge module's single line: bare, pinned, or
@@ -407,6 +423,36 @@ func renderGit(name string, g *hostv1.GitSource) string {
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// checkRenderRoundTrip verifies that out, the text RenderPuppetfile is about
+// to return for p, strict-parses back to the same moduledir and the same
+// modules. It is defence in depth for SD-3: the field grammars already close
+// every reproduced injection vector, and this makes "what we render is what
+// we parse" an enforced invariant even if a future field is added without a
+// grammar.
+//
+// It compares Moduledir and Modules only, never the whole message, because
+// loadPuppetfileLocked sets Environment while ParsePuppetfile never does
+// (12.1-RESEARCH.md Pitfall 5). It calls ParsePuppetfile and never
+// RenderPuppetfile, so it cannot recurse.
+func checkRenderRoundTrip(out string, p *hostv1.Puppetfile) error {
+	back, err := ParsePuppetfile(out)
+	if err != nil {
+		return fmt.Errorf("%w: the rendered text does not parse back (%v)", ErrPuppetfileInvalid, err)
+	}
+	if back.GetModuledir() != p.GetModuledir() {
+		return fmt.Errorf("%w: the rendered text does not parse back to the same model: moduledir %q became %q", ErrPuppetfileInvalid, p.GetModuledir(), back.GetModuledir())
+	}
+	if len(back.GetModules()) != len(p.GetModules()) {
+		return fmt.Errorf("%w: the rendered text does not parse back to the same model: %d modules became %d", ErrPuppetfileInvalid, len(p.GetModules()), len(back.GetModules()))
+	}
+	for i, want := range p.GetModules() {
+		if !proto.Equal(back.GetModules()[i], want) {
+			return fmt.Errorf("%w: the rendered text does not parse back to the same model: module %d (%q) became %q", ErrPuppetfileInvalid, i, want.GetName(), back.GetModules()[i].GetName())
+		}
+	}
+	return nil
 }
 
 // reForgeSlug matches the Forge slug grammar: an owner segment of
