@@ -21,7 +21,7 @@
       "runner_certname": { "type": "string", "title": "Runner node", "format": "hostname" }
     }
   },
-  "permissions": ["documents:rw", "secrets:rw", "tokens:issue", "bolt:run", "inventory:read", "forge:read"],
+  "permissions": ["documents:rw", "secrets:rw", "tokens:issue", "bolt:run", "inventory:read"],
   "routes": [
     { "method": "GET",    "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "getState" },
     { "method": "POST",   "path": "state/{workspace}", "access": { "scope": "state:rw", "public": true }, "operation_id": "putState" },

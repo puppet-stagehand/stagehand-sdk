@@ -157,10 +157,13 @@ func TestRules(t *testing.T) {
 			m.OpenAPIPath = ""
 		}, "openapi_path_missing"},
 		{"job too frequent", func(m *Manifest) { m.Jobs = []Job{{Name: "tick", Every: "5s"}} }, "job_interval_invalid"},
-		{"content needs forge:read", func(m *Manifest) {
+		{"content needs no forge permission", func(m *Manifest) {
 			m.Content = &Content{ForgeSlug: "souldo-stagehand_hello", Version: ">=1 <2"}
 			m.Permissions = []string{"documents:rw"}
-		}, "content_requires_forge_read"},
+		}, ""},
+		{"removed forge:read is an unknown permission", func(m *Manifest) {
+			m.Permissions = append(m.Permissions, "forge:read")
+		}, "permission_unknown"},
 		{"egress with scheme", func(m *Manifest) { m.Network = &Network{Egress: []string{"https://example.com"}} }, "network_egress_invalid"},
 		{"settings oneOf", func(m *Manifest) {
 			m.SettingsSchema = map[string]any{"type": "object", "properties": map[string]any{"mode": map[string]any{"oneOf": []any{}}}}
@@ -518,7 +521,7 @@ func TestPermissionVocabulariesAgree(t *testing.T) {
 // real Recommend consumer declares validate clean, and that a widened spelling
 // of either is refused with a fix line that offers a real Forge literal.
 func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
-	realForge := []string{"forge:read", "forge:rw", "forge:recommend"}
+	realForge := []string{"forge:rw", "forge:recommend"}
 	for _, real := range []string{"forge:rw", "forge:recommend"} {
 		m := load(t, "../examples/hello/manifest.json")
 		m.Permissions = append(m.Permissions, real)
@@ -527,7 +530,7 @@ func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
 		}
 	}
 
-	for _, widened := range []string{"forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"} {
+	for _, widened := range []string{"forge:read", "forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"} {
 		m := load(t, "../examples/hello/manifest.json")
 		m.Permissions = append(m.Permissions, widened)
 		fs := Validate(m)
@@ -556,9 +559,11 @@ func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
 
 // TestForgePermissionVocabulariesCarryBothLiterals pins forge:rw and
 // forge:recommend as exact literals on all three independently maintained
-// vocabularies, and pins the survival of forge:read, which names a different,
-// dormant read-only content rule and was added alongside, never replaced
-// (the Phase 6 code:read precedent). It is the positive-control counterpart to
+// vocabularies, and pins the ABSENCE of forge:read. forge:read was removed in
+// Phase 12 as a dead grant: no host path honoured it, and the only manifest
+// rule that asked for it (content_requires_forge_read) advertised a permission
+// that did nothing. A manifest that still declares it now gets the generic
+// permission_unknown finding. It is the positive-control counterpart to
 // TestCodeApproveScopeIsNotAManifestPermission: forge:recommend IS a facet
 // permission, where code:approve is not.
 //
@@ -566,12 +571,12 @@ func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
 // later renames.
 func TestForgePermissionVocabulariesCarryBothLiterals(t *testing.T) {
 	const (
-		forgeRead      = "forge:read"
-		forgeRW        = "forge:rw"
-		forgeRecommend = "forge:recommend"
+		removedForgeRead = "forge:read"
+		forgeRW          = "forge:rw"
+		forgeRecommend   = "forge:recommend"
 	)
-	real := []string{forgeRead, forgeRW, forgeRecommend}
-	widened := []string{"forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"}
+	real := []string{forgeRW, forgeRecommend}
+	widened := []string{removedForgeRead, "forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"}
 
 	t.Run("rePerm is an exact-literal match", func(t *testing.T) {
 		for _, p := range real {
@@ -586,7 +591,7 @@ func TestForgePermissionVocabulariesCarryBothLiterals(t *testing.T) {
 		}
 	})
 
-	t.Run("Permissions slice carries all three, including the pre-existing read literal", func(t *testing.T) {
+	t.Run("Permissions slice carries both live literals and not the removed one", func(t *testing.T) {
 		for _, want := range real {
 			var found bool
 			for _, p := range Permissions {
@@ -599,9 +604,14 @@ func TestForgePermissionVocabulariesCarryBothLiterals(t *testing.T) {
 				t.Errorf("Permissions slice must contain %q", want)
 			}
 		}
+		for _, p := range Permissions {
+			if p == removedForgeRead {
+				t.Errorf("Permissions slice must not contain the removed literal %q", removedForgeRead)
+			}
+		}
 	})
 
-	t.Run("schema.json carries all three", func(t *testing.T) {
+	t.Run("schema.json carries both live literals and not the removed one", func(t *testing.T) {
 		raw, err := os.ReadFile("schema.json")
 		if err != nil {
 			t.Fatal(err)
@@ -611,9 +621,12 @@ func TestForgePermissionVocabulariesCarryBothLiterals(t *testing.T) {
 				t.Errorf("schema.json must contain the literal %q", want)
 			}
 		}
+		if strings.Contains(string(raw), removedForgeRead+"|") || strings.Contains(string(raw), removedForgeRead+`"`) {
+			t.Errorf("schema.json must not contain the removed literal %q", removedForgeRead)
+		}
 	})
 
-	t.Run("fixture declaring both new permissions validates", func(t *testing.T) {
+	t.Run("fixture declaring both permissions validates", func(t *testing.T) {
 		m := load(t, "testdata/forge-recommend.json")
 		if fs := Validate(m); len(fs) != 0 {
 			t.Fatalf("forge-recommend fixture must validate; got %v", codes(fs))
