@@ -1912,3 +1912,141 @@ func TestCodeOverwriteGateDoesNotParseWholeFiles(t *testing.T) {
 		}
 	})
 }
+
+// ---------------------------------------------------------------- INT-1
+// The apply path and the approval lookup agree on canonical module identity.
+
+// TestCodeOverwriteCanonicalIdentityLadder runs the whole sanctioned ladder with
+// the two spellings of one module on different rungs: an approval recorded for
+// the slash spelling must unlock the hyphen spelling, apply must keep the
+// module's index and store the canonical name, a replay must be the idempotent
+// no-op, and a replay after the module moved must be refused.
+func TestCodeOverwriteCanonicalIdentityLadder(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+	seedDoc(t, h, ctx, "code-puppetfiles", "prod", map[string]any{
+		"text": "mod 'puppetlabs-ntp'\nmod 'puppetlabs-apache', '0.10.0'\nmod 'puppetlabs-stdlib', :latest\n",
+	})
+
+	proposeOverwrite(t, h, "apache-6", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
+	// A pending proposal is not an approval, whichever spelling the Put uses.
+	if err := putModuleErr(h, "prod", forgeModule("puppetlabs-apache", "6.1.0")); !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
+		t.Fatalf("Put before approval: got %v, want requires-approval and not apply-pending", err)
+	}
+	approveOverwrite(t, h, "apache-6")
+	if err := putModuleErr(h, "prod", forgeModule("puppetlabs-apache", "6.1.0")); !local.IsCodeOverwriteApplyPending(err) {
+		t.Fatalf("Put of the other spelling after approval: got %v, want apply-pending", err)
+	}
+
+	got, err := applyModule(h, "apache-6")
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if got.GetName() != "puppetlabs-apache" || got.GetForge().GetVersion() != "6.1.0" {
+		t.Fatalf("Apply returned %+v, want canonical puppetlabs-apache 6.1.0", got)
+	}
+	const want = "mod 'puppetlabs-ntp'\nmod 'puppetlabs-apache', '6.1.0'\nmod 'puppetlabs-stdlib', :latest\n"
+	if text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); text != want {
+		t.Fatalf("stored text after apply:\n got: %q\nwant: %q", text, want)
+	}
+
+	// Replay with nothing changed: the idempotent no-op, not already-applied.
+	again, err := applyModule(h, "apache-6")
+	if err != nil {
+		t.Fatalf("replay of an applied slash-spelled proposal: want the idempotent no-op, got %v", err)
+	}
+	if again.GetName() != "puppetlabs-apache" || again.GetForge().GetVersion() != "6.1.0" {
+		t.Fatalf("replay returned %+v", again)
+	}
+	if text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); text != want {
+		t.Fatalf("replay changed the stored text: %q", text)
+	}
+
+	// Move the module by a route the gate does not cover, then replay.
+	if _, err := h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "puppetlabs/apache"}); err != nil {
+		t.Fatalf("RemovePuppetfileModule: %v", err)
+	}
+	mustPutModule(t, h, "prod", forgeModule("puppetlabs/apache", "9.9.9"))
+	before := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
+	if _, err := applyModule(h, "apache-6"); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("replay after the module moved: got %v, want FailedPrecondition", err)
+	}
+	if text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); text != before {
+		t.Fatalf("a refused replay wrote: %q", text)
+	}
+}
+
+// TestCodeOverwriteApplyTargetIdentity pins the target-versus-payload
+// consistency check as a canonical-key comparison, not a string comparison.
+func TestCodeOverwriteApplyTargetIdentity(t *testing.T) {
+	setup := func(t *testing.T) *host.Host {
+		h := newOverwriteHost()
+		mustCreateEnv(t, h, "prod")
+		seedDoc(t, h, context.Background(), "code-puppetfiles", "prod", map[string]any{
+			"text": "mod 'puppetlabs-ntp'\nmod 'puppetlabs-apache', '0.10.0'\n",
+		})
+		return h
+	}
+	propose := func(t *testing.T, h *host.Host, id, targetName string, payload *hostv1.PuppetfileModule) {
+		t.Helper()
+		body, err := code.OverwriteBodyForPuppetfileModule("prod", payload)
+		if err != nil {
+			t.Fatalf("OverwriteBodyForPuppetfileModule: %v", err)
+		}
+		body["target"].(map[string]any)["name"] = targetName
+		if _, err := approval.ProposeBody(context.Background(), h, overwriteKind, id, body); err != nil {
+			t.Fatalf("ProposeBody: %v", err)
+		}
+		approveOverwrite(t, h, id)
+	}
+
+	t.Run("payload names a different canonical module", func(t *testing.T) {
+		h := setup(t)
+		before := puppetfileTextFromDocumentsRaw(t, h, context.Background(), "prod")
+		propose(t, h, "mixed", "puppetlabs-ntp", forgeModule("puppetlabs/apache", "6.1.0"))
+		_, err := applyModule(h, "mixed")
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "carries a payload for") {
+			t.Fatalf("got %v, want FailedPrecondition naming the target/payload disagreement", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, context.Background(), "prod"); got != before {
+			t.Fatalf("mismatched Apply wrote: %q", got)
+		}
+	})
+	t.Run("payload spelled differently from its target is accepted", func(t *testing.T) {
+		h := setup(t)
+		propose(t, h, "spelled", "puppetlabs-apache", forgeModule("PuppetLabs/apache", "6.1.0"))
+		got, err := applyModule(h, "spelled")
+		if err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if got.GetName() != "puppetlabs-apache" {
+			t.Fatalf("Apply returned %q, want the canonical name", got.GetName())
+		}
+		const want = "mod 'puppetlabs-ntp'\nmod 'puppetlabs-apache', '6.1.0'\n"
+		if text := puppetfileTextFromDocumentsRaw(t, h, context.Background(), "prod"); text != want {
+			t.Fatalf("stored text:\n got: %q\nwant: %q", text, want)
+		}
+	})
+}
+
+// TestCodeOverwriteForgeAndGitCoexist proves the source discriminator: a Git
+// module whose raw name equals a Forge module's canonical name is a different
+// module, and an approved overwrite of the Forge entry never touches it.
+func TestCodeOverwriteForgeAndGitCoexist(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+	const seeded = "mod 'acme-widgets', '1.0.0'\nmod 'acme-widgets',\n  :git => 'https://example.com/acme-widgets.git'\n"
+	seedDoc(t, h, ctx, "code-puppetfiles", "prod", map[string]any{"text": seeded})
+	if names := listModuleNames(t, h, "prod"); len(names) != 2 {
+		t.Fatalf("seed produced %v, want a Forge and a Git entry", names)
+	}
+
+	overwriteViaApproval(t, h, "widgets-2", "prod", forgeModule("acme/widgets", "2.0.0"))
+
+	const want = "mod 'acme-widgets', '2.0.0'\nmod 'acme-widgets',\n  :git => 'https://example.com/acme-widgets.git'\n"
+	if text := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); text != want {
+		t.Fatalf("stored text:\n got: %q\nwant: %q", text, want)
+	}
+}
