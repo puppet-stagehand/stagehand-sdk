@@ -439,6 +439,22 @@ func gitNameOK(name string) bool {
 	return reGitName.MatchString(name)
 }
 
+// reForgeVersion matches a pinned Forge version: an alphanumeric first
+// character followed by up to 127 letters, digits, dots, plus signs,
+// underscores or hyphens. It is a charset allow-list, not strict semver
+// (SD-2): r10k accepts only a pinned version or `:latest` (no ranges, so no
+// operator or space is ever needed) while imported control repos legitimately
+// carry shorthand like `1.0`, and skipping those on import would be a
+// user-visible change nobody asked for.
+var reForgeVersion = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z.+_-]{0,127}$`)
+
+// forgeVersionOK reports whether v is an acceptable pinned Forge version. It
+// must be called only on a non-empty version: the empty string is the legal
+// bare `mod 'ns/name'` form and is handled by the caller.
+func forgeVersionOK(v string) bool {
+	return reForgeVersion.MatchString(v)
+}
+
 // scalarSafe reports whether s can sit inside a single-quoted Ruby literal on
 // one line exactly as written. A value emitted inside such a literal must not
 // be able to terminate that literal or start a new line, which is how NEW-2
@@ -463,6 +479,18 @@ func scalarSafe(s string) bool {
 		}
 	}
 	return true
+}
+
+// refOK reports whether s is acceptable as a Git ref selector (:ref, :tag,
+// :branch, :commit) or a :default_branch value: a safe scalar with no
+// whitespace, no leading hyphen and at most 255 bytes.
+//
+// It is deliberately a safe-scalar predicate and not a git-check-ref-format
+// regex (SD-9), so a real-world branch name imported from a control repo is
+// not skipped. A ref beginning with `-` is refused because it would be read
+// as an option if the value ever reached a `git` argv.
+func refOK(s string) bool {
+	return scalarSafe(s) && !strings.ContainsFunc(s, unicode.IsSpace) && !strings.HasPrefix(s, "-") && len(s) <= 255
 }
 
 // CanonicalModuleName returns the canonical comparison key for a Forge
@@ -527,12 +555,17 @@ func gitURLOK(url string) bool {
 	return reGitSCP.MatchString(url)
 }
 
-// ValidateModule rejects a Forge module with both version and latest set,
-// a Forge module whose name is not a valid slug, a Git module whose name is
-// not a bare token (gitNameOK), a Git module with an
-// empty url, a Git module whose url carries whitespace or a newline, and a
-// Git module whose url uses a command-executing transport or carries a
-// proxy-command option.
+// ValidateModule enforces the rules that make a module renderable as
+// single-quoted Ruby on one line without changing what it means. It rejects,
+// in this order: an empty name; for a Forge module, both version and latest
+// set, a name that is not a Forge slug, and a version outside reForgeVersion;
+// for a Git module, a name that is not a bare token (gitNameOK), an empty URL
+// or one that fails gitURLOK, scalarSafe or carries a whitespace rune (this
+// wraps, and is stricter than, gitURLOK, whose file://, git:// and http://
+// acceptance is unchanged), a :ref, :tag, :branch or :commit value that fails
+// refOK, and a :default_branch value that fails refOK; and a module with no
+// source. The control-branch arm carries no string and is exempt. Every
+// rejection wraps ErrPuppetfileInvalid and formats the hostile value with %q.
 func ValidateModule(m *hostv1.PuppetfileModule) error {
 	name := m.GetName()
 	if name == "" {
@@ -547,13 +580,35 @@ func ValidateModule(m *hostv1.PuppetfileModule) error {
 		if !forgeSlugOK(name) {
 			return fmt.Errorf("%w: module %q is not a valid Forge slug (expected ns/name or ns-name)", ErrPuppetfileInvalid, name)
 		}
+		if v := f.GetVersion(); v != "" && !forgeVersionOK(v) {
+			return fmt.Errorf("%w: module %q has an invalid version %q (expected a pinned version of letters, digits, dot, plus, underscore or hyphen, or :latest)", ErrPuppetfileInvalid, name, v)
+		}
 	case m.GetGit() != nil:
 		if !gitNameOK(name) {
 			return fmt.Errorf("%w: module %q is not a valid git module name (expected a bare token of letters, digits, underscore, dot or hyphen, not starting with a dot or hyphen)", ErrPuppetfileInvalid, name)
 		}
 		url := m.GetGit().GetUrl()
-		if !gitURLOK(url) {
+		if !gitURLOK(url) || !scalarSafe(url) || strings.ContainsFunc(url, unicode.IsSpace) {
 			return fmt.Errorf("%w: module %q has an invalid git url %q", ErrPuppetfileInvalid, name, url)
+		}
+		var refKey, refVal string
+		switch rk := m.GetGit().GetRefKind().(type) {
+		case *hostv1.GitSource_Ref:
+			refKey, refVal = "ref", rk.Ref
+		case *hostv1.GitSource_Tag:
+			refKey, refVal = "tag", rk.Tag
+		case *hostv1.GitSource_Branch:
+			refKey, refVal = "branch", rk.Branch
+		case *hostv1.GitSource_Commit:
+			refKey, refVal = "commit", rk.Commit
+		case *hostv1.GitSource_ControlBranch:
+			// Carries no string and is rendered as a bare symbol: exempt.
+		}
+		if refVal != "" && !refOK(refVal) {
+			return fmt.Errorf("%w: module %q has an invalid %s value %q", ErrPuppetfileInvalid, name, refKey, refVal)
+		}
+		if db := m.GetGit().GetDefaultBranch(); db != "" && !refOK(db) {
+			return fmt.Errorf("%w: module %q has an invalid default_branch value %q", ErrPuppetfileInvalid, name, db)
 		}
 	default:
 		return fmt.Errorf("%w: module %q has no source", ErrPuppetfileInvalid, name)
