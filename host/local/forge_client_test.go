@@ -822,6 +822,79 @@ func TestForgeHTTPClient_ListReleasesPaginationIsBounded(t *testing.T) {
 	})
 }
 
+// IN-03: a compatible source that omits pagination.total has no end-of-list
+// count, so a short page is the only terminator. A source that never serves a
+// short page (or repeats) must still end in a bounded error.
+func TestForgeHTTPClient_ListReleasesWithoutPaginationTotalIsBounded(t *testing.T) {
+	page := func(n, size int) string {
+		var sb strings.Builder
+		sb.WriteString(`{"results":[`)
+		for i := 0; i < size; i++ {
+			if i > 0 {
+				sb.WriteString(",")
+			}
+			sb.WriteString(`{"version":"1.` + strconv.Itoa(n) + `.` + strconv.Itoa(i) + `"}`)
+		}
+		sb.WriteString(`]}`)
+		return sb.String()
+	}
+
+	t.Run("endless_full_pages_hit_the_cap", func(t *testing.T) {
+		var calls atomic.Int32
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			n := int(calls.Add(1))
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(page(n, 100)))
+		})
+		_, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal once the release cap is exceeded, got %v", err)
+		}
+		if n := calls.Load(); n > forgeMaxReleases/100+2 {
+			t.Fatalf("made %d requests; the cap should stop paging near %d", n, forgeMaxReleases/100+1)
+		}
+	})
+
+	t.Run("repeated_full_page_is_rejected", func(t *testing.T) {
+		var calls atomic.Int32
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(page(0, 100)))
+		})
+		_, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+		if status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal for a repeating registry, got %v", err)
+		}
+		if n := calls.Load(); n > 3 {
+			t.Fatalf("made %d requests for a repeating page; expected it to stop at the second", n)
+		}
+	})
+
+	t.Run("short_final_page_ends_the_list", func(t *testing.T) {
+		var calls atomic.Int32
+		ep, client := newTestForgeClient(t, func(w http.ResponseWriter, r *http.Request) {
+			n := int(calls.Add(1))
+			size := 100
+			if n == 3 {
+				size = 7
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(page(n, size)))
+		})
+		versions, err := client.ListReleases(context.Background(), ep, "puppetlabs/apache")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(versions) != 207 {
+			t.Fatalf("expected 207 versions across 3 pages, got %d", len(versions))
+		}
+		if n := calls.Load(); n != 3 {
+			t.Fatalf("expected exactly 3 requests, got %d", n)
+		}
+	})
+}
+
 // WR-08: a rate-limited or erroring enrichment endpoint is a failure, not thin
 // metadata. All-hits-failed of any non-404 kind is Unavailable, and a partial
 // failure is reported through the context's degradation collector.
