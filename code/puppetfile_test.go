@@ -285,6 +285,55 @@ func TestPuppetfile_RenderControlBranchIsABareSymbol(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_RenderRejectsUnsafeModuledir covers the fifth sink: Moduledir
+// is the one rendered value that never passes through ValidateModule (the
+// ungated SetModuledir stores a bare string), so RenderPuppetfile itself must
+// refuse an unsafe one and return no text. Path shape is deliberately not
+// policed (SD-6): absolute paths and `..` are accepted.
+func TestPuppetfile_RenderRejectsUnsafeModuledir(t *testing.T) {
+	rejected := []struct {
+		name      string
+		moduledir string
+	}{
+		{"moduledir_injects_mod_line", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#"},
+		{"moduledir_trailing_backslash", `a\`},
+		{"moduledir_double_quote", `a"b`},
+		{"moduledir_nul", "a\x00b"},
+		{"moduledir_paragraph_separator", "a\u2029b"},
+		{"moduledir_invalid_utf8", "a\xffb"},
+	}
+	for _, tc := range rejected {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := RenderPuppetfile(&hostv1.Puppetfile{Moduledir: tc.moduledir})
+			if !errors.Is(err, ErrPuppetfileInvalid) {
+				t.Fatalf("RenderPuppetfile(moduledir=%q) error = %v, want wrapping ErrPuppetfileInvalid", tc.moduledir, err)
+			}
+			if len(got) != 0 {
+				t.Fatalf("RenderPuppetfile(moduledir=%q) returned text %q, want the empty string", tc.moduledir, got)
+			}
+		})
+	}
+
+	for _, v := range []string{"thirdparty", "modules/third", "/srv/modules", "../up"} {
+		t.Run("accepts_"+v, func(t *testing.T) {
+			got, err := RenderPuppetfile(&hostv1.Puppetfile{Moduledir: v})
+			if err != nil {
+				t.Fatalf("RenderPuppetfile(moduledir=%q) unexpected error = %v", v, err)
+			}
+			if first, _, _ := strings.Cut(got, "\n"); first != "moduledir '"+v+"'" {
+				t.Fatalf("RenderPuppetfile(moduledir=%q) first line = %q, want %q", v, first, "moduledir '"+v+"'")
+			}
+		})
+	}
+
+	for _, p := range []*hostv1.Puppetfile{nil, {}} {
+		got, err := RenderPuppetfile(p)
+		if err != nil || got != "" {
+			t.Fatalf("RenderPuppetfile(%v) = (%q, %v), want (\"\", nil)", p, got, err)
+		}
+	}
+}
+
 // gitModuleNamed builds a Git-sourced module with a benign URL so a test can
 // vary only the name.
 func gitModuleNamed(name string) *hostv1.PuppetfileModule {
