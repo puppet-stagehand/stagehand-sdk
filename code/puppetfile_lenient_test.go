@@ -294,6 +294,66 @@ func catalogCases() []catalogCase {
 			},
 		},
 		{
+			name:        "duplicate_forge_module_other_spelling",
+			text:        "mod 'puppetlabs/stdlib', '1.0.0'\nmod 'puppetlabs-stdlib', '2.0.0'\n",
+			wantKinds:   []string{FindingPuppetfileDuplicateModule},
+			wantLines:   []int{2},
+			wantModules: []string{"puppetlabs/stdlib"},
+			check: func(t *testing.T, pf *hostv1.Puppetfile) {
+				if v := pf.GetModules()[0].GetForge().GetVersion(); v != "1.0.0" {
+					t.Fatalf("kept version %q, want the first occurrence 1.0.0", v)
+				}
+			},
+		},
+		{
+			name:        "duplicate_forge_module_hyphen_spelling_first",
+			text:        "mod 'puppetlabs-stdlib', '1.0.0'\nmod 'puppetlabs/stdlib', '2.0.0'\n",
+			wantKinds:   []string{FindingPuppetfileDuplicateModule},
+			wantLines:   []int{2},
+			wantModules: []string{"puppetlabs-stdlib"},
+			check: func(t *testing.T, pf *hostv1.Puppetfile) {
+				if v := pf.GetModules()[0].GetForge().GetVersion(); v != "1.0.0" {
+					t.Fatalf("kept version %q, want the first occurrence 1.0.0", v)
+				}
+			},
+		},
+		{
+			name:        "duplicate_forge_module_mixed_case_owner",
+			text:        "mod 'PuppetLabs/stdlib', '1.0.0'\nmod 'puppetlabs-stdlib', '2.0.0'\n",
+			wantKinds:   []string{FindingPuppetfileDuplicateModule},
+			wantLines:   []int{2},
+			wantModules: []string{"PuppetLabs/stdlib"},
+			check: func(t *testing.T, pf *hostv1.Puppetfile) {
+				if v := pf.GetModules()[0].GetForge().GetVersion(); v != "1.0.0" {
+					t.Fatalf("kept version %q, want the first occurrence 1.0.0", v)
+				}
+			},
+		},
+		{
+			// A bare Forge name is not a valid slug, so the collidable shape is
+			// a hyphenated Git name that canonicalises like a Forge slug.
+			name:        "forge_and_git_same_hyphenated_name_do_not_collide",
+			text:        "mod 'puppetlabs-stdlib', '1.0.0'\n" + gitMod("puppetlabs-stdlib") + "\n",
+			wantModules: []string{"puppetlabs-stdlib", "puppetlabs-stdlib"},
+		},
+		{
+			name:        "forge_slash_slug_and_git_hyphen_name_do_not_collide",
+			text:        "mod 'puppetlabs/stdlib', '1.0.0'\n" + gitMod("puppetlabs-stdlib") + "\n",
+			wantModules: []string{"puppetlabs/stdlib", "puppetlabs-stdlib"},
+		},
+		{
+			name:        "duplicate_git_module_keeps_first",
+			text:        gitMod("profiles") + "\nmod 'profiles', :git => 'https://example.com/other.git'\n",
+			wantKinds:   []string{FindingPuppetfileDuplicateModule},
+			wantLines:   []int{3},
+			wantModules: []string{"profiles"},
+			check: func(t *testing.T, pf *hostv1.Puppetfile) {
+				if u := pf.GetModules()[0].GetGit().GetUrl(); u != "https://example.com/profiles.git" {
+					t.Fatalf("kept url %q, want the first occurrence", u)
+				}
+			},
+		},
+		{
 			name:      "duplicate_moduledir_keeps_last",
 			text:      "moduledir 'a'\nmoduledir 'b'\n",
 			wantKinds: []string{FindingPuppetfileDuplicateModuledir},
@@ -875,4 +935,18 @@ func FuzzParsePuppetfileLenient(f *testing.F) {
 			t.Fatalf("strict re-parse differs:\n%v\n%v\ninput: %q", pf, back, text)
 		}
 	})
+}
+
+// TestParsePuppetfile_StrictToleratesCrossSpellingDuplicate pins SD-5: WR-03 is
+// closed at import time only. Strict parsing deliberately still returns both
+// entries, so an environment that already holds a duplicate keeps working for
+// List, Put and Remove.
+func TestParsePuppetfile_StrictToleratesCrossSpellingDuplicate(t *testing.T) {
+	pf, err := ParsePuppetfile("mod 'puppetlabs/stdlib', '1.0.0'\nmod 'puppetlabs-stdlib', '2.0.0'\n")
+	if err != nil {
+		t.Fatalf("strict ParsePuppetfile must tolerate a stored duplicate: %v", err)
+	}
+	if got := len(pf.GetModules()); got != 2 {
+		t.Fatalf("strict kept %d modules, want 2", got)
+	}
 }
