@@ -193,20 +193,29 @@ func TestInventory_DiscoverIsRaceFree(t *testing.T) {
 // uniformly regardless of which ones are implemented yet.
 func inventoryCalls(ctx context.Context, h *host.Host) map[string]func() error {
 	return map[string]func() error{
-		"GetNode":        func() error { _, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "x"}); return err },
-		"Discover":       func() error { _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); return err },
-		"ListNodes":      func() error { _, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{}); return err },
-		"QueryNodes":     func() error { _, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{}); return err },
-		"PutFacts":       func() error { _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "x"}); return err },
-		"ListGroups":     func() error { _, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{}); return err },
-		"ListGroupNodes": func() error { _, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "x"}); return err },
-		"ListNodeGroups": func() error { _, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "x"}); return err },
+		"GetNode":    func() error { _, err := h.Inventory.GetNode(ctx, &hostv1.GetNodeRequest{Id: "x"}); return err },
+		"Discover":   func() error { _, err := h.Inventory.Discover(ctx, &emptypb.Empty{}); return err },
+		"ListNodes":  func() error { _, err := h.Inventory.ListNodes(ctx, &hostv1.ListNodesRequest{}); return err },
+		"QueryNodes": func() error { _, err := h.Inventory.QueryNodes(ctx, &hostv1.QueryNodesRequest{}); return err },
+		"PutFacts":   func() error { _, err := h.Inventory.PutFacts(ctx, &hostv1.PutFactsRequest{NodeId: "x"}); return err },
+		"ListGroups": func() error { _, err := h.Inventory.ListGroups(ctx, &emptypb.Empty{}); return err },
+		"ListGroupNodes": func() error {
+			_, err := h.Inventory.ListGroupNodes(ctx, &hostv1.ListGroupNodesRequest{GroupId: "x"})
+			return err
+		},
+		"ListNodeGroups": func() error {
+			_, err := h.Inventory.ListNodeGroups(ctx, &hostv1.ListNodeGroupsRequest{NodeId: "x"})
+			return err
+		},
 		"AddNodeToGroup": func() error {
 			_, err := h.Inventory.AddNodeToGroup(ctx, &hostv1.GroupMembershipRequest{NodeId: "x", GroupId: "y"})
 			return err
 		},
 		"ListClasses": func() error { _, err := h.Inventory.ListClasses(ctx, &hostv1.GroupRef{Id: "x"}); return err },
-		"OnboardNode": func() error { _, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "x"}); return err },
+		"OnboardNode": func() error {
+			_, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: "x"})
+			return err
+		},
 	}
 }
 
@@ -1107,14 +1116,35 @@ func nodeIDs(nodes []*hostv1.Node) []string {
 // scaffolding for the intended production writer. Passing an empty
 // proposalStatus omits the "status" key entirely (simulating a proposal
 // document with no status field); passing a nil node omits the "node" key.
+//
+// A proposalStatus of "approved" also writes approved_scope
+// ("inventory:approve") and decided_by ("tester"): exactly the provenance
+// the real approval.Approve records, and exactly what OnboardNode now
+// requires through approval.RequireApproved. Tests that need a forged or
+// partial record use writeProposalMutated to alter it afterwards.
 func writeProposal(t *testing.T, h *host.Host, proposalID, proposalStatus string, node map[string]any) {
+	t.Helper()
+	writeProposalMutated(t, h, proposalID, proposalStatus, node, nil)
+}
+
+// writeProposalMutated is writeProposal with a hook that edits the body map
+// after the default fields are filled in and before it is stored, so a test
+// can delete or overwrite provenance keys to build a forged record.
+func writeProposalMutated(t *testing.T, h *host.Host, proposalID, proposalStatus string, node map[string]any, mutate func(map[string]any)) {
 	t.Helper()
 	body := map[string]any{}
 	if proposalStatus != "" {
 		body["status"] = proposalStatus
 	}
+	if proposalStatus == "approved" {
+		body["approved_scope"] = "inventory:approve"
+		body["decided_by"] = "tester"
+	}
 	if node != nil {
 		body["node"] = node
+	}
+	if mutate != nil {
+		mutate(body)
 	}
 	s, err := structpb.NewStruct(body)
 	if err != nil {
@@ -1139,6 +1169,9 @@ func TestInventory_OnboardNodeRequiresApprovedProposal(t *testing.T) {
 		status string
 		node   map[string]any
 		none   bool // no document written at all
+		// mutate edits the stored body after writeProposal's defaults, to
+		// forge a record that approval.Approve would never have written.
+		mutate func(map[string]any)
 	}{
 		{name: "no document", id: "p-none", none: true},
 		{name: "pending", id: "p-pending", status: "pending", node: map[string]any{"id": "p-pending"}},
@@ -1146,6 +1179,12 @@ func TestInventory_OnboardNodeRequiresApprovedProposal(t *testing.T) {
 		{name: "missing status", id: "p-nostatus", status: "", node: map[string]any{"id": "p-nostatus"}},
 		{name: "approved but no node object", id: "p-nonode", status: "approved", node: nil},
 		{name: "node.id disagrees with proposal id", id: "p-mismatch", status: "approved", node: map[string]any{"id": "someone-else"}},
+		{name: "approved with no approved_scope", id: "p-noscope", status: "approved", node: map[string]any{"id": "p-noscope"},
+			mutate: func(b map[string]any) { delete(b, "approved_scope") }},
+		{name: "approved under a different scope", id: "p-wrongscope", status: "approved", node: map[string]any{"id": "p-wrongscope"},
+			mutate: func(b map[string]any) { b["approved_scope"] = "code:approve" }},
+		{name: "approved with empty decided_by", id: "p-nodecider", status: "approved", node: map[string]any{"id": "p-nodecider"},
+			mutate: func(b map[string]any) { b["decided_by"] = "" }},
 	}
 
 	for _, tc := range cases {
