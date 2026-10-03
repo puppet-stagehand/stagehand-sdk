@@ -878,29 +878,39 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 	// per item rather than per branch: the ladder is refused, proposed, still
 	// refused while pending, approved, apply-pending on a further write, applied.
 	//
-	// The module name is deliberately the slash spelling, while the imported
-	// Puppetfile holds the hyphenated spelling (puppetlabs-stdlib). The facet
-	// decides "already exists" by canonical identity, so both spellings are one
-	// module and the write below is refused as an overwrite rather than appended
-	// as a second entry (INT-1). Before Phase 12 the slash spelling here was an
-	// ungated append that rendered a duplicate.
+	// The gate decides identity by canonical name, not by the spelling a caller
+	// types. The imported Puppetfile holds the hyphenated spelling
+	// (puppetlabs-stdlib); the slug spelling (puppetlabs/stdlib) and a mixed-case
+	// owner (PuppetLabs/stdlib) name the very same module, so every one of them
+	// reaches the same requires-approval refusal and none can be appended as a
+	// second entry (INT-1 closed). Step 16a asserts all three spellings are
+	// refused. The ladder below then runs on the slug spelling against the
+	// imported hyphen module, which also proves an approval unlocks the module
+	// regardless of which spelling proposed it.
 	if canaryMods[0].Name != "puppetlabs-stdlib" {
 		t.Fatalf("overwrite target: expected the imported spelling puppetlabs-stdlib, got %q", canaryMods[0].Name)
 	}
-	bumped := &hostv1.PuppetfileModule{
-		Name:   "puppetlabs/stdlib",
-		Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.6.0"}},
+	bumpedFor := func(name string) *hostv1.PuppetfileModule {
+		return &hostv1.PuppetfileModule{
+			Name:   name,
+			Source: &hostv1.PuppetfileModule_Forge{Forge: &hostv1.ForgeSource{Version: "9.6.0"}},
+		}
 	}
+	bumped := bumpedFor("puppetlabs/stdlib")
 
-	// 16a: refused. A write that would replace existing content needs approval.
-	_, err = proposer.AddModule(ctx, "canary", bumped)
-	if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("AddModule over an existing module: expected a requires-approval refusal with FailedPrecondition, got %v", err)
+	// 16a: refused. A write that would replace existing content needs approval,
+	// whichever way the module name is spelled.
+	spellings := []string{canaryMods[0].Name, "puppetlabs/stdlib", "PuppetLabs/stdlib"}
+	for _, spelling := range spellings {
+		_, err = proposer.AddModule(ctx, "canary", bumpedFor(spelling))
+		if !local.IsCodeOverwriteRequiresApproval(err) || status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("AddModule over an existing module as %q: expected a requires-approval refusal with FailedPrecondition, got %v", spelling, err)
+		}
+		if cur, err := proposer.ListModules(ctx, "canary"); err != nil || len(cur) != 1 || cur[0].GetForge().GetVersion() != "9.4.1" {
+			t.Fatalf("refused AddModule as %q: expected canary to still carry exactly one module at 9.4.1, got %+v (err %v)", spelling, cur, err)
+		}
 	}
-	if cur, err := proposer.ListModules(ctx, "canary"); err != nil || len(cur) != 1 || cur[0].GetForge().GetVersion() != "9.4.1" {
-		t.Fatalf("refused AddModule: expected canary to still carry 9.4.1, got %+v (err %v)", cur, err)
-	}
-	t.Logf("step 16a: bumping %s to 9.6.0 is refused as requiring approval; canary still carries 9.4.1", bumped.Name)
+	t.Logf("step 16a: bumping to 9.6.0 is refused as requiring approval under every spelling (%s, %s, %s); canary still carries one module at 9.4.1", spellings[0], spellings[1], spellings[2])
 
 	// 16b: propose the bump.
 	const bumpID = "bump-stdlib-1"
