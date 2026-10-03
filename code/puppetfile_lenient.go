@@ -14,6 +14,34 @@ import (
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
 
+// moduleIdentityKey is the import dedupe key: a source discriminator, a NUL
+// byte, then the module's identity. It mirrors host/local/code_puppetfile.go
+// moduleKey (forgeModuleKey and gitModuleKey) so the import dedupe and the
+// destructive-overwrite gate agree on what "the same module" means.
+//
+// A Forge module's identity is CanonicalModuleName, the one definition of
+// Forge identity; no second normalisation is introduced here, so
+// puppetlabs/stdlib, puppetlabs-stdlib and PuppetLabs/stdlib are one module. A
+// Git module's name is used raw: a hyphen in a Git name is part of the name.
+// The discriminator exists because canonicalisation makes a Forge key and a Git
+// bare name collidable (a Git module named puppetlabs-stdlib would otherwise be
+// deduped into Forge puppetlabs/stdlib).
+//
+// A module with no source returns the git form; that is unreachable, because
+// ValidateModule has already refused a source-less module by the time the
+// dedupe runs.
+//
+// WR-03 is closed at import time only (SD-5). Strict parsing, Put, Remove and
+// Apply deliberately keep tolerating a duplicate that is already stored,
+// because a strict-parse refusal would make every RPC against such an
+// environment fail. Do not "finish the job" there.
+func moduleIdentityKey(m *hostv1.PuppetfileModule) string {
+	if m.GetForge() != nil {
+		return "forge\x00" + CanonicalModuleName(m.GetName())
+	}
+	return "git\x00" + m.GetName()
+}
+
 // ParsePuppetfileLenient turns Puppetfile text into a model plus findings
 // instead of failing on the first statement the write-side model cannot
 // represent (IMP-02). It returns no error: a Puppetfile is never unparseable
@@ -40,7 +68,7 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 	}
 
 	seenModuledir := false
-	seenNames := map[string]bool{}
+	seenKeys := map[string]bool{}
 	for _, ll := range logicalLines(text) {
 		if m := reModuledir.FindStringSubmatch(ll.text); m != nil {
 			// scalarSafe is the same rule RenderPuppetfile applies to Moduledir,
@@ -82,11 +110,12 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 				warn(FindingPuppetfileInvalidModule, ll.line, ll.text, "the module does not survive a render and strict re-parse unchanged (an embedded quote or invalid UTF-8); it was skipped")
 				continue
 			}
-			if seenNames[mod.GetName()] {
+			key := moduleIdentityKey(mod)
+			if seenKeys[key] {
 				warn(FindingPuppetfileDuplicateModule, ll.line, ll.text, "module names are unique in the model; the first occurrence is kept and this one was skipped")
 				continue
 			}
-			seenNames[mod.GetName()] = true
+			seenKeys[key] = true
 			pf.Modules = append(pf.Modules, mod)
 			continue
 		}
