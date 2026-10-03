@@ -424,3 +424,37 @@ func TestPuppetfile_RenderMatchesCanonicalContractExample(t *testing.T) {
 		t.Fatalf("RenderPuppetfile canonical example mismatch:\ngot:  %q\nwant: %q", got, want)
 	}
 }
+
+// TestCanonicalModuleName is the one table for Forge module identity (D-05,
+// D-08): every accepted spelling of one module folds to the lowercase
+// owner-name hyphen form, and anything outside the Forge slug grammar is
+// returned unchanged. Host code compares through this function on both the
+// Resolve already-present path and the Code overwrite gate, so there is no
+// second table for it anywhere else.
+func TestCanonicalModuleName(t *testing.T) {
+	rows := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"slash_form", "puppetlabs/stdlib", "puppetlabs-stdlib"},
+		{"hyphen_form", "puppetlabs-stdlib", "puppetlabs-stdlib"},
+		{"mixed_case_owner_slash", "PuppetLabs/stdlib", "puppetlabs-stdlib"},
+		{"upper_owner_hyphen", "PUPPETLABS-stdlib", "puppetlabs-stdlib"},
+		{"empty", "", ""},
+		{"single_segment_unchanged", "stdlib", "stdlib"},
+		{"multi_separator_unchanged", "a/b/c", "a/b/c"},
+		{"upper_module_segment_unchanged", "Puppetlabs/Stdlib", "Puppetlabs/Stdlib"},
+	}
+	for _, tc := range rows {
+		t.Run(tc.name, func(t *testing.T) {
+			got := CanonicalModuleName(tc.in)
+			if got != tc.want {
+				t.Fatalf("CanonicalModuleName(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if again := CanonicalModuleName(got); again != got {
+				t.Fatalf("CanonicalModuleName is not idempotent for %q: first %q, second %q", tc.in, got, again)
+			}
+		})
+	}
+}

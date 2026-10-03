@@ -419,6 +419,12 @@ func forgeSlugOK(name string) bool {
 	return reForgeSlug.MatchString(name)
 }
 
+// CanonicalModuleName is a RED-phase placeholder; the real definition lands
+// in the GREEN commit.
+func CanonicalModuleName(name string) string {
+	return name
+}
+
 // reGitTransport matches the five accepted URL-scheme transports.
 var reGitTransport = regexp.MustCompile(`^(?:https?|git|ssh|file)://`)
 

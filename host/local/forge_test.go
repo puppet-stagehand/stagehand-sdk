@@ -294,6 +294,30 @@ func mustCreateEnvironmentWithPuppetfile(t *testing.T, h *host.Host, env string,
 	}
 }
 
+// mustCreateEnvironmentWithPuppetfileText creates env through the real Code
+// facet and then writes the literal Puppetfile text into the code-puppetfiles
+// collection through Documents, bypassing PutPuppetfileModule. It exists
+// because mustCreateEnvironmentWithPuppetfile goes through
+// PutPuppetfileModule, which Plan 04 makes rewrite the stored module name to
+// its canonical form; any test whose point is the stored spelling must bypass
+// the write path exactly as an import does.
+func mustCreateEnvironmentWithPuppetfileText(t *testing.T, h *host.Host, env, text string) {
+	t.Helper()
+	if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: env}); err != nil {
+		t.Fatal(err)
+	}
+	body, err := structpb.NewStruct(map[string]any{"text": text})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: puppetfileCollection, DocId: env,
+		Body: &hostv1.Json{Value: body},
+	}); err != nil {
+		t.Fatalf("seeding puppetfile text for %q: %v", env, err)
+	}
+}
+
 func TestForgeResolvePuppetfileStatusMarksExistingAndNewModules(t *testing.T) {
 	c := newResolverFixtureClient()
 	c.addRelease("acme/root", "1.0.0",
@@ -349,6 +373,37 @@ func TestForgeResolvePuppetfileStatusRecognizesHyphenSlugForm(t *testing.T) {
 	stdlib := findChild(resp.Root, "puppetlabs/stdlib")
 	if stdlib == nil || !stdlib.AlreadyInPuppetfile {
 		t.Fatalf("expected the hyphen-slug Puppetfile entry to match the ns/name result, got %+v", stdlib)
+	}
+}
+
+// NEW-1: the Puppetfile grammar allows an uppercase owner (reForgeSlug), so an
+// entry written 'Puppetlabs-stdlib' is the same module as this facet's
+// lowercase puppetlabs/stdlib result. The wire spelling of the result must not
+// move while the comparison key folds case.
+func TestForgeResolvePuppetfileStatusRecognizesUppercaseOwner(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "puppetlabs/stdlib", VersionRequirement: ">= 1.0.0"})
+	c.versions["puppetlabs/stdlib"] = []string{"9.0.0"}
+	c.addRelease("puppetlabs/stdlib", "9.0.0")
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	mustCreateEnvironmentWithPuppetfileText(t, h, "production", "mod 'Puppetlabs-stdlib', '9.0.0'\n")
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdlib := findChild(resp.Root, "puppetlabs/stdlib")
+	if stdlib == nil {
+		t.Fatal("expected puppetlabs/stdlib in the resolved tree")
+	}
+	if !stdlib.AlreadyInPuppetfile {
+		t.Fatal("an uppercase-owner Puppetfile entry must be recognised as already present (NEW-1)")
+	}
+	if stdlib.Name != "puppetlabs/stdlib" {
+		t.Fatalf("wire Name must stay the ns/name spelling, got %q", stdlib.Name)
 	}
 }
 
