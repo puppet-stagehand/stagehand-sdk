@@ -448,6 +448,96 @@ func TestForgeResolvePuppetfileStatusIgnoresHyphenatedGitModuleName(t *testing.T
 	}
 }
 
+// FORGE-01 empty: a Puppetfile that is absent, empty or unparseable describes
+// no modules, so every node is net-new and the annotation pass never fails the
+// Resolve call.
+func TestForgeResolvePuppetfileStatusEmptyAbsentOrUnparseable(t *testing.T) {
+	cases := []struct {
+		name string
+		// text is the literal Puppetfile body; nil means no document at all.
+		text *string
+	}{
+		{"absent_document", nil},
+		{"empty_text", strPtrForge("")},
+		{"unparseable_text", strPtrForge("mod 'puppetlabs-stdlib', {{{ not a puppetfile")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newResolverFixtureClient()
+			c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "puppetlabs/stdlib", VersionRequirement: ">= 1.0.0"})
+			c.versions["puppetlabs/stdlib"] = []string{"9.0.0"}
+			c.addRelease("puppetlabs/stdlib", "9.0.0")
+
+			h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+			if tc.text == nil {
+				if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: "production"}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				mustCreateEnvironmentWithPuppetfileText(t, h, "production", *tc.text)
+			}
+
+			resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+				Name: "acme/root", Version: "1.0.0", Environment: "production",
+			})
+			if err != nil {
+				t.Fatalf("Resolve must not fail on a %s Puppetfile: %v", tc.name, err)
+			}
+			if resp.Root.AlreadyInPuppetfile {
+				t.Fatal("root must be net-new")
+			}
+			stdlib := findChild(resp.Root, "puppetlabs/stdlib")
+			if stdlib == nil || stdlib.AlreadyInPuppetfile {
+				t.Fatalf("expected puppetlabs/stdlib to be net-new, got %+v", stdlib)
+			}
+		})
+	}
+}
+
+func strPtrForge(s string) *string { return &s }
+
+// The positive half of the IN-02 Git carve-out: the same spelling written as a
+// Forge entry IS the Forge module. Together with the Git-name test above this
+// proves the discriminator is the entry's source and not its spelling — a
+// source-blind key that always answered false would pass the Git half alone.
+func TestForgeResolvePuppetfileStatusRecognizesHyphenatedForgeEntry(t *testing.T) {
+	c := newResolverFixtureClient()
+	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "my/module", VersionRequirement: ">= 1.0.0"})
+	c.versions["my/module"] = []string{"1.0.0"}
+	c.addRelease("my/module", "1.0.0")
+
+	h := New([]string{"forge:rw", "code:rw"}, "pkg", WithForgeClient(c))
+	mustCreateEnvironmentWithPuppetfileText(t, h, "production", "mod 'my-module', '1.0.0'\n")
+
+	resp, err := h.Forge.Resolve(context.Background(), &hostv1.ResolveRequest{
+		Name: "acme/root", Version: "1.0.0", Environment: "production",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dep := findChild(resp.Root, "my/module")
+	if dep == nil || !dep.AlreadyInPuppetfile {
+		t.Fatalf("a Forge entry my-module must mark Forge my/module as already present, got %+v", dep)
+	}
+}
+
+// normalizeModuleName is the display/wire form: it returns the ns/name
+// spelling and preserves case. code.CanonicalModuleName is the identity key
+// (hyphen form, lowercase). The two are deliberately different; a change that
+// unifies them fails here rather than in a distant example test.
+func TestNormalizeModuleNameIsTheSlashWireForm(t *testing.T) {
+	for in, want := range map[string]string{
+		"puppetlabs-stdlib": "puppetlabs/stdlib",
+		"puppetlabs/stdlib": "puppetlabs/stdlib",
+		"PuppetLabs/stdlib": "PuppetLabs/stdlib",
+		"PuppetLabs-stdlib": "PuppetLabs/stdlib",
+	} {
+		if got := normalizeModuleName(in); got != want {
+			t.Fatalf("normalizeModuleName(%q) = %q, want the wire form %q", in, got, want)
+		}
+	}
+}
+
 func TestForgeResolveWithoutEnvironmentLeavesStatusFalse(t *testing.T) {
 	c := newResolverFixtureClient()
 	c.addRelease("acme/root", "1.0.0", ForgeDependency{Name: "acme/child", VersionRequirement: ">= 1.0.0"})

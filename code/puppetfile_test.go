@@ -458,3 +458,20 @@ func TestCanonicalModuleName(t *testing.T) {
 		})
 	}
 }
+
+// A valid Forge slug canonicalises to the hyphen form and never contains the
+// slash: the slash is the display/wire spelling, kept out of the identity key
+// so the two forms of one module cannot compare unequal.
+func TestCanonicalModuleNameNeverKeepsSlashForSlugs(t *testing.T) {
+	for _, in := range []string{
+		"puppetlabs/stdlib", "puppetlabs-stdlib", "PuppetLabs/stdlib",
+		"PUPPETLABS-stdlib", "a1/b_2", "A-b",
+	} {
+		if !forgeSlugOK(in) {
+			t.Fatalf("test input %q is not a Forge slug", in)
+		}
+		if got := CanonicalModuleName(in); strings.Contains(got, "/") {
+			t.Fatalf("CanonicalModuleName(%q) = %q, must not contain '/'", in, got)
+		}
+	}
+}
