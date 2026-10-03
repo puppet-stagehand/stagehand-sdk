@@ -66,8 +66,9 @@ go test ./examples/control-repo-authoring/ -run 'TestControlRepoAuthoring_Replay
 ```
 
 **Expected:** each run ends with `PASS`. The end-to-end run shows the bump ladder
-in order: `step 16a: bumping puppetlabs-stdlib to 9.6.0 is refused as requiring
-approval; canary still carries 9.4.1`, then `step 16b: proposed the bump as
+in order: `step 16a: bumping to 9.6.0 is refused as requiring approval under
+every spelling (puppetlabs-stdlib, puppetlabs/stdlib, PuppetLabs/stdlib); canary
+still carries one module at 9.4.1`, then `step 16b: proposed the bump as
 "bump-stdlib-1" (status pending)`, then `step 16c: a pending proposal does not
 unlock the write; still refused as requiring approval`. The rejected run prints
 `rejected overwrite "bump-rejected-1" ("not this sprint") did not apply; a
@@ -76,8 +77,9 @@ second decision was refused; the module stayed at 9.4.1`. The replay run prints
 after the target moved to 9.8.0; the module stayed at 9.8.0`.
 
 **What this proves:** an overwrite is refused until it is proposed and approved,
-a pending proposal does not unlock it, and one approval covers one application
-only.
+every spelling of the module is gated (the hyphen form, the slash form and a
+mixed-case owner all name one module), a pending proposal does not unlock it,
+and one approval covers one application only.
 
 ### Step 3: `approveProposal`
 
@@ -216,7 +218,11 @@ under it.
 
    Expect exactly one line, `cmd/pack-check/main.go`.
 
-5. Nothing the example depends on has changed.
+5. Nothing the example depends on has changed. This check and the next one
+   compare against the commit that introduced the example, so they hold only at
+   that commit. Later phases changed `host`, `approval`, `code` and `manifest`
+   on purpose; on a later branch expect differences there and skip checks 5 and
+   6.
 
    ```
    git diff --exit-code 4702293 -- examples/inventory-onboarding examples/opentofu-lite host approval code manifest proto gen
@@ -248,3 +254,87 @@ under it.
 **What this proves:** the example builds, passes under the race detector, adds
 no command, no protocol change and no dependency, and touches nothing outside
 its own directory and its documents.
+
+## What changed in Phase 12
+
+Phase 12 changed four behaviours. Each step below is a way to see the new
+behaviour with your own eyes. Steps 12 and 13 deliberately break a manifest, so
+work on a copy in a scratch directory and never commit the copy.
+
+### Step 10: every spelling of a module is gated
+
+A Forge module can be written `puppetlabs-stdlib`, `puppetlabs/stdlib` or
+`PuppetLabs/stdlib`. All three are one module, so none of them can slip past the
+overwrite gate.
+
+```
+go test ./examples/control-repo-authoring/ -run 'TestControlRepoAuthoring_EndToEnd$' -v -count=1 | grep 'step 16a'
+```
+
+**Expected:** exactly one line, containing `step 16a: bumping to 9.6.0 is
+refused as requiring approval under every spelling (puppetlabs-stdlib,
+puppetlabs/stdlib, PuppetLabs/stdlib); canary still carries one module at
+9.4.1`.
+
+**What this proves:** the destructive-overwrite gate decides by the module's
+identity and not by how it is typed, so a different spelling cannot add a
+second, ungated copy.
+
+### Step 11: a hand-written approval is refused by Inventory onboarding
+
+Onboarding a node needs a proposal that a person really approved. A proposal
+whose body merely says `approved`, with no approving scope and no named
+decider, is refused.
+
+```
+go test ./host/local/ -run 'TestInventory_OnboardNodeRequiresApprovedProposal' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`, and the subtests
+`approved_with_no_approved_scope`, `approved_under_a_different_scope` and
+`approved_with_empty_decided_by` each pass. Each passes only because
+`OnboardNode` returned a `FailedPrecondition` error for a proposal that carried
+no approving scope, the wrong one or no decider (the shared
+`approval.RequireApproved` check).
+
+**What this proves:** the Inventory gate is as strict as the Code gate. Only a
+proposal that went through `Approve` can onboard a node.
+
+### Step 12: the removed Forge permission is refused by pack-check
+
+`forge:read` no longer exists. Searching and resolving need `forge:rw`, and
+recommendations need `forge:recommend`.
+
+```
+SCRATCH=$(mktemp -d)
+sed 's/"forge:rw", /"forge:rw", "forge:read", /' examples/control-repo-authoring/manifest.json > "$SCRATCH/manifest.json"
+go run ./cmd/pack-check --format json "$SCRATCH/manifest.json"
+```
+
+**Expected:** `"ok": false` and exit status 1, with one finding whose `code` is
+`permission_unknown`, whose `message` is `unknown permission forge:read`, and
+whose `fix` line lists the live permissions, including `forge:rw` and
+`forge:recommend` and no `forge:read`.
+
+**What this proves:** a manifest that still asks for the removed permission is
+refused with a fix line that points at the two real Forge permissions. Delete
+`$SCRATCH` afterwards; do not copy the file back into the repository.
+
+### Step 13: `code:import` without `code:rw` is refused by pack-check
+
+An import writes through the Code facet, so a pack that declares `code:import`
+must also declare `code:rw`.
+
+```
+SCRATCH=$(mktemp -d)
+sed 's/"code:rw", //' examples/control-repo-authoring/manifest.json > "$SCRATCH/manifest.json"
+go run ./cmd/pack-check --format json "$SCRATCH/manifest.json"
+```
+
+**Expected:** `"ok": false` and exit status 1, with one finding whose `code` is
+`code_import_requires_code_rw`, at path `/permissions`, with the fix line `Add
+"code:rw" to permissions.`
+
+**What this proves:** a manifest that passes pack-check cannot be refused by the
+host at install for this reason. Delete `$SCRATCH` afterwards; do not commit the
+copy.

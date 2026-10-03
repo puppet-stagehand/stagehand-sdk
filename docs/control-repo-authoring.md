@@ -122,10 +122,21 @@ mod, err := proposer.AddModule(ctx, "authored", &hostv1.PuppetfileModule{
 ```
 
 The example writes `puppetlabs/ntp` first, then the one dependency it accepts,
-`puppetlabs/stdlib`. You can use each name as the resolver returned it. The
-Code facet stores a Forge module under the lowercase hyphen spelling
-(`puppetlabs-ntp`) and decides "this module already exists" by that same
-canonical identity, which matters in section 8.
+`puppetlabs/stdlib`. You can use each name as the resolver returned it.
+
+### What counts as the same module
+
+A Forge module can be written two ways: `puppetlabs/stdlib` (with a slash) or
+`puppetlabs-stdlib` (with a hyphen). The capital letters in the owner's name do
+not matter either, so `PuppetLabs/stdlib` is the same module too. Think of it
+like a street address: "12 High St" and "12 high street" are one house. The
+Code facet treats every one of those spellings as **one module**.
+
+That has two good effects. You cannot accidentally add a second copy of a module
+that is already there, and you do not have to match the resolver's spelling
+character for character. A module you add is written into the Puppetfile in the
+lowercase hyphen form, so `puppetlabs/ntp` is stored as `puppetlabs-ntp`. This
+matters in section 8.
 
 ## 5. A Hiera level and a data key
 
@@ -219,10 +230,11 @@ content, and `qa_two` exists because the import created it.
 ## 8. Change one module that is already there
 
 Say `canary` now holds `puppetlabs-stdlib` at 9.4.1 and you want 9.6.0. The
-import left the hyphenated spelling in place. You can ask for the change with
-either spelling, `puppetlabs/stdlib` or `puppetlabs-stdlib`, because the Code
-facet treats them as one module. The example uses the slash spelling on purpose
-to show that it cannot sneak past the gate as a second, ungated copy.
+import left the hyphenated spelling in place. Whichever way you spell it,
+`puppetlabs/stdlib`, `puppetlabs-stdlib` or `PuppetLabs/stdlib`, it is the same
+module, so a write that would replace it is refused until it is proposed and
+approved. It cannot sneak past the gate as a second, ungated copy. The example
+checks all three spellings and then walks the ladder using the slash spelling.
 
 1. **The write is refused.** `AddModule` over the existing module fails with
    `FailedPrecondition` and the detail `code_overwrite_requires_approval`. The
@@ -257,9 +269,15 @@ Use the ordinary read calls to see what is really there: `ListEnvironments`,
 
 ```go
 text, err := proposer.RenderPuppetfile(ctx, "authored")
-// mod 'puppetlabs/ntp', '13.2.1'
-// mod 'puppetlabs/stdlib', '9.6.0'
+// mod 'puppetlabs-ntp', '13.2.1'
+// mod 'puppetlabs-stdlib', '9.6.0'
 ```
+
+Notice the spelling. A module you added through the facet is stored in the
+canonical lowercase hyphen form, which is why `puppetlabs/ntp` reads back as
+`puppetlabs-ntp`. A Puppetfile you imported is different: the import keeps each
+module name exactly as it was written, and never rewrites your file's spelling.
+Either way, matching still treats the two spellings as one module.
 
 ## What the errors look like
 
