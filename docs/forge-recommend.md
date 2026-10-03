@@ -46,6 +46,40 @@ keyword, and `Resolve` builds an advisory tree of what one module depends on.
 Both need the `forge:rw` permission. Recommend is a third call that uses
 Search for you. This guide covers Recommend only.
 
+### What counts as the same module
+
+A Forge module can be written two ways: `puppetlabs/stdlib` (with a slash) or
+`puppetlabs-stdlib` (with a hyphen). The capital letters in the owner's name
+do not matter either, so `PuppetLabs/stdlib` is the same module too. The SDK
+treats every one of those spellings as one module. Before it compares two
+names it folds each into a single lowercase hyphen form, such as
+`puppetlabs-stdlib`. The function that does this is `code.CanonicalModuleName`
+in the `code` package, so a reader can find the one place that decides it.
+
+Two things are left alone on purpose:
+
+- **A Git module's name is a plain name.** If a Puppetfile lists
+  `mod 'my-module', :git => ...`, the hyphen is part of the name, not a
+  divider between an owner and a module. It is never folded, so it is never
+  mistaken for the Forge module `my/module`. The Puppetfile entry
+  `mod 'my-module', '1.0.0'` (no `:git`) is a Forge entry and does match
+  `my/module`.
+- **What you see in a Search or Resolve result does not change.** Results
+  still show the slash spelling, such as `puppetlabs/stdlib`, because that is
+  the display form. The folded form is only used behind the scenes to compare.
+
+What you can observe as a pack author:
+
+1. A module that is already in the Puppetfile is recognised whichever way it
+   was spelled. Resolve marks it `already_in_puppetfile`, even if the
+   Puppetfile has an uppercase owner.
+2. A write that would replace an existing entry needs approval whichever way
+   the module is spelled. This part lands later in the same v0.3.0-rc.1
+   release; see [`docs/code-overwrite-gating.md`](code-overwrite-gating.md).
+
+If the Puppetfile is missing, empty or cannot be read, Resolve treats every
+module as new and the call still succeeds.
+
 ## 1. Declare the two permissions
 
 Add both of these to `permissions` in your `manifest.json`:
