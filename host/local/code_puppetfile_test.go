@@ -689,3 +689,123 @@ func TestCode_PuppetfilePutEmptyNameIsInvalidArgument(t *testing.T) {
 		t.Fatalf("got %v, want InvalidArgument", err)
 	}
 }
+
+// ---------------------------------------------------------------- INT-1 Remove
+
+func removeModule(h *host.Host, env, name string) error {
+	_, err := h.Code.RemovePuppetfileModule(context.Background(), &hostv1.RemovePuppetfileModuleRequest{Environment: env, Name: name})
+	return err
+}
+
+func TestCode_PuppetfileRemoveByEitherSpelling(t *testing.T) {
+	for _, spelling := range []string{"puppetlabs/stdlib", "PuppetLabs-stdlib", "puppetlabs-stdlib"} {
+		t.Run(spelling, func(t *testing.T) {
+			h := newOverwriteHost()
+			seedPuppetfileText(t, h, "prod", "mod 'puppetlabs-stdlib', '9.4.1'\nmod 'puppetlabs-ntp'\n")
+			if err := removeModule(h, "prod", spelling); err != nil {
+				t.Fatalf("Remove(%q): %v", spelling, err)
+			}
+			const want = "mod 'puppetlabs-ntp'\n"
+			if got := puppetfileTextFromDocumentsRaw(t, h, context.Background(), "prod"); got != want {
+				t.Fatalf("stored text:\n got: %q\nwant: %q", got, want)
+			}
+		})
+	}
+}
+
+func TestCode_PuppetfileRemoveGitModuleByRawNameOnly(t *testing.T) {
+	const seeded = "mod 'my-module',\n  :git => 'https://example.com/my-module.git'\n"
+	h := newOverwriteHost()
+	ctx := context.Background()
+	seedPuppetfileText(t, h, "prod", seeded)
+
+	err := removeModule(h, "prod", "my/module")
+	if status.Code(err) != codes.NotFound || !strings.Contains(err.Error(), `"my/module"`) {
+		t.Fatalf("Remove(my/module): got %v, want NotFound quoting the name as supplied", err)
+	}
+	if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != seeded {
+		t.Fatalf("a refused Remove changed the text: %q", got)
+	}
+	if err := removeModule(h, "prod", "my-module"); err != nil {
+		t.Fatalf("Remove(my-module): %v", err)
+	}
+	if names := listModuleNames(t, h, "prod"); len(names) != 0 {
+		t.Fatalf("modules after removing the git module: %v", names)
+	}
+}
+
+// TestCode_PuppetfileRemoveForgeAndGitCoexist is the pair that proves the source
+// discriminator does real work: a Forge module and a Git module whose names
+// collide after canonicalisation are removed independently.
+func TestCode_PuppetfileRemoveForgeAndGitCoexist(t *testing.T) {
+	const (
+		forgeEntry = "mod 'acme-widgets', '1.0.0'\n"
+		gitEntry   = "mod 'acme-widgets',\n  :git => 'https://example.com/acme-widgets.git'\n"
+	)
+	// Both entries can match the bare name "acme-widgets" (the Forge one by
+	// canonical identity, the Git one by raw name), so the first match in render
+	// order wins; "acme/widgets" can only ever match the Forge entry.
+	cases := []struct {
+		name   string
+		text   string
+		remove string
+		want   string
+	}{
+		{"git first, remove slash", gitEntry + forgeEntry, "acme/widgets", gitEntry},
+		{"git first, remove hyphen", gitEntry + forgeEntry, "acme-widgets", forgeEntry},
+		{"forge first, remove slash", forgeEntry + gitEntry, "acme/widgets", gitEntry},
+		{"forge first, remove hyphen", forgeEntry + gitEntry, "acme-widgets", gitEntry},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newOverwriteHost()
+			seedPuppetfileText(t, h, "prod", tc.text)
+			if err := removeModule(h, "prod", tc.remove); err != nil {
+				t.Fatalf("Remove(%q): %v", tc.remove, err)
+			}
+			if got := puppetfileTextFromDocumentsRaw(t, h, context.Background(), "prod"); got != tc.want {
+				t.Fatalf("Remove(%q) left:\n got: %q\nwant: %q", tc.remove, got, tc.want)
+			}
+		})
+	}
+	t.Run("not found quotes the name as supplied", func(t *testing.T) {
+		h := newOverwriteHost()
+		seedPuppetfileText(t, h, "prod", forgeEntry)
+		err := removeModule(h, "prod", "PuppetLabs/Absent")
+		if status.Code(err) != codes.NotFound || !strings.Contains(err.Error(), `"PuppetLabs/Absent"`) {
+			t.Fatalf("got %v, want NotFound quoting PuppetLabs/Absent", err)
+		}
+	})
+}
+
+// TestCode_PuppetfileImportIsVerbatimAndStillGated pins D-07 and IMP-02: an
+// import keeps each module name exactly as the Puppetfile spelled it (the slash
+// spelling here, which a Put would have rewritten to the hyphen form), and a
+// later Put of either spelling against an imported module still hits the
+// destructive-overwrite gate. The import path parses and re-renders the file in
+// the standard layout (pre-existing, unchanged); this test's input is already in
+// that layout so the stored bytes can be compared for equality, and the point
+// under test is that no canonical-name rewrite happens.
+func TestCode_PuppetfileImportIsVerbatimAndStillGated(t *testing.T) {
+	const imported = "mod 'puppetlabs/stdlib', '9.4.1'\n"
+	tr := canonicalTree()
+	tr["Puppetfile"] = imported
+	h, _ := newImportHost(t, map[string]tree{"production": tr})
+	ctx := context.Background()
+
+	mustPropose(t, h, "imp-verbatim")
+	approveOverwrite(t, h, "imp-verbatim")
+	mustApply(t, h, "imp-verbatim")
+
+	if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "production"); got != imported {
+		t.Fatalf("import rewrote the Puppetfile text:\n got: %q\nwant: %q", got, imported)
+	}
+	for _, spelling := range []string{"puppetlabs/stdlib", "puppetlabs-stdlib"} {
+		if err := putModuleErr(h, "production", forgeModule(spelling, "10.0.0")); !local.IsCodeOverwriteRequiresApproval(err) {
+			t.Fatalf("Put(%q) against an imported module: got %v, want requires-approval", spelling, err)
+		}
+	}
+	if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "production"); got != imported {
+		t.Fatalf("a refused Put changed the imported text: %q", got)
+	}
+}

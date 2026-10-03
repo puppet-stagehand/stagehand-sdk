@@ -122,9 +122,10 @@ mod, err := proposer.AddModule(ctx, "authored", &hostv1.PuppetfileModule{
 ```
 
 The example writes `puppetlabs/ntp` first, then the one dependency it accepts,
-`puppetlabs/stdlib`. Use each name exactly as the resolver returned it. The
-Code facet decides "this module already exists" by exact name, which matters in
-section 8.
+`puppetlabs/stdlib`. You can use each name as the resolver returned it. The
+Code facet stores a Forge module under the lowercase hyphen spelling
+(`puppetlabs-ntp`) and decides "this module already exists" by that same
+canonical identity, which matters in section 8.
 
 ## 5. A Hiera level and a data key
 
@@ -217,10 +218,11 @@ content, and `qa_two` exists because the import created it.
 
 ## 8. Change one module that is already there
 
-Say `canary` now holds `puppetlabs-stdlib` at 9.4.1 and you want 9.6.0. The name
-is the hyphenated spelling the import produced. Spell it exactly, because the
-Code facet decides "already exists" by exact name; the slash spelling would be a
-different module and an ungated add.
+Say `canary` now holds `puppetlabs-stdlib` at 9.4.1 and you want 9.6.0. The
+import left the hyphenated spelling in place. You can ask for the change with
+either spelling, `puppetlabs/stdlib` or `puppetlabs-stdlib`, because the Code
+facet treats them as one module. The example uses the slash spelling on purpose
+to show that it cannot sneak past the gate as a second, ungated copy.
 
 1. **The write is refused.** `AddModule` over the existing module fails with
    `FailedPrecondition` and the detail `code_overwrite_requires_approval`. The

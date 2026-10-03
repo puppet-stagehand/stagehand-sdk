@@ -50,8 +50,8 @@ report step at the front, so it is described in
 | `DeleteEnvironment` | never | none | D-01 |
 | `DuplicateEnvironment` | only when the target name already exists | `ApplyEnvironmentDuplicate` | D-02 |
 | `PutEnvironmentSettings` | on every call once the environment exists, including the first write | `ApplyEnvironmentSettings` | D-03 |
-| `PutPuppetfileModule` | only when a module of that name is already listed | `ApplyPuppetfileModuleOverwrite` | D-02 |
-| `RemovePuppetfileModule` | never | none | D-01 |
+| `PutPuppetfileModule` | only when the same module is already listed (see "What counts as the same module") | `ApplyPuppetfileModuleOverwrite` | D-02 |
+| `RemovePuppetfileModule` | never (it finds the module by either spelling) | none | D-01 |
 | `SetModuledir` | never | none | not one of the six gated paths |
 | `PutHieraLevel` | only when a level of that name already exists | `ApplyHieraLevelOverwrite` | D-02 |
 | `RemoveHieraLevel`, `ReorderHieraLevels` | never | none | D-01 / not gated |
@@ -65,6 +65,57 @@ Two details worth knowing:
 - A write that would put back exactly what is already stored is still an
   overwrite as far as the gate is concerned. The gate looks at whether
   something exists, not at whether the new text differs.
+
+## What counts as the same module
+
+The gate asks "does this module already exist?" before it decides whether a
+Puppetfile write is new content or a replacement. That question has a precise
+answer, and it is the same one the Forge facet uses when it marks a module
+`already_in_puppetfile`.
+
+- **Every spelling of one Forge module is one module.** `puppetlabs/stdlib`,
+  `puppetlabs-stdlib` and `PuppetLabs/stdlib` all name the same module. The
+  Forge writes it with a slash and a Puppetfile often writes it with a hyphen;
+  the owner's capital letters do not matter. The SDK folds them all to the
+  lowercase hyphen form, `puppetlabs-stdlib`, using `code.CanonicalModuleName`.
+  That one function is the only place the rule lives.
+- **A Git module's name is never folded.** A module you pull from a git
+  repository has a plain name such as `my-module`, and the hyphen is simply part
+  of the name. Folding it would change an author's own identifier, so it is
+  compared exactly as written. A Git module and a Forge module also never match
+  each other, even if their names look alike after folding.
+- **A Forge module is stored under the lowercase hyphen form.** When
+  `PutPuppetfileModule` or `ApplyPuppetfileModuleOverwrite` writes a Forge
+  module, the stored Puppetfile (and the module those calls return) uses
+  `puppetlabs-stdlib`, whichever spelling you sent. Order never changes: an
+  applied overwrite replaces the module at its original place in the file.
+- **An imported Puppetfile keeps the names it came with.** Import does not
+  rewrite module names, so an imported file may hold the slash spelling. The gate
+  still compares by identity, so a later write of either spelling against an
+  imported module is refused exactly as it would be for any other existing one.
+- **You can remove a module by either spelling.** `RemovePuppetfileModule`
+  removes a Forge module whichever way you name it. A Git module can be removed
+  only by its exact name. If a Puppetfile holds a Forge module and a Git module
+  that both fold to the same name, the first one in the file is removed.
+
+The proposal records the folded name as its target, so a proposal written for the
+slash spelling unlocks the hyphen spelling of the same module and the other way
+round. The proposal still keeps the module exactly as the approver saw it; only
+the target name is folded.
+
+Two honest limits:
+
+- **Re-propose old proposals.** An overwrite proposal created before this rule
+  recorded the module name as it was typed. It will no longer match a write, so
+  it must be re-proposed and approved again. This is the accepted cost of
+  changing the form the target is recorded in, and no shim rewrites old
+  proposals, because a shim that rewrote stored approvals would itself be a
+  write on the approval path.
+- **A Forge module and a Git module can share one target name.** If both fold to
+  the same text, an approval for one gives the "approved, call the Apply RPC"
+  refusal when you try the other. Nothing is applied without its own approval:
+  the apply step still picks the module by its source, so the wrong one is never
+  written. The only effect is a less precise refusal message.
 
 ## 2. Why
 
@@ -350,7 +401,8 @@ the end.
    `_, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: "prod", Module: module("9.1.0")})`
    then `wantRefusal(t, err)`. Expect `FailedPrecondition` with detail code
    `code_overwrite_requires_approval`, and a log line saying environment
-   `prod` already has puppetfile_module `puppetlabs/ntp`. Then call
+   `prod` already has puppetfile_module `puppetlabs-ntp` (the lowercase
+   hyphen form). Then call
    `h.Code.ListPuppetfileModules` for `prod` and confirm the module is still
    version `9.0.0`. Nothing was written.
 
@@ -394,7 +446,10 @@ the end.
 14. **`ApplyPuppetfileModuleOverwrite` applies it.** Call
     `h.Code.ApplyPuppetfileModuleOverwrite` with `p1`. Expect success and a
     module at version `9.1.0`. Call it a second time; expect the same result.
-    List the modules and confirm there is still exactly one `puppetlabs/ntp`.
+    List the modules and confirm there is still exactly one module, named
+    `puppetlabs-ntp`. As a further check, repeat step 7 using the name
+    `puppetlabs-ntp`: it is refused in just the same way, because both spellings
+    are one module.
 
 15. **`ApplyEnvironmentSettings` applies a settings overwrite.** Build
     `code.OverwriteBodyForSettings(&hostv1.EnvironmentSettings{Environment: "prod", ConfigVersion: str("v1")})`,
@@ -422,7 +477,7 @@ the end.
     `common.yaml` to hold `ntp::servers` with the value `b`.
 
 19. **One approval does not cover a different target.** Proposal `p1` was
-    approved for the `puppetlabs/ntp` module in `prod`. After step 16 the
+    approved for the `puppetlabs-ntp` module in `prod`. After step 16 the
     `staging` environment also has that module. Add
     `h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{Environment: "staging", Module: module("9.2.0")})`
     and `wantRefusal`. Expect `code_overwrite_requires_approval` (not
@@ -431,6 +486,7 @@ the end.
 
 20. **Deletes are ungated.** Add
     `h.Code.RemovePuppetfileModule(ctx, &hostv1.RemovePuppetfileModuleRequest{Environment: "prod", Name: "puppetlabs/ntp"})`
+    (either spelling finds the module)
     and
     `h.Code.DeleteEnvironment(ctx, &hostv1.DeleteEnvironmentRequest{Name: "dev"})`.
     Expect both to succeed with no proposal.

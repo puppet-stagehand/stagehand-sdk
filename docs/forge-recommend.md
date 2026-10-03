@@ -74,8 +74,8 @@ What you can observe as a pack author:
    was spelled. Resolve marks it `already_in_puppetfile`, even if the
    Puppetfile has an uppercase owner.
 2. A write that would replace an existing entry needs approval whichever way
-   the module is spelled. This part lands later in the same v0.3.0-rc.1
-   release; see [`docs/code-overwrite-gating.md`](code-overwrite-gating.md).
+   the module is spelled. See
+   [`docs/code-overwrite-gating.md`](code-overwrite-gating.md) for the rule.
 
 If the Puppetfile is missing, empty or cannot be read, Resolve treats every
 module as new and the call still succeeds.
