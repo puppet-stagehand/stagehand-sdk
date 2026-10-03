@@ -1745,8 +1745,14 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 	t.Run("a bare status flip without provenance is refused", func(t *testing.T) {
 		h, before := setup(t)
 		setBody(t, h, func(m map[string]any) { m["status"] = "approved" })
-		if _, err := applyModule(h, "p1"); status.Code(err) != codes.FailedPrecondition {
+		_, err := applyModule(h, "p1")
+		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("Apply: got %v, want FailedPrecondition", err)
+		}
+		// The Code gate shares approval.RequireApproved's typed refusal rather
+		// than building its own, so both gates disagree about nothing.
+		if !approval.IsNotApproved(err) {
+			t.Fatalf("Apply: got %v, want an approval.IsNotApproved refusal", err)
 		}
 		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
 			t.Fatalf("a bare approved status wrote: %q", got)
