@@ -225,6 +225,43 @@ other subject, described by a body map), to `Approve`/`Reject` through the
 collection but differ in scope never merge: `decide` presents exactly the
 scope it was handed to `Auth.Verify`.
 
+### Reading an approval: `RequireApproved`
+
+An apply path has to decide whether a proposal document really was approved.
+`approval.RequireApproved(doc, Kind)` is the one shared answer. It returns nil
+only when the document body records all three facts `Approve` writes:
+
+1. `status` equals the package's approved status (`approval.StatusApproved`),
+2. `approved_scope` equals the `Kind`'s `ApproveScope`, and
+3. `decided_by` is not empty.
+
+A caller holding only a status string is not holding an approval. The
+Documents store has no ACL, so anything that can reach the host can write a
+body saying `status: approved`; the scope and the decider are the provenance
+only `Approve` records. This check is why a reader cannot be fooled by a
+hand-written document in a store with no ACL. It also compares the recorded
+scope against the caller's code-defined `Kind`, so a proposal approved under
+one scope never authorizes an action governed by another, even when both
+Kinds share a collection. That is the read-side half of "two Kinds that share
+a collection but differ in scope never merge".
+
+`RequireApproved` is read-only by construction. It takes a document and a
+`Kind` and nothing else: it holds no host, writes no document, verifies no
+token and calls nothing in the propose or decide code. That is what makes it
+safe to call from an apply path. It must never be called from a propose or
+decide path, and its `Kind` must be code-defined, never built from a request
+field or a proposal body.
+
+A refusal is `codes.FailedPrecondition` carrying an `ErrorDetail`. Branch on
+it with `approval.IsNotApproved(err)`, not on the status code alone, because a
+malformed body also produces `FailedPrecondition`. An empty `Kind` is refused
+first with `approval.IsKindRequired`.
+
+Both the Code overwrite gate (`host/local/code_approval.go`, with its
+`overwriteApprovalKind`) and Inventory's `OnboardNode` (`host/local/inventory.go`,
+with its `inventoryApprovalKind`) call it, so the two gates cannot disagree
+about what approved means.
+
 ### What changed, and the GOV-03 audit
 
 The two package constants this API replaces, `approval.Collection`
@@ -238,3 +275,14 @@ package-level `OnboardingKind` var referenced at its three call sites
 Its call-graph test, `TestInventoryOnboarding_ProposerCannotSelfApprove`,
 passes with every liveness and refusal assertion unmodified; only that
 test file's token helper changed, to read the scope from `OnboardingKind`.
+
+Phase 12 then closed INT-3, the one place the two gates disagreed. Inventory's
+`OnboardNode` used to accept any proposal whose `status` read `approved`, while
+the Code overwrite gate also required the recorded scope and decider. Both now
+call `approval.RequireApproved`. The only records newly refused are forged or
+hand-written ones, because `approval.Approve` has always written both
+provenance fields; a proposal approved through `approval.Approve` with the
+inventory `Kind` onboards exactly as before. A store with no ACL can still be
+written with a body that forges all three fields (the accepted INT-4
+residual); `RequireApproved` raises the bar for a forgery, it does not remove
+the need for the console to defend the Documents boundary.

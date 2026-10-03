@@ -60,6 +60,13 @@ import (
 // proposalCollection (host/local/inventory.go): OnboardNode resolves a
 // proposal_id through that collection, so drift between the two would leave
 // every approval invisible to it.
+//
+// The "inventory:approve" literal now lives in three places that must stay in
+// step: this var, inventoryApprovalKind in host/local/inventory.go, and
+// inventoryKind in approval/approval_test.go. OnboardNode refuses, with
+// codes.FailedPrecondition, a proposal whose body does not record a decision
+// under that scope and a named decider (approval.RequireApproved); a proposal
+// decided through approval.Approve with this Kind always does.
 var OnboardingKind = approval.Kind{Collection: "inventory-proposals", ApproveScope: "inventory:approve"}
 
 // ProposerBackend models the pack worker's persona: it discovers
