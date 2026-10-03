@@ -199,12 +199,28 @@ func (s *forgeServer) Resolve(ctx context.Context, req *hostv1.ResolveRequest) (
 	}, nil
 }
 
+// forgeModuleKey is the comparison key for a Forge-sourced Puppetfile entry or
+// resolved node. It is source-qualified so it can never collide with a
+// gitModuleKey, and it delegates to code.CanonicalModuleName so Resolve and
+// the Code overwrite gate share one definition of module identity.
+func forgeModuleKey(name string) string {
+	return "forge\x00" + code.CanonicalModuleName(name)
+}
+
+// gitModuleKey is the comparison key for a Git-sourced Puppetfile entry. The
+// name is used raw: a Git module's name is a bare module name where a hyphen
+// is part of the name, never a namespace separator.
+func gitModuleKey(name string) string {
+	return "git\x00" + name
+}
+
 // currentPuppetfileModuleNames reads env's stored Puppetfile text (if any)
 // — through the SAME code-puppetfiles Documents collection and docs.mu
 // lock discipline codeServer uses (D-15) — and returns the set of module
-// names it currently contains, normalized (D-08/D-15's "already there"
-// check must not be fooled by a Puppetfile author having written the
-// ns-name hyphen form where this facet's own results use ns/name). A
+// keys it currently contains (see forgeModuleKey and gitModuleKey), so the
+// "already there" check (D-08/D-15) is not fooled by a Puppetfile author
+// having written the ns-name hyphen form or a different owner case where this
+// facet's own results use ns/name. A
 // missing or unparseable Puppetfile reports an empty set rather than an
 // error: Resolve's job is describing current reality, not validating the
 // environment on Forge's behalf — Code already does that on its own write
@@ -228,23 +244,27 @@ func (s *forgeServer) currentPuppetfileModuleNames(env string) map[string]bool {
 		// A Git module's name is the bare module name (see
 		// PuppetfileModule.name), never a Forge ns-name slug, so a hyphen in
 		// it is part of the name and must not be rewritten into a namespace
-		// separator. Only Forge-sourced entries carry the slug forms.
+		// separator. Source qualification, not a different spelling, is what
+		// stops a hyphenated Git name from being mistaken for a Forge slug:
+		// the two live under different key prefixes and cannot collide.
 		if m.GetGit() != nil {
-			names[m.GetName()] = true
+			names[gitModuleKey(m.GetName())] = true
 			continue
 		}
-		names[normalizeModuleName(m.GetName())] = true
+		names[forgeModuleKey(m.GetName())] = true
 	}
 	return names
 }
 
-// normalizeModuleName converts a module identity to its ns/name form. A
-// Puppetfile module name may be written in either the ns/name or ns-name
-// slug form (code/puppetfile.go's forgeSlugOK accepts both); this facet's
-// own Search/Resolve results always use ns/name (forge_client.go). Only
-// the first separator is replaced, mirroring forge_client.go's
-// forgeModuleSlug — the module-name segment itself never contains a
-// hyphen (Forge's slug grammar restricts it to [a-z][a-z0-9_]*).
+// normalizeModuleName converts a module name to its ns/name display and wire
+// form, with case preserved. This is NOT the identity key: Search and Resolve
+// results (forge_resolver.go's DependencyNode.Name) and the Recommend prompt
+// text (recommend_prompt.go) use it so the spelling a pack sees never moves.
+// Identity comparisons must use code.CanonicalModuleName instead (through
+// forgeModuleKey here); the two call-site groups are deliberately separate, so
+// do not unify them. Only the first separator is replaced, mirroring
+// forge_client.go's forgeModuleSlug — the module-name segment itself never
+// contains a hyphen (Forge's slug grammar restricts it to [a-z][a-z0-9_]*).
 func normalizeModuleName(name string) string {
 	if strings.Contains(name, "/") {
 		return name
@@ -259,7 +279,7 @@ func attachAlreadyInPuppetfile(node *hostv1.DependencyNode, present map[string]b
 	if node == nil {
 		return
 	}
-	node.AlreadyInPuppetfile = present[normalizeModuleName(node.Name)]
+	node.AlreadyInPuppetfile = present[forgeModuleKey(node.Name)]
 	for _, child := range node.Dependencies {
 		attachAlreadyInPuppetfile(child, present)
 	}

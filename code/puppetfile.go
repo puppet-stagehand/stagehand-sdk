@@ -419,10 +419,27 @@ func forgeSlugOK(name string) bool {
 	return reForgeSlug.MatchString(name)
 }
 
-// CanonicalModuleName is a RED-phase placeholder; the real definition lands
-// in the GREEN commit.
+// CanonicalModuleName returns the canonical comparison key for a Forge
+// module name: the lowercase owner-name hyphen form, so puppetlabs/stdlib,
+// puppetlabs-stdlib and PuppetLabs/stdlib are all "puppetlabs-stdlib".
+//
+// It is the one definition of Forge module identity, used by both the Resolve
+// already-present annotation and the Code overwrite gate. It is a comparison
+// key, not a display form: Forge Search and Resolve results keep their
+// ns/name spelling on the wire. Identity is byte equality of the returned
+// key; only ASCII case folding is applied, with no Unicode normalization.
+//
+// A name that is not a Forge slug (empty, a single segment, more than one
+// separator, an uppercase module segment) is returned unchanged, which makes
+// the function total and idempotent. It applies only to Forge-sourced
+// entries: a Git module's bare name may legitimately contain a hyphen, so
+// callers must never canonicalise one. It is pure, so it is safe to call
+// inside a lock.
 func CanonicalModuleName(name string) string {
-	return name
+	if !forgeSlugOK(name) {
+		return name
+	}
+	return strings.ToLower(strings.Replace(name, "/", "-", 1))
 }
 
 // reGitTransport matches the five accepted URL-scheme transports.
