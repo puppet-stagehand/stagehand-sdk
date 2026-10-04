@@ -290,10 +290,18 @@ permission.
   real RPCs, and `FuzzRenderParseRoundTrip` searches for any value whose
   rendered text reads back differently.
 - **An environment whose Puppetfile already holds injected text must be re-authored.** This is the one operator action Phase 12.1 requires. The
-  facet reads the stored Puppetfile on every call, so a file written before
-  this change that contains an injected line is now refused when it is read
-  (`FailedPrecondition`) or when the next write tries to render it
-  (`InvalidArgument`), and nothing repairs it automatically. There is
+  facet reads the stored Puppetfile on every call, and nothing repairs a
+  file written before this change automatically. Do not wait for an error to
+  tell you a file is affected, because a read does not always refuse it. An
+  injected line that is not valid Puppetfile syntax, or a Forge version that
+  carries one, is refused when it is read (`FailedPrecondition`). An injected
+  line that is itself a well-formed `mod` statement is not: a Git module name
+  such as `zz'` followed by a new line and `mod 'puppetlabs-stdlib', '99.0.0'`
+  was written as three ordinary-looking entries, and a read lists all three,
+  possibly including a second `puppetlabs-stdlib`. Only the next write fails
+  (`InvalidArgument`), because the forged entries do not pass module
+  validation. So inspect the module list of every environment created before
+  Phase 12.1 and look for modules you did not add. There is
   deliberately no migration: this is a 0.x preview with no released data, and
   a file in that state is exactly the problem that was fixed, so quietly
   rewriting it would be guessing at what its author meant. The remedy is to
