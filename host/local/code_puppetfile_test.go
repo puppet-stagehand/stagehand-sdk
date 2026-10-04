@@ -809,3 +809,83 @@ func TestCode_PuppetfileImportIsVerbatimAndStillGated(t *testing.T) {
 		t.Fatalf("a refused Put changed the imported text: %q", got)
 	}
 }
+
+// ------------------------------------------------- NEW-2 text injection
+
+// gitModule builds a Git-sourced module with just a name and a URL, the
+// Git-only sibling of forgeModule.
+func gitModule(name, url string) *hostv1.PuppetfileModule {
+	return &hostv1.PuppetfileModule{
+		Name:   name,
+		Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: url}},
+	}
+}
+
+// TestCode_PuppetfileRejectsInjectedModuleText closes the milestone audit's
+// NEW-2 finding at the RPC boundary. The audit's own words: "a Git module named
+// zz'... is appended ungated and yields a second stdlib entry at 99.0.0; same
+// via a Forge Put with a crafted version". Both payloads are refused with
+// InvalidArgument and leave the stored bytes untouched.
+//
+// The refusal arrives before the overwrite gate is consulted, because
+// PutPuppetfileModule calls code.ValidateModule ahead of any identity
+// comparison. That ordering is why the stored text can be asserted
+// byte-identical: nothing was rendered, let alone stored.
+func TestCode_PuppetfileRejectsInjectedModuleText(t *testing.T) {
+	const seeded = "mod 'puppetlabs-stdlib', '9.4.1'\n"
+	setup := func(t *testing.T) (*host.Host, context.Context, string) {
+		h := newOverwriteHost()
+		seedPuppetfileText(t, h, "prod", seeded)
+		return h, context.Background(), seeded
+	}
+
+	// assertUntouched checks the three predicates every refusal carries: the
+	// stored text is byte-identical, exactly one module remains, and it is still
+	// puppetlabs-stdlib pinned at 9.4.1 (the version distinguishes a refusal
+	// from a silent overwrite by the injected 99.0.0 line).
+	assertUntouched := func(t *testing.T, h *host.Host, ctx context.Context, want string) {
+		t.Helper()
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != want {
+			t.Fatalf("stored text changed by a refused Put:\n got: %q\nwant: %q", got, want)
+		}
+		names := listModuleNames(t, h, "prod")
+		if len(names) != 1 || names[0] != "puppetlabs-stdlib" {
+			t.Fatalf("module names = %q, want exactly [%q]", names, "puppetlabs-stdlib")
+		}
+		resp, err := h.Code.ListPuppetfileModules(ctx, &hostv1.ListPuppetfileModulesRequest{Environment: "prod"})
+		if err != nil {
+			t.Fatalf("ListPuppetfileModules: %v", err)
+		}
+		if got := resp.Modules[0].GetForge().GetVersion(); got != "9.4.1" {
+			t.Fatalf("stdlib version = %q, want %q", got, "9.4.1")
+		}
+	}
+
+	t.Run("git name injects mod lines", func(t *testing.T) {
+		h, ctx, want := setup(t)
+		hostile := gitModule("zz'\nmod 'puppetlabs-stdlib', '99.0.0'\nmod 'qq", "https://example.com/a.git")
+		if err := putModuleErr(h, "prod", hostile); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("Put: got %v, want InvalidArgument", err)
+		}
+		assertUntouched(t, h, ctx, want)
+	})
+
+	t.Run("forge version injects statement", func(t *testing.T) {
+		h, ctx, want := setup(t)
+		hostile := forgeModule("puppetlabs/apache", "1.0'\nsystem('id')\n#")
+		if err := putModuleErr(h, "prod", hostile); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("Put: got %v, want InvalidArgument", err)
+		}
+		assertUntouched(t, h, ctx, want)
+	})
+
+	// Positive control: a well-formed Put must still succeed, so a mistake that
+	// makes every Put fail cannot read as a pass.
+	t.Run("control well-formed git module is appended", func(t *testing.T) {
+		h, _, _ := setup(t)
+		mustPutModule(t, h, "prod", gitModule("profiles", "https://example.com/profiles.git"))
+		if names := listModuleNames(t, h, "prod"); len(names) != 2 {
+			t.Fatalf("module names = %q, want 2 entries", names)
+		}
+	})
+}
