@@ -222,6 +222,38 @@ func TestCode_PuppetfileRejectsInvalidModule(t *testing.T) {
 			Name:   "apache",
 			Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{Url: "https://example.com/apache.git\nmoduledir 'evil'"}},
 		}},
+
+		// NEW-2 (Phase 12.1): one row per injection vector x field, each
+		// reaching code.ValidateModule through the real RPC.
+		{"git name injects mod lines", gitModule("zz'\nmod 'puppetlabs-stdlib', '99.0.0'\nmod 'qq", "https://example.com/a.git")},
+		{"git name with slash", gitModule("ns/name", "https://example.com/a.git")},
+		{"git name with leading hyphen", gitModule("-x", "https://example.com/a.git")},
+		{"forge version injects statement", forgeModule("puppetlabs/apache", "1.0'\nsystem('id')\n#")},
+		{"forge version trailing backslash", forgeModule("puppetlabs/apache", "1.0\\")},
+		{"forge version with space", forgeModule("puppetlabs/apache", "1.0 beta")},
+		{"git url expression breakout", gitModule("apache", "https://a/'+`id`+'")},
+		{"git url control characters", gitModule("apache", "https://a/\v")},
+		{"git url form feed", gitModule("apache", "https://a/\f")},
+		{"git url nul byte", gitModule("apache", "https://a/\x00")},
+		{"git url line separator", gitModule("apache", "https://a/\u2028b")},
+		{"git ref injects mod line", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", RefKind: &hostv1.GitSource_Ref{Ref: "x'\nmod 'qq"},
+		}}}},
+		{"git tag injects mod line", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", RefKind: &hostv1.GitSource_Tag{Tag: "x'\nmod 'qq"},
+		}}}},
+		{"git branch injects mod line", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", RefKind: &hostv1.GitSource_Branch{Branch: "x'\nmod 'qq"},
+		}}}},
+		{"git commit injects mod line", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", RefKind: &hostv1.GitSource_Commit{Commit: "x'\nmod 'qq"},
+		}}}},
+		{"git default_branch injects statement", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", DefaultBranch: "main'\nsystem('id')\n#",
+		}}}},
+		{"git ref leading hyphen", &hostv1.PuppetfileModule{Name: "apache", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/a.git", RefKind: &hostv1.GitSource_Ref{Ref: "--upload-pack=x"},
+		}}}},
 	}
 
 	for _, tc := range cases {
@@ -888,4 +920,97 @@ func TestCode_PuppetfileRejectsInjectedModuleText(t *testing.T) {
 			t.Fatalf("module names = %q, want 2 entries", names)
 		}
 	})
+}
+
+// TestCode_PuppetfileAcceptsRealWorldModules is the positive counterpart of the
+// NEW-2 refusal rows: every shape a control repo legitimately uses still goes
+// through, so the new rules read as narrowing and not as breakage.
+//
+// Each row gets a fresh host. A Put over an existing module is a gated
+// overwrite, not a plain write, so reusing one environment for two rows that
+// share a name would make an acceptance row fail for the wrong reason.
+func TestCode_PuppetfileAcceptsRealWorldModules(t *testing.T) {
+	cases := []struct {
+		name     string
+		module   *hostv1.PuppetfileModule
+		wantName string
+	}{
+		{"unicode git name", gitModule("ntp-caf\u00e9", "https://example.com/ntp-caf\u00e9.git"), "ntp-caf\u00e9"},
+		{"forge version 1.0", forgeModule("puppetlabs/ntp", "1.0"), "puppetlabs-ntp"},
+		{"git ref with slash", &hostv1.PuppetfileModule{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/profiles.git", RefKind: &hostv1.GitSource_Ref{Ref: "release/1.x"},
+		}}}, "profiles"},
+		{"git default_branch main", &hostv1.PuppetfileModule{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/profiles.git", DefaultBranch: "main",
+		}}}, "profiles"},
+		{"git control branch arm", &hostv1.PuppetfileModule{Name: "profiles", Source: &hostv1.PuppetfileModule_Git{Git: &hostv1.GitSource{
+			Url: "https://example.com/profiles.git", RefKind: &hostv1.GitSource_ControlBranch{ControlBranch: &hostv1.ControlBranch{}},
+		}}}, "profiles"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newOverwriteHost()
+			mustCreateEnv(t, h, "prod")
+			if err := putModuleErr(h, "prod", tc.module); err != nil {
+				t.Fatalf("Put: got %v, want nil", err)
+			}
+			names := listModuleNames(t, h, "prod")
+			if len(names) != 1 || names[0] != tc.wantName {
+				t.Fatalf("module names = %q, want [%q]", names, tc.wantName)
+			}
+		})
+	}
+}
+
+// TestCode_ModuledirRejectsInjectedText matters more than it looks.
+// SetModuledir performs no validation of its own and is documented as ungated,
+// so a moduledir value reaches a rule only because storePuppetfileLocked renders
+// through code.RenderPuppetfile. It is the fifth injection point, and the
+// milestone audit's text does not name it (12.1-RESEARCH.md Finding 1).
+//
+// Path shape is deliberately not policed (SD-6): /srv/modules and ../up are
+// accepted rows, not oversights. Only an unsafe scalar is refused.
+func TestCode_ModuledirRejectsInjectedText(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+	mustPutModule(t, h, "prod", forgeModule("puppetlabs/stdlib", "9.4.1"))
+	snapshot := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
+	namesBefore := listModuleNames(t, h, "prod")
+
+	refusals := []struct{ name, value string }{
+		{"injects mod line", "x'\nmod 'puppetlabs-stdlib', '99.0.0'\n#"},
+		{"trailing backslash", "thirdparty\\"},
+		{"nul byte", "a\x00b"},
+		{"paragraph separator", "a\u2029b"},
+	}
+	for _, tc := range refusals {
+		t.Run("refuses "+tc.name, func(t *testing.T) {
+			_, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: tc.value})
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("SetModuledir: got %v, want InvalidArgument", err)
+			}
+			if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != snapshot {
+				t.Fatalf("stored text changed by a refused SetModuledir:\n got: %q\nwant: %q", got, snapshot)
+			}
+			names := listModuleNames(t, h, "prod")
+			if strings.Join(names, ",") != strings.Join(namesBefore, ",") {
+				t.Fatalf("module names = %q, want %q", names, namesBefore)
+			}
+		})
+	}
+
+	// Accepted rows. The empty string is the documented clear operation, so it
+	// comes last, matching how TestCode_ModuledirSetAndClear ends.
+	for _, value := range []string{"thirdparty", "/srv/modules", "../up", ""} {
+		t.Run("accepts "+value, func(t *testing.T) {
+			pf, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: value})
+			if err != nil {
+				t.Fatalf("SetModuledir(%q): %v", value, err)
+			}
+			if pf.GetModuledir() != value {
+				t.Fatalf("Moduledir = %q, want %q", pf.GetModuledir(), value)
+			}
+		})
+	}
 }
