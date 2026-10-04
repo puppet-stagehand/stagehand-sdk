@@ -287,8 +287,9 @@ permission.
   `TestCode_PuppetfileRejectsInjectedModuleText` (the audit's reproduction),
   `TestCode_ModuledirRejectsInjectedText` and
   `TestCodeOverwriteApplyRefusesHostilePayload` pin the refusals through the
-  real RPCs, and `FuzzRenderParseRoundTrip` searches for any value whose
-  rendered text reads back differently.
+  real RPCs, and `FuzzRenderParseRoundTrip` searches for any value that makes the rendered
+  text break its shape (an extra `mod` line, or text outside a quoted value)
+  or read back differently.
 - **An environment whose Puppetfile already holds injected text must be re-authored.** This is the one operator action Phase 12.1 requires. The
   facet reads the stored Puppetfile on every call, and nothing repairs a
   file written before this change automatically. Do not wait for an error to

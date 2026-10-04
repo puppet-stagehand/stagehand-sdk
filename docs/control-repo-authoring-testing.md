@@ -482,9 +482,19 @@ speed of your machine. `new interesting` lines during the run are normal and
 are not failures. If the run ever reports a failing input, it writes a file
 under `code/testdata/fuzz/`. That file should be reported, not committed.
 
-**What this proves:** not just that the known attacks are blocked (all ten of
-the audit's payloads are also pinned as ordinary tests that run in every plain
-`go test`), but that a search for new ones found nothing in that time budget.
+**What this proves:** that the known attacks are blocked (all ten of the
+audit's payloads are also pinned as ordinary tests that run in every plain
+`go test`), and that a search for new values that break the *shape* of the
+written file found nothing in that time budget. The search checks the written
+text with its own small rules, separate from the facet's code: the number of
+`mod` lines equals the number of modules, and nothing sits outside a quoted
+value except the fixed `mod`, `moduledir` and `:key =>` words. It also checks
+that the text reads back as the same modules, but that second check is the same
+comparison the facet already makes before it stores anything, so on its own it
+cannot fail. Be clear about what this does not show: it cannot see a value that
+the facet writes safely but that Ruby would later read differently (for example
+a double-quoted `#{...}` in an imported file). Those cases are covered by the
+named tests, not by the search.
 
 ### Step 19: the published contract no longer advertises a permission that does not exist
 
