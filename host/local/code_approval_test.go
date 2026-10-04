@@ -464,6 +464,93 @@ func TestCodeOverwriteApplyRefusals_PuppetfileModule(t *testing.T) {
 	})
 }
 
+// TestCodeOverwriteApplyRefusesHostilePayload closes the third and last route an
+// attacker-controlled module value can take into the stored Puppetfile. A
+// code:rw holder can get a hostile payload in front of a human approver, and a
+// name carrying an embedded newline is exactly what a reviewer skims past, so
+// the facet must refuse it at Apply regardless of the approval.
+//
+// ApplyEnvironmentDuplicate is out of scope here: it freezes no payload and
+// re-reads its source at apply time, and the source it re-reads has already been
+// through the same rules.
+func TestCodeOverwriteApplyRefusesHostilePayload(t *testing.T) {
+	setup := func(t *testing.T) (*host.Host, context.Context, string) {
+		h := newOverwriteHost()
+		ctx := context.Background()
+		mustCreateEnv(t, h, "prod")
+		mustPutModule(t, h, "prod", forgeModule("puppetlabs/apache", "0.10.0"))
+		return h, ctx, puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
+	}
+
+	// appliedCollection is the unexported overwriteAppliedCollection const in
+	// host/local/code_approval.go:57; this file is package local_test, so the
+	// literal is repeated here and a rename is traceable to that line.
+	const appliedCollection = "code-overwrite-applied"
+
+	hostile := []struct {
+		name   string
+		module *hostv1.PuppetfileModule
+	}{
+		{"git name injects mod lines", gitModule("zz'\nmod 'puppetlabs-stdlib', '99.0.0'\nmod 'qq", "https://example.com/a.git")},
+		{"forge version injects statement", forgeModule("puppetlabs/apache", "1.0'\nsystem('id')\n#")},
+	}
+	for _, tc := range hostile {
+		t.Run(tc.name, func(t *testing.T) {
+			h, ctx, before := setup(t)
+			id := nextProposalID("hostile")
+
+			// OverwriteBodyForPuppetfileModule rejects only a nil module or an
+			// empty name, so it must accept the hostile module; that is exactly
+			// why the payload has to be stopped later, at Apply.
+			body, err := code.OverwriteBodyForPuppetfileModule("prod", tc.module)
+			if err != nil {
+				t.Fatalf("OverwriteBodyForPuppetfileModule: %v", err)
+			}
+			if _, err := approval.ProposeBody(ctx, h, overwriteKind, id, body); err != nil {
+				t.Fatalf("ProposeBody(%s): %v", id, err)
+			}
+			approveOverwrite(t, h, id)
+
+			// InvalidArgument and not FailedPrecondition is the whole point of
+			// this row: the body is built from the hostile module itself, so
+			// code.PuppetfileModuleTargetName(frozen) equals the target name and
+			// the earlier "target and payload disagree" refusal cannot mask the
+			// validation.
+			_, err = applyModule(h, id)
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("Apply: code = %v (%v), want InvalidArgument", status.Code(err), err)
+			}
+			if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
+				t.Fatalf("stored text changed by a refused Apply:\n got: %q\nwant: %q", got, before)
+			}
+			if names := listModuleNames(t, h, "prod"); len(names) != 1 || names[0] != "puppetlabs-apache" {
+				t.Fatalf("module names = %q, want exactly [%q]", names, "puppetlabs-apache")
+			}
+			if _, found := getDoc(t, h, ctx, appliedCollection, id); found {
+				t.Fatalf("a refused Apply consumed the approval: %s/%s exists", appliedCollection, id)
+			}
+		})
+	}
+
+	// Positive control: a well-formed payload is applied, so a harness mistake
+	// that makes every Apply fail cannot read as a pass.
+	t.Run("control well-formed payload is applied", func(t *testing.T) {
+		h, ctx, before := setup(t)
+		id := nextProposalID("control")
+		proposeOverwrite(t, h, id, "prod", forgeModule("puppetlabs/apache", "6.1.0"))
+		approveOverwrite(t, h, id)
+		if _, err := applyModule(h, id); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got == before {
+			t.Fatalf("stored text unchanged after a successful Apply: %q", got)
+		}
+		if _, found := getDoc(t, h, ctx, appliedCollection, id); !found {
+			t.Fatalf("a successful Apply left no %s/%s marker", appliedCollection, id)
+		}
+	})
+}
+
 // TestCodeOverwriteApplyDoesNotDecide proves Apply wrote nothing back into
 // the proposal: same status, same version.
 func TestCodeOverwriteApplyDoesNotDecide(t *testing.T) {
