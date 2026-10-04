@@ -138,6 +138,38 @@ character for character. A module you add is written into the Puppetfile in the
 lowercase hyphen form, so `puppetlabs/ntp` is stored as `puppetlabs-ntp`. This
 matters in section 8.
 
+### What a module value may contain
+
+The Code facet checks every value it is about to write into the Puppetfile. The
+rules are short, and you can satisfy them without reading any Go:
+
+- **A Git module's name** is a single bare word. It may use letters (accented
+  ones too), digits, underscore, dot and hyphen. It may not start with a dot or
+  a hyphen, and it never contains a slash.
+- **A pinned Forge version** may use letters, digits, dot, plus, underscore and
+  hyphen. So `1.0`, `1.0.0` and `1.2.3-rc.1+build.5` all work, but a range such
+  as `>= 1.0` does not. That is on purpose: r10k itself only understands a
+  single pinned version or the latest one.
+- **A `ref`, `tag`, `branch`, `commit` or `default_branch`** may be almost
+  anything readable, but it may not contain a space or start with a hyphen.
+- **No value anywhere** may contain a quote mark, a backslash, a line break or
+  an invisible control character.
+
+Why so strict? The Puppetfile is a Ruby file, and the facet writes your value
+into it between quote marks. A value that contains a quote mark or a line break
+could close the quote early and turn into extra lines in the file: a module
+nobody asked for, or a replacement of one already there, that no reviewer ever
+saw.
+
+The rule to remember is that **the facet refuses such a value; it never tries to
+escape it.** An escaped value would read back as something different from what
+was written, and the facet's promise is that what it writes is what it reads. So
+if a write is refused, change the value; do not look for a way to quote it.
+
+The module directory setting follows the same rule. A path that starts with `/`
+or contains `..` is still fine: the facet checks only whether the value can be
+written back faithfully, not where you keep your modules.
+
 ## 5. A Hiera level and a data key
 
 Add one level, then one key in the data file that level reads.
@@ -295,9 +327,10 @@ status code, so the helper is the only honest way to tell them apart.
 | An import whose branch moved since the report | `FailedPrecondition` | `import_branch_moved` | `local.IsCodeImportBranchMoved` |
 | A proposal decided a second time | `FailedPrecondition` | `proposal_already_decided` | `approval.IsAlreadyDecided` |
 | A rejection with no reason | `InvalidArgument` | `reject_reason_required` | none exported; use the status code |
+| A write whose module value cannot be stored safely (a name, version, url, ref or module directory with a quote, a backslash, a line break or a control character) | `InvalidArgument` | none | none; only the status code is meaningful |
 | A proposal id that is already used | `AlreadyExists` | `proposal_already_exists` | none exported; use the status code |
 
-Never match an error message as a string. Eight of these ten rows share
+Never match an error message as a string. Eight of these eleven rows share
 `FailedPrecondition`, so the helper is the only honest discriminator. For the
 rows with no helper, check the status code and then check that nothing was
 written.
@@ -319,7 +352,9 @@ written.
   guards against accidental replacement through the Code facet's own calls.
   Section 6 of [`docs/code-overwrite-gating.md`](code-overwrite-gating.md) and
   the closing section of [`docs/code-import.md`](code-import.md) say exactly
-  what it does not stop.
+  what it does not stop. The one route that is now closed is smuggling extra
+  lines in through a module value; the route that remains is the documented one
+  of removing an item and putting it back (section 6 of the gating guide).
 
 ## Where to go next
 

@@ -272,11 +272,43 @@ permission.
   host that embeds this SDK. `TestCodeOverwriteRemoveThenPutBypassesTheGate`
   pins the remove-then-put path so this stays documented rather than
   rediscovered.
+- **Text injection is no longer one of these routes.** Until Phase 12.1 a
+  holder of `code:rw` could put a module whose name or version contained a
+  quote mark and a line break, and have it render as extra `mod` lines in the
+  Puppetfile: a second module, or a replacement of one already there, with no
+  approved proposal and without the gate ever seeing it. The facet now refuses
+  any value it could not write back faithfully, and the text it renders is
+  read back and compared against the model before it is stored, so the
+  renderer and the file can no longer disagree. Be precise about the boundary:
+  the sentence above that the gate is not a control against a `code:rw` holder
+  acting maliciously stays true, because remove-then-put and the ungated
+  `SetModuledir` and `ReorderHieraLevels` are still there. What changed is
+  that the text layer is no longer a way around the gate.
+  `TestCode_PuppetfileRejectsInjectedModuleText` (the audit's reproduction),
+  `TestCode_ModuledirRejectsInjectedText` and
+  `TestCodeOverwriteApplyRefusesHostilePayload` pin the refusals through the
+  real RPCs, and `FuzzRenderParseRoundTrip` searches for any value whose
+  rendered text reads back differently.
+- **An environment whose Puppetfile already holds injected text must be re-authored.** This is the one operator action Phase 12.1 requires. The
+  facet reads the stored Puppetfile on every call, so a file written before
+  this change that contains an injected line is now refused when it is read
+  (`FailedPrecondition`) or when the next write tries to render it
+  (`InvalidArgument`), and nothing repairs it automatically. There is
+  deliberately no migration: this is a 0.x preview with no released data, and
+  a file in that state is exactly the problem that was fixed, so quietly
+  rewriting it would be guessing at what its author meant. The remedy is to
+  delete the environment (`DeleteEnvironment` removes its Puppetfile without
+  reading it, so it works even on a poisoned one) and then create it again, or
+  re-import the branch it came from.
 - **A pack that can reach both proposing and approving code has no gate.**
   Keep the two apart as described in
   [`docs/approval-pattern.md`](approval-pattern.md).
 
 ## Manual verification
+
+For the text-injection checks, see Steps 14 to 18 of
+[`docs/control-repo-authoring-testing.md`](control-repo-authoring-testing.md);
+they are not repeated here.
 
 This section lets a person confirm the gate by hand with `host.Local`,
 without reading the Go source. You will run a small scratch test and read the
