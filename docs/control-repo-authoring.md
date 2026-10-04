@@ -153,7 +153,9 @@ rules are short, and you can satisfy them without reading any Go:
 - **A `ref`, `tag`, `branch`, `commit` or `default_branch`** may be almost
   anything readable, but it may not contain a space or start with a hyphen.
 - **No value anywhere** may contain a quote mark, a backslash, a line break or
-  an invisible control character.
+  an invisible control character. Invisible formatting characters are refused
+  too, such as a zero-width space or a right-to-left override, because they can
+  make a value read as something other than what it is.
 
 Why so strict? The Puppetfile is a Ruby file, and the facet writes your value
 into it between quote marks. A value that contains a quote mark or a line break

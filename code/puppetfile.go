@@ -573,7 +573,11 @@ func forgeVersionOK(v string) bool {
 // the backslash (Ruby reads `\'` as an escaped quote, so a trailing backslash
 // swallows the next line), every control rune (newline, carriage return,
 // vertical tab, form feed, NUL, U+0085 and the rest of the C0 and C1 ranges)
-// and the Unicode line and paragraph separators U+2028 and U+2029.
+// and the Unicode line and paragraph separators U+2028 and U+2029. It also
+// rejects the invisible and bidirectional format characters (Unicode category
+// Cf: U+200B to U+200F, U+202A to U+202E, U+2066 to U+2069, U+FEFF and the
+// like). They cannot forge Ruby syntax, but they let a rendered line look like
+// a different value to the human who approves it.
 //
 // The double quote is rejected too even though the renderer emits single
 // quotes: the strict reader's reQuoted and reGitAttr groups are `[^']*` and
@@ -585,7 +589,7 @@ func scalarSafe(s string) bool {
 		return false
 	}
 	for _, r := range s {
-		if r == '\'' || r == '"' || r == '\\' || unicode.IsControl(r) || r == 0x2028 || r == 0x2029 {
+		if r == '\'' || r == '"' || r == '\\' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == 0x2028 || r == 0x2029 {
 			return false
 		}
 	}

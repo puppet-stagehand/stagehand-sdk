@@ -501,6 +501,10 @@ func TestPuppetfile_ScalarSafe(t *testing.T) {
 		"c1_next_line":        "a\u0085b",
 		"line_separator":      "a\u2028b",
 		"paragraph_separator": "a\u2029b",
+		"bidi_override":       "v\u202e1",
+		"bidi_isolate":        "a\u2066b",
+		"zero_width_space":    "a\u200bb",
+		"byte_order_mark":     "a\ufeffb",
 		"invalid_utf8":        "a\xffb",
 	}
 	for name, v := range unsafe {
