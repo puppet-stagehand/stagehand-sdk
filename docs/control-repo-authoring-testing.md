@@ -338,3 +338,41 @@ go run ./cmd/pack-check --format json "$SCRATCH/manifest.json"
 **What this proves:** a manifest that passes pack-check cannot be refused by the
 host at install for this reason. Delete `$SCRATCH` afterwards; do not commit the
 copy.
+
+## What changed in Phase 12.1
+
+Phase 12.1 closed a hole in how the Code facet writes a Puppetfile, and it
+changed six behaviours in doing so. Each step below is a way to see one of them
+with your own eyes. Unlike Steps 12 and 13, none of these steps edits a file:
+each is a read-only test run, so there is no scratch directory to make and
+nothing to clean up afterwards.
+
+### Step 14: a module name cannot smuggle in a second module
+
+A Puppetfile is a Ruby file. Until this change, the Code facet dropped a
+module's name straight into that file between two quote marks. A name that
+contained a quote mark and a line break could therefore close the quote early
+and add whole extra lines: a second module, at a version nobody approved. The
+Code facet now checks every value it writes and refuses anything that could do
+that. The answer is always refusal and never quoting-around-it, because a value
+that had been quoted around would read back as something different from what
+was written.
+
+```
+go test ./host/local/ -run 'TestCode_PuppetfileRejectsInjectedModuleText' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`, and the verbose output shows a `--- PASS`
+line for each of three sub-tests: `git_name_injects_mod_lines`,
+`forge_version_injects_statement` and
+`control_well-formed_git_module_is_appended`. The first two are the hostile
+writes. The third is the control, which writes an ordinary, well-formed module
+and must succeed.
+
+**What this proves:** three things. The hostile write was refused with
+`InvalidArgument`. The stored Puppetfile text is byte-for-byte what it was
+before the attempt, so a refusal is never a partial write. The module that was
+already there is still pinned at its original version, so the attempt did not
+quietly replace it either. This is the exact scenario the v0.3.0-rc.1 milestone
+audit reproduced as finding NEW-2. The control sub-test is there so that a
+mistake which made every write fail could not be mistaken for a pass.
