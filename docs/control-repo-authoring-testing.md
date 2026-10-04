@@ -376,3 +376,132 @@ already there is still pinned at its original version, so the attempt did not
 quietly replace it either. This is the exact scenario the v0.3.0-rc.1 milestone
 audit reproduced as finding NEW-2. The control sub-test is there so that a
 mistake which made every write fail could not be mistaken for a pass.
+
+### Step 15: the module directory setting cannot forge a module line
+
+One setting, the module directory, is written into the Puppetfile but has no
+approval gate on it at all: changing it is treated as a plain setting change.
+That made it the easiest place to inject text, so it is now checked by the same
+rule as every other value. Two kinds of value are deliberately still allowed: a
+path that starts with `/` and a path that contains `..`. The Code facet has no
+opinion about where you keep your modules (SD-6). It only cares whether the
+value can be written back into the file faithfully.
+
+```
+go test ./host/local/ -run 'TestCode_ModuledirRejectsInjectedText' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`, with a `--- PASS` line for each of four
+refusal sub-tests (`refuses_injects_mod_line`, `refuses_trailing_backslash`,
+`refuses_nul_byte`, `refuses_paragraph_separator`) and for each of four
+accepted-value sub-tests (`accepts_thirdparty`, `accepts_/srv/modules`,
+`accepts_../up`, and `accepts_`, which clears the setting).
+
+**What this proves:** an injected module-directory value is refused with
+`InvalidArgument`, the stored Puppetfile text and its module list are unchanged
+after each refusal, and the ordinary values still work, including an absolute
+path and a `..` path.
+
+### Step 16: an approval does not make a bad value good
+
+The overwrite gate exists so that a person reviews a replacement before it
+happens. A reviewer reads the payload a pack proposed, and a name with an
+invisible line break in it is exactly the kind of thing that survives a skim. So
+the Code facet checks the payload again at the moment it applies it, after the
+approval.
+
+```
+go test ./host/local/ -run 'TestCodeOverwriteApplyRefusesHostilePayload' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`, with a `--- PASS` line for the two
+hostile sub-tests, `git_name_injects_mod_lines` and
+`forge_version_injects_statement`, and for the control sub-test,
+`control_well-formed_payload_is_applied`.
+
+**What this proves:** the apply was refused with `InvalidArgument` even though
+the proposal was genuinely approved. The stored file is unchanged. The approval
+was not used up, so the record still shows that the proposal was never applied.
+The control sub-test shows that a well-formed approved payload is still applied
+normally.
+
+### Step 17: the two readers agree, and an import cannot bring one module in twice
+
+The Code facet has two Puppetfile readers: a strict one for files it wrote
+itself, and a forgiving one for files it is importing from somebody else's
+repository. If the forgiving one accepts something the strict one would read
+differently, the file means one thing and the model says another. Two new
+refusals close that gap. A `mod` line whose value is a Ruby expression, or that
+carries a leftover word, is skipped whole rather than imported partially. A line
+that sets the same attribute twice (`:git` or `:default_branch`) is skipped,
+because Ruby would use the last value while a person reading the file sees the
+first.
+
+There is one more change. The same Forge module can be written
+`puppetlabs/stdlib` or `puppetlabs-stdlib`, and an imported file holding both
+now comes in as one module with a warning instead of two entries. This is fixed
+**at import time only**. An environment that already holds two entries keeps
+working exactly as before (SD-5), because strict reading, adding, removing and
+applying all still tolerate a stored duplicate.
+
+```
+go test ./code/ -run 'TestPuppetfile_ParseRejectsLeftoverText|TestPuppetfile_ParseRejectsRepeatedGitAttribute|TestParsePuppetfileLenient_Catalog|TestLenientAgreesWithStrict|TestParsePuppetfile_StrictToleratesCrossSpellingDuplicate' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`. Among the many catalog rows, look for
+`git_attr_value_is_an_expression`, `git_attr_trailing_garbage`,
+`git_attr_trailing_token_after_ref`, `repeated_git_attribute`,
+`repeated_default_branch_attribute`, the `moduledir_value_*` rows,
+`duplicate_forge_module_other_spelling`,
+`duplicate_forge_module_hyphen_spelling_first`,
+`duplicate_forge_module_mixed_case_owner` and the two `..._do_not_collide`
+rows. Also look for `TestLenientAgreesWithStrict` with its two sub-tests, and
+`TestParsePuppetfile_StrictToleratesCrossSpellingDuplicate`.
+
+**What this proves:** strict reading refuses each shape; the import reader
+reports each one as a warning and skips the statement; the two readers are
+checked against each other on a shared set of texts; a Forge module never
+swallows a Git module of a similar name; and strict reading still accepts a
+stored cross-spelling duplicate, which is why nothing already stored breaks.
+
+### Step 18: anything the facet writes reads back as the same thing
+
+This is the real rule behind all of the above, in one sentence: whatever the
+Code facet writes into a Puppetfile has to read back as exactly the modules it
+thought it was writing. This step asks the computer to spend thirty seconds
+trying to find a value where that is not true.
+
+```
+go test ./code/ -run '^$' -fuzz FuzzRenderParseRoundTrip -fuzztime 30s
+```
+
+**Expected:** the run prints a line every few seconds, each with an elapsed
+time, an execution count and a `new interesting` count, and it ends with `PASS`.
+The recorded run made about 660,000 executions; yours will differ with the
+speed of your machine. `new interesting` lines during the run are normal and
+are not failures. If the run ever reports a failing input, it writes a file
+under `code/testdata/fuzz/`. That file should be reported, not committed.
+
+**What this proves:** not just that the known attacks are blocked (all ten of
+the audit's payloads are also pinned as ordinary tests that run in every plain
+`go test`), but that a search for new ones found nothing in that time budget.
+
+### Step 19: the published contract no longer advertises a permission that does not exist
+
+The reference copy of the wire contract under `schema/proto/` is what this
+repository's own instructions point a coding assistant at. One comment there
+still named a Forge permission, `forge:read`, that was deleted in Phase 12, so
+an author following it would declare a permission the validator now refuses.
+
+```
+go test ./manifest/ -run 'TestSchemaProtoReferenceForgePermissionIsCurrent' -v -count=1
+```
+
+**Expected:** the run ends with `PASS`.
+
+**What this proves:** the comment names the permission the Forge facet really
+requires, `forge:rw`, and points at the live contract file; and the deleted
+permission appears in neither copy of the contract. One thing was deliberately
+not done: the reference copy was not regenerated from the live one, because that
+would replace a published document wholesale. Whether to do that is still an
+open decision (SD-4).
