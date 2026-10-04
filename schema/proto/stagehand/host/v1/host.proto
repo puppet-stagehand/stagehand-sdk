@@ -146,7 +146,7 @@ message Principal { string token_id = 1; string label = 2; repeated string scope
 message TokenRef { string token_id = 1; }
 
 // -------------------------------------------------------------------- Forge
-// Permission: forge:read. Resolves the pack's Content module.
+// Permission: forge:rw. Resolves the pack's Content module. The live Forge service is proto/stagehand/host/v1/host.proto.
 service Forge {
   rpc Resolve(ForgeResolveRequest) returns (ForgeRelease);
   rpc Installed(ForgeSlug) returns (ForgeRelease);
