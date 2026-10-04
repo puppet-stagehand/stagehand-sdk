@@ -282,6 +282,40 @@ func TestPuppetfile_ParseRejectsLeftoverText(t *testing.T) {
 	}
 }
 
+// TestPuppetfile_ParseRejectsDoubleQuotedInterpolation pins WR-01: a
+// double-quoted value Ruby would interpolate is refused by strict parsing, while
+// the same text in single quotes (literal in Ruby) and a plain double-quoted
+// value still parse.
+func TestPuppetfile_ParseRejectsDoubleQuotedInterpolation(t *testing.T) {
+	refused := []string{
+		"mod 'a', :git => \"https://x/#{`id`}\", :tag => 'v1'\n",
+		"mod 'a', :git => 'https://example.com/a.git', :tag => \"v#{VERSION}\"\n",
+		"mod 'a', :git => 'https://example.com/a.git', :tag => \"v#$X\"\n",
+		"mod 'a', :git => 'https://example.com/a.git', :ref => \"v#@x\"\n",
+		"moduledir \"#{ENV_DIR}\"\n",
+	}
+	for _, text := range refused {
+		_, err := ParsePuppetfile(text)
+		if !errors.Is(err, ErrPuppetfileParse) {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want wrapping ErrPuppetfileParse", text, err)
+		}
+		if !strings.Contains(err.Error(), "interpolation") {
+			t.Fatalf("ParsePuppetfile(%q) error = %v, want it to name interpolation", text, err)
+		}
+	}
+	accepted := []string{
+		"mod 'a', :git => 'https://example.com/a.git', :tag => 'v#{VERSION}'\n",
+		"mod 'a', :git => \"https://example.com/a.git\", :tag => \"v1\"\n",
+		"moduledir 'a#{b}'\n",
+		"moduledir \"plain\"\n",
+	}
+	for _, text := range accepted {
+		if _, err := ParsePuppetfile(text); err != nil {
+			t.Fatalf("ParsePuppetfile(%q) must still parse: %v", text, err)
+		}
+	}
+}
+
 // TestPuppetfile_ParseRejectsRepeatedGitAttribute pins T-12.1-09: a repeated
 // :git or :default_branch is refused rather than last-wins, because an
 // operator reading the file sees the first value while Ruby evaluates the last.

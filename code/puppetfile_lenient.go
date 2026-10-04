@@ -71,6 +71,12 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 	seenKeys := map[string]bool{}
 	for _, ll := range logicalLines(text) {
 		if m := reModuledir.FindStringSubmatch(ll.text); m != nil {
+			// A double-quoted value Ruby would interpolate is computed at run
+			// time; importing it as literal text would change the deployment.
+			if moduledirInterpolates(ll.text) {
+				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir value uses Ruby string interpolation (#{...}, #$x or #@x), which the model cannot represent; it was skipped")
+				continue
+			}
 			// scalarSafe is the same rule RenderPuppetfile applies to Moduledir,
 			// so the import path can never return a model the sink refuses
 			// (T-10-15, T-12.1-16). It implies utf8.ValidString.
@@ -161,6 +167,9 @@ func lenientRemainderProblem(remainder string) (kind, msg string) {
 	counts := map[string]int{}
 	for _, a := range attrs {
 		counts[a[1]]++
+		if dqInterpolates(a[2]) {
+			return FindingPuppetfileUnsupportedRuby, fmt.Sprintf("the :%s value is a double-quoted string with Ruby interpolation (#{...}, #$x or #@x), which the model cannot represent; the statement was skipped", a[1])
+		}
 		switch a[1] {
 		case "ref", "tag", "branch", "commit":
 			refKeys = append(refKeys, a[1])

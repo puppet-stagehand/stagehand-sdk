@@ -51,6 +51,9 @@ var (
 	// reHasGit reports whether a mod remainder carries a :git attribute,
 	// the signal that distinguishes a Git-sourced module from a Forge one.
 	reHasGit = regexp.MustCompile(`:git\s*=>`)
+	// reDQInterpolation matches the start of a Ruby double-quoted string
+	// interpolation: #{expr}, #$global or #@ivar.
+	reDQInterpolation = regexp.MustCompile(`#[{$@]`)
 )
 
 // knownGitAttrKeys is the six DSL attribute keys this package models on a
@@ -142,6 +145,25 @@ func parseQuotedScalar(s string) (string, bool) {
 	return "", false
 }
 
+// dqInterpolates reports whether raw, a reGitAttr-captured value still in its
+// quoted form, is a double-quoted string that Ruby would interpolate. Ruby
+// evaluates #{...}, #$x and #@x inside double quotes, so such a value is
+// computed by r10k at run time; importing it as the literal text would
+// silently change what gets deployed (D-09, T-10-18). A single-quoted value is
+// always literal in Ruby, so `#{` inside one is ordinary text and is not
+// refused here.
+func dqInterpolates(raw string) bool {
+	return len(raw) >= 2 && raw[0] == '"' && reDQInterpolation.MatchString(raw)
+}
+
+// moduledirInterpolates reports whether a line that reModuledir matched uses a
+// double-quoted value Ruby would interpolate. reModuledir's value group
+// excludes quote characters, so a double quote anywhere in the matched line is
+// the value's own opening quote.
+func moduledirInterpolates(line string) bool {
+	return strings.Contains(line, `"`) && reDQInterpolation.MatchString(line)
+}
+
 // attrValue unwraps a reGitAttr-captured value: a quoted scalar is
 // unquoted, a bare Ruby symbol (e.g. :control_branch) is returned as-is so
 // the caller can recognise it by its leading colon.
@@ -161,6 +183,9 @@ func ParsePuppetfile(text string) (*hostv1.Puppetfile, error) {
 	seenModuledir := false
 	for _, ll := range logicalLines(text) {
 		if m := reModuledir.FindStringSubmatch(ll.text); m != nil {
+			if moduledirInterpolates(ll.text) {
+				return nil, fmt.Errorf("%w: line %d: moduledir value uses Ruby string interpolation", ErrPuppetfileParse, ll.line)
+			}
 			if seenModuledir {
 				return nil, fmt.Errorf("%w: line %d: duplicate moduledir", ErrPuppetfileParse, ll.line)
 			}
@@ -300,6 +325,9 @@ func parseGitModule(name, remainder string, lineNo int) (*hostv1.PuppetfileModul
 
 	var attrs []gitAttr
 	for _, m := range reGitAttr.FindAllStringSubmatch(remainder, -1) {
+		if dqInterpolates(m[2]) {
+			return nil, fmt.Errorf("%w: line %d: the :%s value uses Ruby string interpolation", ErrPuppetfileParse, lineNo, m[1])
+		}
 		attrs = append(attrs, gitAttr{key: m[1], raw: m[2]})
 	}
 	if left := gitRemainderLeftover(remainder); left != "" {
