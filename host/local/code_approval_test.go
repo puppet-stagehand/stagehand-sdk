@@ -1781,7 +1781,9 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 		proposeOverwrite(t, h, "p1", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
 		return h, puppetfileTextFromDocumentsRaw(t, h, ctx, "prod")
 	}
-	setBody := func(t *testing.T, h *host.Host, mutate func(map[string]any)) {
+	// putBody writes the mutated proposal body through the pack-facing Documents
+	// facet and returns the error, the way a pack holding only Documents would.
+	putBody := func(t *testing.T, h *host.Host, mutate func(map[string]any)) error {
 		t.Helper()
 		doc, ok := getDoc(t, h, ctx, code.OverwriteCollection, "p1")
 		if !ok {
@@ -1789,11 +1791,26 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 		}
 		body := doc.Body.Value.AsMap()
 		mutate(body)
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+		_, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
 			Collection: code.OverwriteCollection, DocId: "p1", IfVersion: doc.Version,
 			Body: &hostv1.Json{Value: mustStruct(t, body)},
-		}); err != nil {
-			t.Fatalf("Documents.Put: %v", err)
+		})
+		return err
+	}
+	// seedBody writes the same mutated body through local.SeedDocument, the
+	// operator/test seeding path that models the console writing on an
+	// operator's behalf. The pack-facing guard is a pack boundary, not a store
+	// ACL against the operator.
+	seedBody := func(t *testing.T, h *host.Host, mutate func(map[string]any)) {
+		t.Helper()
+		doc, ok := getDoc(t, h, ctx, code.OverwriteCollection, "p1")
+		if !ok {
+			t.Fatal("proposal missing")
+		}
+		body := doc.Body.Value.AsMap()
+		mutate(body)
+		if err := local.SeedDocument(h, code.OverwriteCollection, "p1", body); err != nil {
+			t.Fatalf("SeedDocument: %v", err)
 		}
 	}
 
@@ -1814,12 +1831,19 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 		if err != nil {
 			t.Fatalf("IssueToken: %v", err)
 		}
-		if _, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: otherKind, ProposalID: "p1", TokenSecret: tok.Secret}); err != nil {
-			t.Fatalf("Approve with the other kind: %v", err)
+		// The approval package cannot refuse a Kind whose scope the caller chose,
+		// but the host's Documents guard does: it verifies the transition token
+		// against the registered Kind's scope (code:approve), not the scope the
+		// caller named, so the decision never lands.
+		if _, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: otherKind, ProposalID: "p1", TokenSecret: tok.Secret}); !local.IsApprovalTransitionRefused(err) {
+			t.Fatalf("Approve with the other kind: got %v, want IsApprovalTransitionRefused", err)
+		}
+		if doc, _ := getDoc(t, h, ctx, code.OverwriteCollection, "p1"); doc.Body.Value.AsMap()["status"] != "pending" {
+			t.Fatalf("a refused wrong-scope approval changed the proposal: %v", doc.Body.Value.AsMap())
 		}
 		_, err = applyModule(h, "p1")
-		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), code.OverwriteApproveScope) {
-			t.Fatalf("Apply: got %v, want FailedPrecondition naming the required scope", err)
+		if status.Code(err) != codes.FailedPrecondition || !approval.IsNotApproved(err) {
+			t.Fatalf("Apply: got %v, want an approval.IsNotApproved FailedPrecondition (the proposal is still pending)", err)
 		}
 		if err := putModuleErr(h, "prod", forgeModule("puppetlabs/apache", "6.1.0")); !local.IsCodeOverwriteRequiresApproval(err) || local.IsCodeOverwriteApplyPending(err) {
 			t.Fatalf("Put: got %v, want requires-approval (the proposal covers nothing)", err)
@@ -1831,7 +1855,16 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 
 	t.Run("a bare status flip without provenance is refused", func(t *testing.T) {
 		h, before := setup(t)
-		setBody(t, h, func(m map[string]any) { m["status"] = "approved" })
+		flip := func(m map[string]any) { m["status"] = "approved" }
+		if err := putBody(t, h, flip); !local.IsApprovalTransitionRefused(err) {
+			t.Fatalf("a direct Put of a bare approved status: got %v, want IsApprovalTransitionRefused", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
+			t.Fatalf("a refused status flip wrote: %q", got)
+		}
+		// Written through the operator path instead, the record exists but has no
+		// provenance, so the read side (approval.RequireApproved) still refuses it.
+		seedBody(t, h, flip)
 		_, err := applyModule(h, "p1")
 		if status.Code(err) != codes.FailedPrecondition {
 			t.Fatalf("Apply: got %v, want FailedPrecondition", err)
@@ -1846,22 +1879,38 @@ func TestCodeOverwriteApprovalProvenance(t *testing.T) {
 		}
 	})
 
-	// This pins an accepted property, like TestApproval_DocumentsHasNoFieldLevelACL
-	// for inventory: the Documents facet has no ACL, so any holder of *host.Host
-	// can write a complete, well-formed approval record straight into the
-	// code-overwrites collection. The gate defends against accidental and
-	// unapproved overwrites through the Code RPCs; it is not a boundary against a
-	// pack that can also write Documents.
-	t.Run("Documents has no ACL, so a full forged approval record is honoured", func(t *testing.T) {
-		h, _ := setup(t)
-		setBody(t, h, func(m map[string]any) {
+	// The Documents guard (FND-03) closes what used to be an accepted property:
+	// a pack holding Documents can no longer write a complete, well-formed
+	// approval record into code-overwrites. The operator seeding path remains,
+	// and it is judged by its provenance like any other record.
+	t.Run("a pack cannot write a forged approval record", func(t *testing.T) {
+		h, before := setup(t)
+		forge := func(m map[string]any) {
 			m["status"] = "approved"
 			m["approved_scope"] = code.OverwriteApproveScope
 			m["decided_by"] = "forged"
+		}
+		if err := putBody(t, h, forge); !local.IsApprovalTransitionRefused(err) {
+			t.Fatalf("a direct Put of a forged approval record: got %v, want IsApprovalTransitionRefused", err)
+		}
+		if _, err := applyModule(h, "p1"); status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("Apply of a refused forgery: got %v, want FailedPrecondition", err)
+		}
+		if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != before {
+			t.Fatalf("a refused forgery wrote: %q", got)
+		}
+	})
+
+	t.Run("a record written through the operator seeding path is judged by its provenance", func(t *testing.T) {
+		h, _ := setup(t)
+		seedBody(t, h, func(m map[string]any) {
+			m["status"] = "approved"
+			m["approved_scope"] = code.OverwriteApproveScope
+			m["decided_by"] = "operator-seeded"
 		})
 		got, err := applyModule(h, "p1")
 		if err != nil {
-			t.Fatalf("Apply of a forged-but-well-formed approval: %v", err)
+			t.Fatalf("Apply of a well-formed operator-seeded approval: %v", err)
 		}
 		if got.GetForge().GetVersion() != "6.1.0" {
 			t.Fatalf("Apply returned %+v", got)

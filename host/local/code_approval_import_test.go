@@ -110,10 +110,31 @@ func TestResolveApplyProposalImportSkipsEnvNameOnly(t *testing.T) {
 		h, s := importTestHost(t)
 		importTestPropose(t, h, "imp-noprov", importBody(t))
 		// Decided under a different scope: status becomes approved but the
-		// recorded scope is not code:approve.
-		importTestApprove(t, h, approval.Kind{Collection: code.OverwriteCollection, ApproveScope: "other:approve"}, "imp-noprov")
+		// recorded scope is not code:approve. The pack-facing Documents guard
+		// refuses an approval decided under any scope but the registered Kind's
+		// (FND-03), so the decision approval.Approve would have recorded is
+		// written through the operator seeding path instead.
+		otherKind := approval.Kind{Collection: code.OverwriteCollection, ApproveScope: "other:approve"}
+		tok, err := h.Auth.IssueToken(context.Background(), &hostv1.IssueTokenRequest{Scope: otherKind.ApproveScope, Label: "operator", TtlSeconds: 300})
+		if err != nil {
+			t.Fatalf("IssueToken: %v", err)
+		}
+		if _, err := approval.Approve(context.Background(), h, approval.ApproveRequest{Kind: otherKind, ProposalID: "imp-noprov", TokenSecret: tok.Secret}); !IsApprovalTransitionRefused(err) {
+			t.Fatalf("Approve under another scope: got %v, want IsApprovalTransitionRefused", err)
+		}
+		doc, derr := h.Documents.Get(context.Background(), &hostv1.GetDocumentRequest{Collection: code.OverwriteCollection, DocId: "imp-noprov"})
+		if derr != nil {
+			t.Fatalf("Documents.Get: %v", derr)
+		}
+		decided := doc.Body.Value.AsMap()
+		decided["status"] = approval.StatusApproved
+		decided["approved_scope"] = otherKind.ApproveScope
+		decided["decided_by"] = "operator"
+		if err := SeedDocument(h, code.OverwriteCollection, "imp-noprov", decided); err != nil {
+			t.Fatalf("SeedDocument: %v", err)
+		}
 
-		_, _, err := importTestResolve(s, "imp-noprov", code.OverwriteResourceImport)
+		_, _, err = importTestResolve(s, "imp-noprov", code.OverwriteResourceImport)
 		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "no record of a decision") {
 			t.Fatalf("got %v, want FailedPrecondition about missing decision record", err)
 		}

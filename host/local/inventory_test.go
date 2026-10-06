@@ -1108,14 +1108,14 @@ func nodeIDs(nodes []*hostv1.Node) []string {
 	return out
 }
 
-// writeProposal writes a D-08-shaped document directly through
-// h.Documents.Put — collection "inventory-proposals", body fields "status"
-// and "node" — standing in for Phase 4's governed proposal-writer, which
-// does not exist yet. The Documents store accepts a write to this
-// collection from anywhere; a future reader must not mistake this test
-// scaffolding for the intended production writer. Passing an empty
-// proposalStatus omits the "status" key entirely (simulating a proposal
-// document with no status field); passing a nil node omits the "node" key.
+// writeProposal seeds a D-08-shaped document through local.SeedDocument,
+// the operator/test seeding path: collection "inventory-proposals", body
+// fields "status" and "node". It does not go through the pack-facing
+// Documents facet because that facet now refuses a forged or born-approved
+// proposal (FND-03); a fixture that needs a decided record has to model the
+// console writing on an operator's behalf. Passing an empty proposalStatus
+// omits the "status" key entirely (simulating a proposal document with no
+// status field); passing a nil node omits the "node" key.
 //
 // A proposalStatus of "approved" also writes approved_scope
 // ("inventory:approve") and decided_by ("tester"): exactly the provenance
@@ -1129,7 +1129,9 @@ func writeProposal(t *testing.T, h *host.Host, proposalID, proposalStatus string
 
 // writeProposalMutated is writeProposal with a hook that edits the body map
 // after the default fields are filled in and before it is stored, so a test
-// can delete or overwrite provenance keys to build a forged record.
+// can delete or overwrite provenance keys to build a forged record. It seeds
+// through local.SeedDocument because the pack-facing Documents facet refuses
+// every decided or forged record this helper exists to build.
 func writeProposalMutated(t *testing.T, h *host.Host, proposalID, proposalStatus string, node map[string]any, mutate func(map[string]any)) {
 	t.Helper()
 	body := map[string]any{}
@@ -1146,17 +1148,8 @@ func writeProposalMutated(t *testing.T, h *host.Host, proposalID, proposalStatus
 	if mutate != nil {
 		mutate(body)
 	}
-	s, err := structpb.NewStruct(body)
-	if err != nil {
-		t.Fatalf("structpb.NewStruct: %v", err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: "inventory-proposals",
-		DocId:      proposalID,
-		Body:       &hostv1.Json{Value: s},
-		IfVersion:  0,
-	}); err != nil {
-		t.Fatalf("writeProposal Put(%q): %v", proposalID, err)
+	if err := local.SeedDocument(h, "inventory-proposals", proposalID, body); err != nil {
+		t.Fatalf("writeProposal SeedDocument(%q): %v", proposalID, err)
 	}
 }
 
@@ -1307,10 +1300,16 @@ func TestInventory_OnboardNodeIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Delete the proposal document to prove the second call does not
-	// re-read it — the ONBOARDED short-circuit must fire before any
-	// Documents access.
-	if _, err := h.Documents.Delete(ctx, &hostv1.DeleteDocumentRequest{Collection: "inventory-proposals", DocId: "n9"}); err != nil {
+	// Overwrite the approved proposal with a rejected one to prove the second
+	// call does not re-read it: a second OnboardNode that did would refuse the
+	// rejected record, so the ONBOARDED short-circuit must fire before any
+	// Documents access. The decided record is replaced through SeedDocument
+	// because the pack-facing Documents facet refuses to delete or rewrite a
+	// decided proposal (FND-03).
+	if err := local.SeedDocument(h, "inventory-proposals", "n9", map[string]any{
+		"status": "rejected",
+		"node":   map[string]any{"id": "n9", "display_name": "n9", "environment": "prod"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 

@@ -831,6 +831,20 @@ func rewriteProposal(t *testing.T, h *host.Host, id string, mutate func(*hostv1.
 	}
 }
 
+// seedProposalStatus forges a proposal's status through the operator seeding
+// path: it reads the stored body, sets status, and writes it back with
+// local.SeedDocument. The pack-facing Documents facet refuses this write
+// (FND-03), so a test that needs a status-only record with no approval
+// provenance has to build it where the console would, not where a pack can.
+func seedProposalStatus(t *testing.T, h *host.Host, id, status string) {
+	t.Helper()
+	body := proposalDoc(t, h, id).Body.Value.AsMap()
+	body["status"] = status
+	if err := local.SeedDocument(h, code.OverwriteCollection, id, body); err != nil {
+		t.Fatalf("seeding proposal %s as %s: %v", id, status, err)
+	}
+}
+
 func TestImport_ApplyIsFrozen(t *testing.T) {
 	t.Run("a push to the remote after Propose does not change what Apply writes", func(t *testing.T) {
 		h, fx := newImportHost(t, map[string]tree{"production": canonicalTree()})
@@ -926,9 +940,24 @@ func TestImport_Apply(t *testing.T) {
 	t.Run("an approved status with no recorded provenance is refused", func(t *testing.T) {
 		h, _ := newImportHost(t, map[string]tree{"production": canonicalTree()})
 		mustPropose(t, h, "ap-5")
-		// Someone with documents access forges the status without going through
-		// the approval package, so there is no approved_scope or decided_by.
-		rewriteProposal(t, h, "ap-5", func(*hostv1.ImportSnapshot) {}, map[string]any{"status": "approved"})
+		// A pack with documents access cannot forge the status: the guard refuses
+		// the write and the stored proposal is still pending.
+		d := proposalDoc(t, h, "ap-5")
+		forged := d.Body.Value.AsMap()
+		forged["status"] = "approved"
+		_, perr := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+			Collection: code.OverwriteCollection, DocId: "ap-5",
+			Body: &hostv1.Json{Value: mustStruct(t, forged)}, IfVersion: d.Version,
+		})
+		if !local.IsApprovalTransitionRefused(perr) {
+			t.Fatalf("a direct Put of status approved: want IsApprovalTransitionRefused, got %v", perr)
+		}
+		if got := proposalDoc(t, h, "ap-5").Body.Value.AsMap()["status"]; got != "pending" {
+			t.Fatalf("a refused forgery changed the stored status to %v", got)
+		}
+		// The operator path can still write a status-only record, with no
+		// approved_scope or decided_by, and ApplyImport judges it by provenance.
+		seedProposalStatus(t, h, "ap-5", "approved")
 		_, err := applyImport(h, "ap-5")
 		wantCode(t, err, codes.FailedPrecondition)
 		if _, err := h.Code.GetEnvironment(ctx, &hostv1.GetEnvironmentRequest{Name: "production"}); status.Code(err) != codes.NotFound {
