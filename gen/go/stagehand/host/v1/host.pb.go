@@ -5731,7 +5731,7 @@ func (x *RecommendRequest) GetMaxSuggestions() int32 {
 
 type RecommendedModule struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// rank is host-assigned (1..n) from the ranker's ordering.
+	// rank is host-assigned (1..n) from the ranker's ordering, after the host moves deprecated modules below non-deprecated ones.
 	Rank int32 `protobuf:"varint,1,opt,name=rank,proto3" json:"rank,omitempty"`
 	// reasoning is LLM-authored, untrusted display text.
 	Reasoning string `protobuf:"bytes,2,opt,name=reasoning,proto3" json:"reasoning,omitempty"`

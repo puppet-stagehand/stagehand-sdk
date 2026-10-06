@@ -10,7 +10,8 @@ explains one call, `Recommend`, from nothing to a ranked answer.
 You describe a need in one sentence, for example "I need to manage security
 settings on my Windows servers". Recommend turns that into a few searches of
 the Puppet Forge, shows the real results to a language model, and hands you
-the model's ordering with a short reason for each pick.
+a ranked list: the host numbers it from the order the model proposed, with
+deprecated modules moved to the end, and each pick has a short reason.
 
 ## Some words first
 
@@ -215,16 +216,18 @@ Each suggestion has:
 
 | Field | Where it comes from |
 |---|---|
-| `rank` | The host. 1 is first; it follows the model's ordering. |
+| `rank` | The host. 1 is first. The host numbers the answer from the order the model proposed, with deprecated modules moved to the end. |
 | `reasoning` | The model. One or two plain sentences, cut to 400 characters. |
 | `module` (name, version, source, endorsement, quality score, release date, deprecated, superseded-by, summary, tags) | The host. A copy of the real search result. |
 
 That split is the grounding rule. The model is asked to answer with the name
 and source of modules from the list it was given. The host looks each one up
 in the real results and returns the **real result's** fields. A name the host
-does not recognise is dropped and reported as a warning. So the model owns
-only two things: the order, and the reasoning string. A module it makes up
-cannot appear.
+does not recognise is dropped and reported as a warning. The model proposes an
+order and writes the reasoning string. The host then joins each name to the real
+result, moves deprecated modules below the non-deprecated ones, and numbers what
+is left. A module the model makes up cannot appear, and the host never adds a
+module the model did not name.
 
 Grounding promises the module exists. It does not promise the model chose well
 or that its reasoning is right. Read the reason as an opinion.
@@ -244,7 +247,32 @@ Warnings carry a `code`:
 | `recommend_duplicate_dropped` | The model named the same module twice. The repeat was dropped. |
 | `recommend_candidates_truncated` | The searches found more modules than the candidate limit; the extra ones were not ranked. |
 | `recommend_search_failed` | One search failed or was skipped (the search time budget ran out) while another worked, so the candidates are narrower than you asked for. The `origins` field names the source when one search failed. |
+| `recommend_superseded_module_listed` | A suggestion is marked deprecated on the registry, and the module that replaces it was also in the search results, so look at that one. The `module` field names the deprecated module. |
 | `recommend_metadata_degraded` | A search worked but the registry would not give the details (summary, tags, quality score) for some modules, so they were ranked on thinner data. |
+
+### Deprecated modules
+
+On the Forge, a module is **deprecated** when its authors have retired it, and
+usually point at a newer module that replaces it (`superseded_by`).
+
+Recommend never hides a deprecated module and never swaps it for its
+replacement, because the search really did find it. What it does is move every
+deprecated module below the non-deprecated suggestions before the numbers are
+handed out. So a deprecated module can never be the top pick while a live
+alternative is in the same answer, and it can never take a place that a live
+module would have had when you set `max_suggestions`.
+
+The `recommend_superseded_module_listed` warning means the replacement was right
+there in the search results. It is a hint to look at that module; the host does
+not add it for you.
+
+The one rule that matters when you read an answer: trust `module.deprecated` and
+`module.superseded_by`. The host copied those from the registry. Never trust the
+`reasoning` sentence for deprecation. The model wrote it, can be wrong, and is
+now told not to talk about deprecation at all.
+
+You can prove the ordering rule offline, with no key and no network:
+`go test ./host/local -run TestRecommendDemotesDeprecatedModules -v`.
 
 ## 5. What to do next
 
@@ -457,10 +485,12 @@ report which step and what you saw.
        }
        t.Logf("searches run: %q", resp.Queries)
        for _, s := range resp.Suggestions {
-           t.Logf("%d. %s %s [%s]\n     reason: %s", s.Rank, s.Module.Name, s.Module.Version, s.Module.Source, s.Reasoning)
+           t.Logf("%d. %s %s [%s] deprecated=%t superseded-by=%q\n     reason: %s",
+               s.Rank, s.Module.Name, s.Module.Version, s.Module.Source,
+               s.Module.Deprecated, s.Module.SupersededBy, s.Reasoning)
        }
        for _, w := range resp.Warnings {
-           t.Logf("warning %s: %s", w.Code, w.Message)
+           t.Logf("warning %s (module %q): %s", w.Code, w.Module, w.Message)
        }
        if len(resp.Suggestions) == 0 {
            t.Fatal("no suggestions")
@@ -538,7 +568,8 @@ report which step and what you saw.
    - a `searches run:` line listing one to three short search phrases;
    - several numbered suggestions, with ranks starting at 1 and counting up
      with no gaps, each a name like `author/module`, with a version and
-     `[puppet-forge]`;
+     `[puppet-forge]`, then `deprecated=true` or `deprecated=false` and a
+     `superseded-by=` value (empty unless the registry names a replacement);
    - a one-line `reason:` under each that reads as relevant to Windows
      security settings;
    - possibly some `warning` lines, which are not failures.
@@ -569,6 +600,25 @@ report which step and what you saw.
    ```
 
    Expect `PASS` for both.
+
+5a. **Check deprecation from the printed flags, not from the reason.** Read
+   the `deprecated=` value on every suggestion line.
+   - Confirm that no line showing `deprecated=true` sits above a line showing
+     `deprecated=false`. The host moves deprecated modules to the end, so this
+     must hold.
+   - If a `superseded-by=` name is printed, find that module on
+     `https://forge.puppet.com` and confirm it exists.
+   - The `reason:` text is the model's opinion and is never evidence that a
+     module is deprecated. Only the printed `deprecated=` flag is. If a reason
+     claims a module is deprecated while its printed flag is `false`, that is a
+     prompt problem to report, not a ranking problem.
+   - The ordering rule itself needs no key and no network. Prove it offline:
+
+   ```
+   go test ./host/local -run TestRecommendDemotesDeprecatedModules -v
+   ```
+
+   Expect `PASS`.
 
 ### Walk 3: a live registry check with no API key
 
@@ -647,3 +697,6 @@ If a real provider run in step 3 returns a suggestion that is not on the
 registry, or a step 7 to 9 failure comes back with a different code or a
 message containing your key, stop and report it: the grounding or the
 redaction rule is broken.
+
+Also stop and report it if a suggestion whose printed `deprecated=` flag is
+`true` sits above one whose flag is `false`: the ordering rule is broken.

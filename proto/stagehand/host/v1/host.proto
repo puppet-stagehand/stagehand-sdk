@@ -737,7 +737,7 @@ message RecommendRequest {
   int32 max_suggestions = 6;
 }
 message RecommendedModule {
-  // rank is host-assigned (1..n) from the ranker's ordering.
+  // rank is host-assigned (1..n) from the ranker's ordering, after the host moves deprecated modules below non-deprecated ones.
   int32 rank = 1;
   // reasoning is LLM-authored, untrusted display text.
   string reasoning = 2;
