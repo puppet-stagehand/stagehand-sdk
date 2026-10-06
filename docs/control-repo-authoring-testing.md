@@ -377,30 +377,38 @@ quietly replace it either. This is the exact scenario the v0.3.0-rc.1 milestone
 audit reproduced as finding NEW-2. The control sub-test is there so that a
 mistake which made every write fail could not be mistaken for a pass.
 
-### Step 15: the module directory setting cannot forge a module line
+### Step 15: the module directory setting accepts one plain folder name only
 
 One setting, the module directory, is written into the Puppetfile but has no
 approval gate on it at all: changing it is treated as a plain setting change.
-That made it the easiest place to inject text, so it is now checked by the same
-rule as every other value. Two kinds of value are deliberately still allowed: a
-path that starts with `/` and a path that contains `..`. The Code facet has no
-opinion about where you keep your modules (SD-6). It only cares whether the
-value can be written back into the file faithfully.
+That made it the easiest place to inject text, and the deploy tools (r10k and
+g10k) install modules into whatever folder it names and delete unmanaged files
+there. A value that starts with `/` or contains `..` can point outside the
+environment, so the value is now limited to one plain folder name: letters,
+digits, `_`, `.` and `-`, at most 64 characters, not starting with `.` or `-`.
+Anything else is refused with the error code `moduledir_invalid` and a fix line
+that names `SetModuledir`. The Code facet never "cleans up" a bad value for you.
+An empty value is still how you clear the setting.
 
 ```
-go test ./host/local/ -run 'TestCode_ModuledirRejectsInjectedText' -v -count=1
+go test ./host/local/ -run 'TestCode_Moduledir' -v -count=1
 ```
 
-**Expected:** the run ends with `PASS`, with a `--- PASS` line for each of four
-refusal sub-tests (`refuses_injects_mod_line`, `refuses_trailing_backslash`,
-`refuses_nul_byte`, `refuses_paragraph_separator`) and for each of four
-accepted-value sub-tests (`accepts_thirdparty`, `accepts_/srv/modules`,
-`accepts_../up`, and `accepts_`, which clears the setting).
+**Expected:** the run ends with `PASS`, with a `--- PASS` line for
+`TestCode_ModuledirSetAndClear`, `TestCode_ModuledirRejectsInjectedText` and
+`TestCode_ModuledirStoredInvalidValueNeedsClearing`. The refusal sub-tests
+include `refuses_injects_mod_line`, `refuses_trailing_backslash`,
+`refuses_nul_byte`, `refuses_paragraph_separator`, `refuses_absolute_path`,
+`refuses_parent_reference`, `refuses_nested`, `refuses_hidden`,
+`refuses_option-like` and `refuses_dot-dot`. The accepted-value sub-tests are
+`accepts_thirdparty` and `accepts_`, which clears the setting.
 
-**What this proves:** an injected module-directory value is refused with
-`InvalidArgument`, the stored Puppetfile text and its module list are unchanged
-after each refusal, and the ordinary values still work, including an absolute
-path and a `..` path.
+**What this proves:** an unsafe module-directory value is refused with
+`InvalidArgument` and the `moduledir_invalid` detail, the stored Puppetfile text
+and its module list are unchanged after each refusal, and a plain folder name
+still works. An environment that already stores a now-invalid value refuses
+other Puppetfile writes until you clear it with `SetModuledir` and an empty
+value, after which writes succeed again.
 
 ### Step 16: an approval does not make a bad value good
 
@@ -451,11 +459,11 @@ go test ./code/ -run 'TestPuppetfile_ParseRejectsLeftoverText|TestPuppetfile_Par
 **Expected:** the run ends with `PASS`. Among the many catalog rows, look for
 `git_attr_value_is_an_expression`, `git_attr_trailing_garbage`,
 `git_attr_trailing_token_after_ref`, `repeated_git_attribute`,
-`repeated_default_branch_attribute`, the `moduledir_value_*` rows,
+`repeated_default_branch_attribute`, the `moduledir_value_*` rows (now including `moduledir_value_is_parent_reference`, `moduledir_value_is_absolute_path`, `moduledir_value_is_nested_path`, `moduledir_value_is_hidden` and `invalid_moduledir_does_not_displace_earlier_valid_one`),
 `duplicate_forge_module_other_spelling`,
 `duplicate_forge_module_hyphen_spelling_first`,
 `duplicate_forge_module_mixed_case_owner` and the two `..._do_not_collide`
-rows. Also look for `TestLenientAgreesWithStrict` with its two sub-tests, and
+rows. Also look for `TestLenientAgreesWithStrict` with its three sub-tests, and
 `TestParsePuppetfile_StrictToleratesCrossSpellingDuplicate`.
 
 **What this proves:** strict reading refuses each shape; the import reader

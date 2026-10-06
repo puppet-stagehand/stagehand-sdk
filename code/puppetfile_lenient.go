@@ -5,6 +5,7 @@ package code
 // approval, host or host/local.
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode/utf8"
@@ -77,11 +78,18 @@ func ParsePuppetfileLenient(text string, lim ImportLimits) (*hostv1.Puppetfile, 
 				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir value uses Ruby string interpolation (#{...}, #$x or #@x), which the model cannot represent; it was skipped")
 				continue
 			}
-			// scalarSafe is the same rule RenderPuppetfile applies to Moduledir,
-			// so the import path can never return a model the sink refuses
-			// (T-10-15, T-12.1-16). It implies utf8.ValidString.
-			if !scalarSafe(m[1]) {
-				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir value cannot be written back to a Puppetfile (it carries a quote, a backslash, a control character or invalid UTF-8); it was skipped")
+			// ValidateModuledir is the same rule RenderPuppetfile applies to
+			// Moduledir, so the import path can never return a model the sink
+			// refuses (T-10-15, T-12.1-16, FND-02). A refused line is skipped
+			// before seenModuledir is set, so it never displaces an earlier
+			// valid value.
+			if err := ValidateModuledir(m[1]); err != nil {
+				reason := "is not valid"
+				var me *ModuledirError
+				if errors.As(err, &me) {
+					reason = me.Reason
+				}
+				warn(FindingPuppetfileUnsupportedRuby, ll.line, ll.text, "the moduledir value is not one safe folder name ("+reason+"); it was skipped")
 				continue
 			}
 			if seenModuledir {
