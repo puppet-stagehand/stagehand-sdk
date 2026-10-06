@@ -30,6 +30,19 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `docs/pack-author-guide.md` | ELI10 guide |
 | `docs/AGENT-WALKTHROUGH-uptime.md` | What a good assistant run looks like today |
 
+## Changing the contract (maintainers)
+
+`schema/proto/` is a generated, verbatim copy of `proto/`. Never edit it by
+hand.
+
+1. Edit `proto/` only.
+2. Run `buf lint && buf generate` (refreshes `gen/`).
+3. Run `go generate ./schema` (copies `proto/` to `schema/proto/`).
+
+CI fails on `gen/` drift and on `schema/proto/` drift
+(`TestSchemaProtoMatchesProto` in `go test ./... -race`). Pack authors keep
+reading `schema/proto/`.
+
 Design record: `puppet-console/docs/adr/0010-capability-packs.md`,
 `docs/design/capability-packs.md`, `docs/design/stagehand-sdk-ai-friendly.md`.
 

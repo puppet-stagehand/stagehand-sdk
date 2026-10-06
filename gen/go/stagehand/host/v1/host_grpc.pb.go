@@ -914,10 +914,11 @@ const (
 // structurally prevent in the propose/approve call graph, not paper over
 // in a comment).
 //
-// This service is NOT derived from the dormant 14-facet reference tree's
-// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
-// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
-// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// This service is NOT derived from the dormant 14-facet reference design's
+// Inventory service (this repository's git history at commit b10af30 and
+// puppet-console/docs/design/capability-packs.md) — that design is a
+// generic PQL-string "kind"-registry CRUD surface
+// (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
 // membership, no classification, and no onboarding-proposal concept. This
 // shape is designed fresh from this milestone's actual node/facts/groups/
 // classification/onboarding requirements; the reference tree was consulted
@@ -1087,10 +1088,11 @@ func (c *inventoryClient) OnboardNode(ctx context.Context, in *OnboardNodeReques
 // structurally prevent in the propose/approve call graph, not paper over
 // in a comment).
 //
-// This service is NOT derived from the dormant 14-facet reference tree's
-// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
-// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
-// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// This service is NOT derived from the dormant 14-facet reference design's
+// Inventory service (this repository's git history at commit b10af30 and
+// puppet-console/docs/design/capability-packs.md) — that design is a
+// generic PQL-string "kind"-registry CRUD surface
+// (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
 // membership, no classification, and no onboarding-proposal concept. This
 // shape is designed fresh from this milestone's actual node/facts/groups/
 // classification/onboarding requirements; the reference tree was consulted
@@ -1497,8 +1499,9 @@ const (
 // code-hiera-data — because they have different write cadences, different
 // round-trip risk profiles, and different future approval-gate granularity.
 //
-// This service is NOT derived from the dormant 14-facet reference tree's
-// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// This service is NOT derived from the dormant 14-facet reference design's
+// Code service (this repository's git history at commit b10af30 and
+// puppet-console/docs/design/capability-packs.md) — that design is a
 // read-only git file browser (Repos/Tree/File). This shape is designed fresh
 // from this milestone's actual environment/Puppetfile/Hiera authoring
 // requirements; no RPC or message name was taken from the reference tree.
@@ -2011,8 +2014,9 @@ func (c *codeClient) ApplyImport(ctx context.Context, in *ApplyImportRequest, op
 // code-hiera-data — because they have different write cadences, different
 // round-trip risk profiles, and different future approval-gate granularity.
 //
-// This service is NOT derived from the dormant 14-facet reference tree's
-// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// This service is NOT derived from the dormant 14-facet reference design's
+// Code service (this repository's git history at commit b10af30 and
+// puppet-console/docs/design/capability-packs.md) — that design is a
 // read-only git file browser (Repos/Tree/File). This shape is designed fresh
 // from this milestone's actual environment/Puppetfile/Hiera authoring
 // requirements; no RPC or message name was taken from the reference tree.
