@@ -134,13 +134,17 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 	for _, opt := range opts {
 		opt(cfg)
 	}
+	authInner := newAuthServer(packID)
 	docs := newDocumentsServer(packID)
+	// The Documents approval guard verifies approver tokens through the same
+	// inner auth server gatedAuth wraps (FND-03).
+	docs.auth = authInner
 	secrets := newSecretsServer(packID)
 	return &host.Host{
 		Documents: docs,
 		Settings:  newSettingsServer(),
 		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: secrets},
-		Auth:      &gatedAuth{perms: perms, packID: packID, inner: newAuthServer(packID)},
+		Auth:      &gatedAuth{perms: perms, packID: packID, inner: authInner},
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
 		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs, secrets, cfg.gitClient)},
 		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},

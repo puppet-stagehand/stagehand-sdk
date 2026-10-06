@@ -18,6 +18,7 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/approval"
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 	"github.com/puppet-stagehand/stagehand-sdk/host"
+	"github.com/puppet-stagehand/stagehand-sdk/host/local"
 )
 
 // TestApproval_ConcurrentApproveIsExactlyOneWinner races eight distinctly
@@ -274,26 +275,20 @@ func assertExactlyOneOnboardedNode(t *testing.T, ctx context.Context, h *host.Ho
 	}
 }
 
-// TestApproval_DocumentsHasNoFieldLevelACL exists to pass, not to catch a
-// regression: it pins a known, accepted property of the Documents facet
-// contract (PITFALLS.md's Pitfall 6, INT-4) rather than leaving it to be
-// rediscovered later as a defect. The Documents facet is a generic
-// namespaced JSON document store with no concept of collections, field
-// names or state machines — Put will happily write any body into a proposal
-// document for any caller holding *host.Host, with no token presented at
-// all. The approval/ package's integrity guarantee lives entirely in
-// being the only code path that is supposed to write this collection past
-// creation; that is a discipline enforced by convention, not by anything
-// the facet itself checks, and this test names the boundary a real
-// console host would have to defend differently.
+// TestApprovalForgery_DirectPutIsRefused pins the FND-03 guard: a pack that
+// holds only the always-granted Documents facet cannot decide an Inventory
+// proposal by writing a body straight into inventory-proposals. This test used
+// to pin the opposite (the accepted INT-4 residual: the store could not tell a
+// Put from approval.Approve); host.Local's Documents facet now registers the
+// approval Kinds and refuses any status transition that does not carry the
+// approver token decide passes in gRPC metadata.
 //
-// Phase 12 (INT-3) narrowed what that bypass buys. OnboardNode now reads the
-// proposal through approval.RequireApproved, so flipping the status alone is
-// refused; the forger must also write approved_scope and decided_by. The test
-// pins both halves: the status-only flip no longer onboards, and a body that
-// carries all three fields still does, because the store cannot tell a Put
-// from approval.Approve.
-func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
+// The residual is closed by FND-03. The test pins four things: a bare status
+// flip is refused and leaves the stored proposal pending at the same version, a
+// fully forged body (status, approved_scope and decided_by) is refused the same
+// way, OnboardNode still refuses the pending proposal, and approval.Approve
+// with a real inventory:approve token still decides it so the node onboards.
+func TestApprovalForgery_DirectPutIsRefused(t *testing.T) {
 	ctx := context.Background()
 	h := testHost(t, "inventory:rw", "tokens:issue")
 
@@ -308,47 +303,73 @@ func TestApproval_DocumentsHasNoFieldLevelACL(t *testing.T) {
 	}
 
 	// putBody writes body over the proposal with no token anywhere in the
-	// call — Documents.Put does not require one — and returns the new version.
-	putBody := func(body map[string]any, ifVersion int64) int64 {
+	// call, the way a pack holding only Documents would.
+	putBody := func(body map[string]any, ifVersion int64) error {
 		t.Helper()
 		s, err := structpb.NewStruct(body)
 		if err != nil {
 			t.Fatalf("structpb.NewStruct: %v", err)
 		}
-		put, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+		_, err = h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
 			Collection: inventoryKind.Collection,
 			DocId:      node.Id,
 			Body:       &hostv1.Json{Value: s},
 			IfVersion:  ifVersion,
 		})
+		return err
+	}
+	assertStillPending := func(step string) {
+		t.Helper()
+		after, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: inventoryKind.Collection, DocId: node.Id})
 		if err != nil {
-			t.Fatalf("Documents.Put (direct bypass, no token): %v", err)
+			t.Fatalf("%s: Documents.Get: %v", step, err)
 		}
-		return put.Version
+		if after.Version != doc.Version {
+			t.Fatalf("%s: stored proposal moved from version %d to %d", step, doc.Version, after.Version)
+		}
+		if got := after.Body.Value.AsMap()["status"]; got != approval.StatusPending {
+			t.Fatalf("%s: stored proposal status is %v, want pending", step, got)
+		}
 	}
 
-	// Half one: a bare status flip is a forgery OnboardNode now refuses.
+	// Half one: a bare status flip is refused.
 	body := doc.Body.Value.AsMap()
 	body["status"] = approval.StatusApproved
-	version := putBody(body, doc.Version)
-	if _, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id}); err == nil {
-		t.Fatalf("OnboardNode accepted a status-only approved record; INT-3 requires the approval provenance")
-	} else if !approval.IsNotApproved(err) {
-		t.Fatalf("expected IsNotApproved for the status-only record, got %v", err)
+	if err := putBody(body, doc.Version); err == nil {
+		t.Fatalf("a direct Put of status approved was accepted; FND-03 requires the approver token")
+	} else if !local.IsApprovalTransitionRefused(err) {
+		t.Fatalf("expected IsApprovalTransitionRefused for the status-only flip, got %v", err)
 	}
+	assertStillPending("status-only flip")
 
-	// Half two: the store still cannot tell a Put from Approve, so a body that
-	// forges the provenance as well is accepted. This is the accepted INT-4
-	// residual, not a defect this package can close.
+	// Half two: a body that forges the provenance as well is refused too.
 	body["approved_scope"] = inventoryKind.ApproveScope
 	body["decided_by"] = "forger"
-	putBody(body, version)
+	if err := putBody(body, doc.Version); err == nil {
+		t.Fatalf("a fully forged approved record was accepted; FND-03 requires the approver token")
+	} else if !local.IsApprovalTransitionRefused(err) {
+		t.Fatalf("expected IsApprovalTransitionRefused for the fully forged record, got %v", err)
+	}
+	assertStillPending("fully forged record")
+
+	if _, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id}); err == nil {
+		t.Fatalf("OnboardNode onboarded a proposal that is still pending")
+	} else if !approval.IsNotApproved(err) {
+		t.Fatalf("expected IsNotApproved for the still-pending proposal, got %v", err)
+	}
+
+	// The legitimate path still works: approval.Approve carries the token in
+	// metadata and the node onboards.
+	tok := approverTokenFor(t, h, inventoryKind, "ops-alice")
+	if _, err := approval.Approve(ctx, h, approval.ApproveRequest{Kind: inventoryKind, ProposalID: node.Id, TokenSecret: tok}); err != nil {
+		t.Fatalf("approval.Approve with a real inventory:approve token: %v", err)
+	}
 	onboarded, err := h.Inventory.OnboardNode(ctx, &hostv1.OnboardNodeRequest{ProposalId: node.Id})
 	if err != nil {
-		t.Fatalf("OnboardNode after a fully forged record: %v", err)
+		t.Fatalf("OnboardNode after approval.Approve: %v", err)
 	}
 	if onboarded.Status != hostv1.Node_ONBOARDED {
-		t.Fatalf("expected node status ONBOARDED after the unguarded write, got %v", onboarded.Status)
+		t.Fatalf("expected node status ONBOARDED after a real approval, got %v", onboarded.Status)
 	}
 }
 

@@ -19,7 +19,11 @@ import (
 type documentsServer struct {
 	hostv1.UnimplementedDocumentsServer
 	packID string
-	mu     sync.Mutex
+	// auth is the Auth facet's inner server, set by local.New. The approval
+	// guard (documents_guard.go) verifies approver tokens through it; a server
+	// built without one fails closed on every guarded status transition.
+	auth *authServer
+	mu   sync.Mutex
 	// collection -> doc_id -> document
 	store map[string]map[string]*hostv1.Document
 }
@@ -43,6 +47,14 @@ func (s *documentsServer) Get(ctx context.Context, req *hostv1.GetDocumentReques
 }
 
 func (s *documentsServer) Put(ctx context.Context, req *hostv1.PutDocumentRequest) (*hostv1.PutDocumentResponse, error) {
+	// Resolve the approver principal before taking s.mu so docs.mu and
+	// auth.mu are never held together (FND-03).
+	kind, guarded := registeredKind(req.Collection)
+	var principal *hostv1.Principal
+	if guarded {
+		principal = s.transitionPrincipal(ctx, kind)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	coll, ok := s.store[req.Collection]
@@ -65,6 +77,15 @@ func (s *documentsServer) Put(ctx context.Context, req *hostv1.PutDocumentReques
 		}
 	}
 
+	// The CAS preconditions above run first on purpose: a racing decide's
+	// loser must see Aborted (which decide turns into ErrAlreadyDecided), not
+	// a guard refusal.
+	if guarded {
+		if err := checkProposalPut(kind, req.Collection, req.DocId, existing, exists, req.Body, principal); err != nil {
+			return nil, err
+		}
+	}
+
 	now := timestamppb.Now()
 	newVersion := int64(1)
 	createdAt := now
@@ -80,6 +101,12 @@ func (s *documentsServer) Put(ctx context.Context, req *hostv1.PutDocumentReques
 }
 
 func (s *documentsServer) Delete(ctx context.Context, req *hostv1.DeleteDocumentRequest) (*emptypb.Empty, error) {
+	kind, guarded := registeredKind(req.Collection)
+	var principal *hostv1.Principal
+	if guarded {
+		principal = s.transitionPrincipal(ctx, kind)
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	coll, ok := s.store[req.Collection]
@@ -92,6 +119,11 @@ func (s *documentsServer) Delete(ctx context.Context, req *hostv1.DeleteDocument
 	}
 	if req.IfVersion != 0 && existing.Version != req.IfVersion {
 		return nil, status.Errorf(codes.Aborted, "version mismatch on %s/%s: have %d, want %d", req.Collection, req.DocId, existing.Version, req.IfVersion)
+	}
+	if guarded {
+		if err := checkProposalDelete(kind, req.Collection, req.DocId, existing, principal); err != nil {
+			return nil, err
+		}
 	}
 	delete(coll, req.DocId)
 	return &emptypb.Empty{}, nil

@@ -59,6 +59,8 @@ type ApproveRequest struct {
 //     whoever's Put succeeds made the decision, and everyone else lost.
 //     A returned codes.Aborted is translated into ErrAlreadyDecided,
 //     naming what the winner actually recorded via one best-effort Get.
+//     The token rides in gRPC metadata on that Put so the host can refuse
+//     status transitions a pack writes without it (FND-03).
 func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecret, newStatus, reason string) (*Proposal, error) {
 	if err := kind.validate(); err != nil {
 		return nil, err
@@ -113,7 +115,7 @@ func decide(ctx context.Context, h *host.Host, kind Kind, proposalID, tokenSecre
 		return nil, status.Errorf(codes.Internal, "decide %q: build document body: %v", proposalID, err)
 	}
 
-	resp, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
+	resp, err := h.Documents.Put(WithApproverToken(ctx, tokenSecret), &hostv1.PutDocumentRequest{
 		Collection: kind.Collection,
 		DocId:      proposalID,
 		Body:       &hostv1.Json{Value: s},
