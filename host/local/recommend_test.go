@@ -1862,3 +1862,65 @@ func TestRecommendPromptDeprecationFields(t *testing.T) {
 		}
 	}
 }
+
+// TestRecommendWarningsSanitiseRegistryNames pins T-08-07-01: a registry
+// controls the bytes of a module name, so every host-authored warning that
+// echoes one must strip control and invisible characters and cap its length,
+// exactly as the unknown-module drop path does.
+func TestRecommendWarningsSanitiseRegistryNames(t *testing.T) {
+	const src = "puppet-forge"
+	hostile := "vendor/old\nFORGED LINE‮" + strings.Repeat("x", 600)
+
+	assertClean := func(t *testing.T, w *hostv1.ForgeAdvisoryWarning) {
+		t.Helper()
+		for _, field := range []string{w.Module, w.Message} {
+			if strings.ContainsAny(field, "\n\r\t‮") {
+				t.Fatalf("warning %s carries a control or invisible character: %q", w.Code, field)
+			}
+		}
+		if n := len([]rune(w.Module)); n > recommendMaxModuleEchoRunes {
+			t.Fatalf("warning %s Module is %d runes, cap is %d", w.Code, n, recommendMaxModuleEchoRunes)
+		}
+		// The message embeds the name up to three times plus fixed text.
+		if n := len([]rune(w.Message)); n > 3*recommendMaxModuleEchoRunes+200 {
+			t.Fatalf("warning %s Message is %d runes, expected it to be bounded", w.Code, n)
+		}
+	}
+	find := func(t *testing.T, resp *hostv1.RecommendResponse, code string) *hostv1.ForgeAdvisoryWarning {
+		t.Helper()
+		for _, w := range resp.Warnings {
+			if w.Code == code {
+				return w
+			}
+		}
+		t.Fatalf("expected a %s warning, got %v", code, warningCodes(resp.Warnings))
+		return nil
+	}
+
+	t.Run("superseder warning", func(t *testing.T) {
+		forge := staticForge{results: []*hostv1.ForgeSearchResult{
+			{Name: hostile, Version: "1.0.0", Deprecated: true, SupersededBy: "vendor-new"},
+			{Name: "vendor/new", Version: "3.0.0"},
+		}}
+		h, _ := recommendHost(t, forge, extractionReply("thing"),
+			rankingReply(scriptedRank{hostile, src, "Old."}))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertClean(t, find(t, resp, "recommend_superseded_module_listed"))
+	})
+
+	t.Run("duplicate warning", func(t *testing.T) {
+		forge := staticForge{results: []*hostv1.ForgeSearchResult{
+			{Name: hostile, Version: "1.0.0"},
+		}}
+		h, _ := recommendHost(t, forge, extractionReply("thing"),
+			rankingReply(scriptedRank{hostile, src, "One."}, scriptedRank{hostile, src, "Two."}))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertClean(t, find(t, resp, "recommend_duplicate_dropped"))
+	})
+}

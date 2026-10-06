@@ -76,7 +76,8 @@ what it cannot bring in.
 The Forge facet can turn a plain sentence ("I need to manage security
 settings on my Windows servers") into ranked Puppet module suggestions.
 Every suggestion comes from a real search of a real registry; a language
-model you configure only puts the results in order and says why. It is
+model you configure only proposes an order for the results and says why, and
+the host moves deprecated modules to the end. It is
 advice only and never edits a Puppetfile. It needs the `forge:recommend`
 permission and a provider whose API key is kept with `secrets:rw`.
 `docs/forge-recommend.md` walks through it from the manifest to the answer,

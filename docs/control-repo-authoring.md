@@ -76,8 +76,8 @@ top := rec.Suggestions[0] // rank 1: puppetlabs/ntp, from puppet-forge, with rea
 ```
 
 The suggestion step calls a language model that you configure and name; the
-provider has no default. The model only puts results in order and says why. The
-results it orders come from a real registry search, so a module name the model
+provider has no default. The model only proposes an order and says why; the host
+moves deprecated modules to the end. The results it orders come from a real registry search, so a module name the model
 invents is dropped with a warning (`recommend_unknown_module_dropped`) rather
 than shown. Your provider's API key lives in the Secrets facet and reaches the
 model client, never a prompt. [`docs/forge-recommend.md`](forge-recommend.md)

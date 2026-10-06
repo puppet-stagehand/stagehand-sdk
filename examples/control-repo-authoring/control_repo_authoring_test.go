@@ -457,8 +457,8 @@ func TestControlRepoAuthoring_EndToEnd(t *testing.T) {
 		t.Logf("step 1: created blank environment %q", env.Name)
 	}
 
-	// Step 2: a sentence becomes a ranked, real module. The model only orders
-	// and describes; every module fact is a copy of a registry search result.
+	// Step 2: a sentence becomes a ranked, real module. The model only proposes
+	// an order and describes; every module fact is a copy of a registry search result.
 	rec, err := proposer.RecommendModules(ctx, "keep the clocks on my servers in sync", w.provider)
 	if err != nil {
 		t.Fatalf("RecommendModules: %v", err)
@@ -1164,8 +1164,8 @@ func TestControlRepoAuthoring_ReplayRefused(t *testing.T) {
 }
 
 // TestControlRepoAuthoring_RecommendIsGrounded is the mechanical form of the
-// grounding claim: the host owns every module fact and the model only orders
-// them. A ranked module no registry search produced is dropped with the host's
+// grounding claim: the host owns every module fact and the order's final say (deprecated
+// modules last); the model only proposes an order. A ranked module no registry search produced is dropped with the host's
 // warning rather than shown as a suggestion.
 func TestControlRepoAuthoring_RecommendIsGrounded(t *testing.T) {
 	w := newHost(t)

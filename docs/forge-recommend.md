@@ -4,8 +4,9 @@ This guide is for a pack author who is new to Puppet and new to this SDK. It
 explains one call, `Recommend`, from nothing to a ranked answer.
 
 > Every module Recommend suggests came back from a real search of a real
-> registry. The language model only puts those results in order and says why.
-> It cannot add a module to the list.
+> registry. The language model only proposes an order for those results and
+> says why; the host then moves deprecated modules to the end. It cannot add
+> a module to the list.
 
 You describe a need in one sentence, for example "I need to manage security
 settings on my Windows servers". Recommend turns that into a few searches of
@@ -32,7 +33,7 @@ deprecated modules moved to the end, and each pick has a short reason.
   facet you may use. A facet you did not list is refused.
 - **Provider** - the language-model service Recommend talks to, such as
   Anthropic, OpenAI or a model server running on your own machine. You
-  configure one and name it. The model is the part that reads and orders.
+  configure one and name it. The model is the part that reads and proposes an order.
 - **Sealed secret** - a value stored through the Secrets facet instead of in
   plain Documents. A provider's API key (its password) lives only in one.
 - **Candidate** - one real search result that is shown to the model for

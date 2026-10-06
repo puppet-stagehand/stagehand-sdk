@@ -460,7 +460,7 @@ fanout:
 			resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
 				Code:    recommendWarnDuplicateDropped,
 				Message: "the ranker named the same module more than once; the repeat was dropped",
-				Module:  c.Name,
+				Module:  cleanText(c.Name, recommendMaxModuleEchoRunes),
 			})
 		default:
 			seen[k] = true
@@ -510,11 +510,15 @@ fanout:
 		if !ok {
 			continue
 		}
+		// Registry-controlled names: strip and cap exactly as the unknown-drop
+		// path does before they reach a host-authored message.
+		deprecatedName := cleanText(c.Name, recommendMaxModuleEchoRunes)
+		replacementName := cleanText(sup.Name, recommendMaxModuleEchoRunes)
 		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
 			Code: recommendWarnSupersededModuleListed,
 			Message: fmt.Sprintf("%s is deprecated and its replacement %s was also among the search results; consider %s instead",
-				c.Name, sup.Name, sup.Name),
-			Module:  c.Name,
+				deprecatedName, replacementName, replacementName),
+			Module:  deprecatedName,
 			Origins: []string{c.Source},
 		})
 	}
