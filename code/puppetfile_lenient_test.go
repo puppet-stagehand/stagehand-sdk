@@ -511,6 +511,43 @@ func catalogCases() []catalogCase {
 			moduledir: "",
 		},
 		{
+			name:      "moduledir_value_is_parent_reference",
+			text:      "moduledir '../up'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_is_absolute_path",
+			text:      "moduledir '/srv/modules'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_is_nested_path",
+			text:      "moduledir 'a/b'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			name:      "moduledir_value_is_hidden",
+			text:      "moduledir '.hidden'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{1},
+			moduledir: "",
+		},
+		{
+			// An invalid line is skipped before seenModuledir is set, so it
+			// never displaces an earlier valid value and is not a duplicate.
+			name:      "invalid_moduledir_does_not_displace_earlier_valid_one",
+			text:      "moduledir 'modules'\nmoduledir '../up'\n",
+			wantKinds: []string{FindingPuppetfileUnsupportedRuby},
+			wantLines: []int{2},
+			moduledir: "modules",
+		},
+		{
 			name:        "bom_is_not_a_finding",
 			text:        "\xef\xbb\xbfmod 'puppetlabs/ntp'\n",
 			wantModules: []string{"puppetlabs/ntp"},
@@ -840,6 +877,31 @@ func TestLenientAgreesWithStrict(t *testing.T) {
 			}
 			if len(lenient.GetModules()) >= len(strict.GetModules()) {
 				t.Errorf("corpus[%d] %q: lenient kept %d modules of %d despite an invalid one", i, text, len(lenient.GetModules()), len(strict.GetModules()))
+			}
+		}
+	})
+	// D-13: strict has no read-time moduledir check, so it accepts these texts.
+	// Lenient skips the value (FND-02) and the model it returns still renders.
+	t.Run("strict_valid_hostile_moduledir_is_skipped_by_lenient", func(t *testing.T) {
+		for _, text := range []string{
+			"moduledir '../up'\n",
+			"moduledir '/srv/modules'\n",
+			"moduledir 'a/b'\n",
+			"moduledir '.hidden'\n",
+			"moduledir '..'\nmod 'puppetlabs/ntp'\n",
+		} {
+			if _, err := ParsePuppetfile(text); err != nil {
+				t.Fatalf("%q is not strict-valid: %v", text, err)
+			}
+			lenient, fs := ParsePuppetfileLenient(text, lim)
+			if lenient.GetModuledir() != "" {
+				t.Errorf("%q: lenient kept moduledir %q, want it skipped", text, lenient.GetModuledir())
+			}
+			if got := findingKinds(fs); len(got) != 1 || got[0] != FindingPuppetfileUnsupportedRuby {
+				t.Errorf("%q: findings %v, want one %s", text, got, FindingPuppetfileUnsupportedRuby)
+			}
+			if _, err := RenderPuppetfile(lenient); err != nil {
+				t.Errorf("%q: lenient model does not render: %v", text, err)
 			}
 		}
 	})

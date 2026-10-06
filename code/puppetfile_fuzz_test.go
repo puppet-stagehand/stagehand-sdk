@@ -111,6 +111,11 @@ func FuzzRenderParseRoundTrip(f *testing.F) {
 	f.Add("puppetlabs/stdlib", "9.4.1", "profiles", "https://example.com/a.git", hostile, "", uint8(5))
 	// Hostile moduledir.
 	f.Add("puppetlabs/stdlib", "9.4.1", "profiles", "https://example.com/a.git", "main", hostile, uint8(0))
+	// Path-shaped moduledir values (FND-02): all must render to an error or
+	// to text that strict-parses back unchanged.
+	for _, md := range []string{"/srv/modules", "../up", ".", "..", "a/b", "-x", strings.Repeat("a", 65)} {
+		f.Add("puppetlabs/stdlib", "9.4.1", "profiles", "https://example.com/a.git", "main", md, uint8(0))
+	}
 	// Expression-breakout Git URL.
 	f.Add("puppetlabs/stdlib", "9.4.1", "profiles", "https://a/'+`id`+'", "main", "", uint8(0))
 	// Control-character Git URL.
