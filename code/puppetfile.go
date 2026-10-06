@@ -404,14 +404,14 @@ func RenderPuppetfile(p *hostv1.Puppetfile) (string, error) {
 	var b strings.Builder
 	if p.Moduledir != "" {
 		// Moduledir is the fifth sink the audit did not name: SetModuledir
-		// (host/local/code_puppetfile.go) takes a bare string, is documented
-		// as ungated and performs no validation, so Moduledir is the only
-		// rendered value that never passes through ValidateModule. The check
-		// therefore lives here, in the single sink. Path shape (absolute
-		// paths, "..") is deliberately not policed (SD-6): only an unsafe
-		// scalar is refused, and the omission is not an oversight.
-		if !scalarSafe(p.Moduledir) {
-			return "", fmt.Errorf("%w: moduledir %q is not a safe value", ErrPuppetfileInvalid, p.Moduledir)
+		// (host/local/code_puppetfile.go) takes a bare string, so Moduledir is
+		// the only rendered value that never passes through ValidateModule. The
+		// check therefore lives here, in the single sink. Path shape is policed
+		// by ValidateModuledir (FND-02, superseding SD-6): r10k and g10k install
+		// into and purge whatever directory moduledir names, including one
+		// outside the environment.
+		if err := ValidateModuledir(p.Moduledir); err != nil {
+			return "", err
 		}
 		fmt.Fprintf(&b, "moduledir '%s'\n", p.Moduledir)
 		if len(p.Modules) > 0 {

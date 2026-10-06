@@ -76,8 +76,15 @@ func (s *codeServer) storePuppetfileLocked(env string, p *hostv1.Puppetfile) err
 	return nil
 }
 
-// IsModuledirInvalid is a RED-phase stub (13-02 Task 1).
-func IsModuledirInvalid(err error) bool { return false }
+// detailCodeModuledirInvalid is the ErrorDetail code on a refused moduledir.
+const detailCodeModuledirInvalid = "moduledir_invalid"
+
+// IsModuledirInvalid reports whether err is (or wraps) a moduledir refusal
+// carrying the moduledir_invalid ErrorDetail. It compares the detail code, not
+// codes.InvalidArgument alone, which any invalid module also produces.
+func IsModuledirInvalid(err error) bool {
+	return overwriteDetailCode(err) == detailCodeModuledirInvalid
+}
 
 // mapPuppetfileErr maps the code package's Puppetfile sentinel errors onto
 // gRPC codes via errors.Is — never by matching the text of the error
@@ -86,7 +93,19 @@ func mapPuppetfileErr(err error) error {
 	if err == nil {
 		return nil
 	}
+	var me *code.ModuledirError
 	switch {
+	case errors.As(err, &me):
+		st := status.New(codes.InvalidArgument, me.Error())
+		withDetails, derr := st.WithDetails(&hostv1.ErrorDetail{
+			Code:    detailCodeModuledirInvalid,
+			Message: me.Error(),
+			Fix:     me.Fix,
+		})
+		if derr != nil {
+			return st.Err() // details are best-effort; the status itself must never fail to construct
+		}
+		return withDetails.Err()
 	case errors.Is(err, code.ErrPuppetfileInvalid):
 		return status.Errorf(codes.InvalidArgument, "%v", err)
 	case errors.Is(err, code.ErrPuppetfileParse):
@@ -285,11 +304,20 @@ func (s *codeServer) RemovePuppetfileModule(ctx context.Context, req *hostv1.Rem
 
 // SetModuledir sets Puppetfile.moduledir and stores it. The empty string is
 // a legitimate value meaning "no moduledir line" — it is not treated as a
-// missing argument and is not rejected, because clearing the setting is how
-// a pack undoes it and there is no separate clear RPC in the contract.
+// missing argument, is never validated and never rejected (D-17), because
+// clearing the setting is how a pack undoes it (including a stored value that
+// is no longer valid) and there is no separate clear RPC in the contract. Any
+// other value must be one safe relative folder name (the code package's
+// ValidateModuledir, FND-02); anything else is refused with moduledir_invalid and a fix line, and
+// the stored text is left exactly as it was.
 func (s *codeServer) SetModuledir(ctx context.Context, req *hostv1.SetModuledirRequest) (*hostv1.Puppetfile, error) {
 	if err := validateEnvName(req.Environment); err != nil {
 		return nil, err
+	}
+	if req.Moduledir != "" {
+		if err := code.ValidateModuledir(req.Moduledir); err != nil {
+			return nil, mapPuppetfileErr(err)
+		}
 	}
 
 	s.docs.mu.Lock()
