@@ -1813,3 +1813,52 @@ func TestRecommendDemotesDeprecatedModules(t *testing.T) {
 		}
 	})
 }
+
+// TestRecommendPromptDeprecationFields pins the data and wording the ranker
+// reads about deprecation: a superseder it can match by string equality, an
+// explicit deprecated flag on every candidate, and a system prompt that asks
+// for non-deprecated picks without inviting deprecation talk.
+func TestRecommendPromptDeprecationFields(t *testing.T) {
+	h, llm := recommendHost(t, deprecationCandidates(), extractionReply("thing"), rankingReply())
+	if _, err := recommend(h); err != nil {
+		t.Fatal(err)
+	}
+	cands := candidateBlock(t, llm.calls[1].User)
+	names := map[string]bool{}
+	byName := map[string]map[string]any{}
+	for _, c := range cands {
+		n := c["name"].(string)
+		names[n] = true
+		byName[n] = c
+	}
+
+	sup, _ := byName["vendor/old"]["superseded_by"].(string)
+	if sup == "" || !names[sup] {
+		t.Fatalf("superseded_by %q must equal the name of another candidate %v", sup, names)
+	}
+	for _, c := range cands {
+		v, ok := c["deprecated"]
+		if !ok {
+			t.Fatalf("every candidate must carry an explicit deprecated key: %v", c)
+		}
+		if c["name"] == "vendor/new" && v != false {
+			t.Fatalf("a non-deprecated candidate must render deprecated:false, got %v", v)
+		}
+	}
+	if byName["vendor/old"]["deprecated"] != true {
+		t.Fatalf("the deprecated candidate must render deprecated:true: %v", byName["vendor/old"])
+	}
+
+	sys := llm.calls[1].System
+	if !strings.Contains(sys, "Prefer a candidate that is not deprecated") {
+		t.Fatalf("system prompt must prefer non-deprecated candidates: %q", sys)
+	}
+	if !strings.Contains(sys, "Never describe a candidate as deprecated in its reasoning") {
+		t.Fatalf("system prompt must forbid deprecation talk in the reasoning: %q", sys)
+	}
+	for _, stale := range []string{"may still be listed", "say so in its reasoning", "prefer its superseding module"} {
+		if strings.Contains(sys, stale) {
+			t.Fatalf("system prompt still carries the stale fragment %q: %q", stale, sys)
+		}
+	}
+}
