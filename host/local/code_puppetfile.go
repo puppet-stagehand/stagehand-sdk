@@ -76,6 +76,9 @@ func (s *codeServer) storePuppetfileLocked(env string, p *hostv1.Puppetfile) err
 	return nil
 }
 
+// IsModuledirInvalid is a RED-phase stub (13-02 Task 1).
+func IsModuledirInvalid(err error) bool { return false }
+
 // mapPuppetfileErr maps the code package's Puppetfile sentinel errors onto
 // gRPC codes via errors.Is — never by matching the text of the error
 // message, which breaks silently the first time a message is reworded.

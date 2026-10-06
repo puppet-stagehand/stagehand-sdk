@@ -968,8 +968,8 @@ func TestCode_PuppetfileAcceptsRealWorldModules(t *testing.T) {
 // through code.RenderPuppetfile. It is the fifth injection point, and the
 // milestone audit's text does not name it (12.1-RESEARCH.md Finding 1).
 //
-// Path shape is deliberately not policed (SD-6): /srv/modules and ../up are
-// accepted rows, not oversights. Only an unsafe scalar is refused.
+// Path shape is policed by code.ValidateModuledir (FND-02, superseding SD-6):
+// /srv/modules, ../up and other non-single-segment values are refused rows.
 func TestCode_ModuledirRejectsInjectedText(t *testing.T) {
 	h := newOverwriteHost()
 	ctx := context.Background()
@@ -983,12 +983,24 @@ func TestCode_ModuledirRejectsInjectedText(t *testing.T) {
 		{"trailing backslash", "thirdparty\\"},
 		{"nul byte", "a\x00b"},
 		{"paragraph separator", "a\u2029b"},
+		{"absolute path", "/srv/modules"},
+		{"parent reference", "../up"},
+		{"nested", "a/b"},
+		{"hidden", ".modules"},
+		{"option-like", "-x"},
+		{"dot-dot", ".."},
 	}
 	for _, tc := range refusals {
 		t.Run("refuses "+tc.name, func(t *testing.T) {
 			_, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: tc.value})
 			if status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("SetModuledir: got %v, want InvalidArgument", err)
+			}
+			if !local.IsModuledirInvalid(err) {
+				t.Fatalf("SetModuledir(%q): error %v is not a moduledir_invalid refusal", tc.value, err)
+			}
+			if fix := moduledirErrorFix(err); !strings.Contains(fix, "SetModuledir") {
+				t.Fatalf("SetModuledir(%q): ErrorDetail fix %q does not mention SetModuledir", tc.value, fix)
 			}
 			if got := puppetfileTextFromDocumentsRaw(t, h, ctx, "prod"); got != snapshot {
 				t.Fatalf("stored text changed by a refused SetModuledir:\n got: %q\nwant: %q", got, snapshot)
@@ -1002,7 +1014,7 @@ func TestCode_ModuledirRejectsInjectedText(t *testing.T) {
 
 	// Accepted rows. The empty string is the documented clear operation, so it
 	// comes last, matching how TestCode_ModuledirSetAndClear ends.
-	for _, value := range []string{"thirdparty", "/srv/modules", "../up", ""} {
+	for _, value := range []string{"thirdparty", ""} {
 		t.Run("accepts "+value, func(t *testing.T) {
 			pf, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: value})
 			if err != nil {
@@ -1012,5 +1024,44 @@ func TestCode_ModuledirRejectsInjectedText(t *testing.T) {
 				t.Fatalf("Moduledir = %q, want %q", pf.GetModuledir(), value)
 			}
 		})
+	}
+}
+
+// moduledirErrorFix returns the Fix of the first ErrorDetail on err, or "".
+func moduledirErrorFix(err error) string {
+	for _, d := range status.Convert(err).Details() {
+		if ed, ok := d.(*hostv1.ErrorDetail); ok {
+			return ed.Fix
+		}
+	}
+	return ""
+}
+
+// TestCode_ModuledirStoredInvalidValueNeedsClearing pins D-17: an environment
+// that already stores a now-invalid moduledir refuses every Puppetfile write
+// with moduledir_invalid until the author clears it with SetModuledir("").
+func TestCode_ModuledirStoredInvalidValueNeedsClearing(t *testing.T) {
+	h := newOverwriteHost()
+	ctx := context.Background()
+	mustCreateEnv(t, h, "prod")
+	seedDoc(t, h, ctx, "code-puppetfiles", "prod", map[string]any{
+		"text": "moduledir '../up'\nmod 'puppetlabs/stdlib', '9.4.1'\n",
+	})
+
+	put := func() error {
+		_, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+			Environment: "prod",
+			Module:      forgeModule("puppetlabs/concat", "9.0.2"),
+		})
+		return err
+	}
+	if err := put(); !local.IsModuledirInvalid(err) {
+		t.Fatalf("PutPuppetfileModule with a stored invalid moduledir: got %v, want moduledir_invalid", err)
+	}
+	if _, err := h.Code.SetModuledir(ctx, &hostv1.SetModuledirRequest{Environment: "prod", Moduledir: ""}); err != nil {
+		t.Fatalf("SetModuledir(clear) on an environment storing an invalid moduledir: %v", err)
+	}
+	if err := put(); err != nil {
+		t.Fatalf("PutPuppetfileModule after clearing the moduledir: %v", err)
 	}
 }
