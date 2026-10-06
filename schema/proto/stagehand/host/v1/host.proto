@@ -1,7 +1,9 @@
-// Host facets. A worker may call only the facets its manifest `permissions`
-// declare; the host refuses others with PERMISSION_DENIED + ErrorDetail
-// {code: "facet_not_declared"} and audits the attempt. While the pack is
-// disabled every call fails FAILED_PRECONDITION {code: "pack_disabled"}.
+// Host facets in scope for the v0.1.0-rc.1 tracer slice. A worker may call
+// Secrets/Auth only if its manifest `permissions` declares them; the host
+// refuses others with PERMISSION_DENIED + ErrorDetail
+// {code: "facet_not_declared"} and audits the attempt. Documents and
+// Settings are always available (Documents is scoped to the pack's own
+// namespace instead of permission-gated).
 syntax = "proto3";
 package stagehand.host.v1;
 option go_package = "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1;hostv1";
@@ -11,7 +13,7 @@ import "google/protobuf/empty.proto";
 import "stagehand/host/v1/common.proto";
 
 // ---------------------------------------------------------------- Documents
-// Always granted (own namespace). Permission string: documents:rw
+// Always granted (own namespace).
 service Documents {
   rpc Get(GetDocumentRequest) returns (Document);
   rpc Put(PutDocumentRequest) returns (PutDocumentResponse);       // CAS on if_version (0 = create-only)
@@ -44,32 +46,9 @@ service Settings {
 message SettingsDocument { Json values = 1; int64 version = 2; }
 message SettingsChange { int64 version = 1; google.protobuf.Timestamp at = 2; }
 
-// ----------------------------------------------------------------- Activity
-// Record: always granted (kind is prefixed pack.<id>. by the host).
-// Stream: permission activity:read
-service Activity {
-  rpc Record(ActivityEvent) returns (google.protobuf.Empty);
-  rpc Stream(ActivityStreamRequest) returns (stream ActivityEvent);
-}
-message ActivityEvent {
-  string kind = 1; string subject = 2; string summary = 3; Json fields = 4;
-  google.protobuf.Timestamp at = 5; string actor = 6;  // set by host on Record
-}
-message ActivityStreamRequest { google.protobuf.Timestamp since = 1; repeated string kinds = 2; }
-
-// ------------------------------------------------------------------ Metrics
-// Always granted; names are prefixed stagehand_pack_<id>_ by the host.
-service Metrics { rpc Push(MetricBatch) returns (google.protobuf.Empty); }
-message MetricBatch { repeated MetricSample samples = 1; }
-message MetricSample {
-  string name = 1; map<string,string> labels = 2; double value = 3;
-  enum Kind { KIND_UNSPECIFIED = 0; COUNTER = 1; GAUGE = 2; HISTOGRAM = 3; }
-  Kind kind = 4; google.protobuf.Timestamp at = 5;
-}
-
 // ------------------------------------------------------------------ Secrets
-// Permission: secrets:rw. Refs are namespaced pack/<id>/<name> by the host.
-// Reveal is written to the Activity Log.
+// Permission: secrets:rw. Refs are namespaced expansion/<id>/<name> by the
+// host. Reveal is written to the Activity Log (out of scope this slice).
 service Secrets {
   rpc Store(StoreSecretRequest) returns (SecretRef);
   rpc Reveal(SecretRef) returns (SecretValue);
@@ -82,58 +61,8 @@ message SecretRef { string ref = 1; }
 message SecretValue { bytes plaintext = 1; }
 message Sealed { bytes ciphertext = 1; bytes nonce = 2; string key_id = 3; }
 
-// --------------------------------------------------------------------- Bolt
-// Permission: bolt:run. Targets are certnames or device ids; the host
-// resolves transport (Bolt inventory derived from PuppetDB, ADR 0002).
-service Bolt {
-  rpc RunTask(RunTaskRequest) returns (RunHandle);
-  rpc RunPlan(RunPlanRequest) returns (RunHandle);
-  rpc Result(RunHandle) returns (RunResult);
-  rpc Watch(RunHandle) returns (stream RunEvent);
-  rpc Cancel(RunHandle) returns (google.protobuf.Empty);
-}
-message RunTaskRequest { string task = 1; repeated string targets = 2; Json params = 3; bool dry_run = 4; string reason = 5; }
-message RunPlanRequest { string plan = 1; Json params = 2; string reason = 3; }
-message RunHandle { string run_id = 1; }
-message RunResult {
-  string run_id = 1;
-  enum Status { STATUS_UNSPECIFIED = 0; QUEUED = 1; RUNNING = 2; SUCCEEDED = 3; FAILED = 4; CANCELLED = 5; }
-  Status status = 2; repeated TargetResult targets = 3;
-  google.protobuf.Timestamp started_at = 4; google.protobuf.Timestamp finished_at = 5;
-}
-message TargetResult { string target = 1; bool ok = 2; Json value = 3; string error = 4; }
-message RunEvent { string run_id = 1; RunResult.Status status = 2; TargetResult target = 3; google.protobuf.Timestamp at = 4; }
-
-// ---------------------------------------------------------------- Inventory
-// Read: inventory:read. Kinds: inventory:kind:<name>.
-service Inventory {
-  rpc Nodes(InventoryFilter) returns (NodeList);
-  rpc Devices(InventoryFilter) returns (DeviceList);
-  rpc RegisterKind(KindSpec) returns (google.protobuf.Empty);   // idempotent
-  rpc UpsertItem(InventoryItem) returns (google.protobuf.Empty);
-  rpc DeleteItem(ItemRef) returns (google.protobuf.Empty);
-  rpc Items(ItemsRequest) returns (ItemList);
-}
-message InventoryFilter { string query = 1; Page page = 2; }  // PQL-like subset documented in docs/facets.md
-message Node { string certname = 1; string status = 2; string environment = 3; google.protobuf.Timestamp last_report = 4; Json facts_summary = 5; }
-message NodeList { repeated Node nodes = 1; PageInfo page = 2; }
-message Device { string id = 1; string name = 2; string address = 3; string transport = 4; string status = 5; }
-message DeviceList { repeated Device devices = 1; PageInfo page = 2; }
-message KindSpec { string kind = 1; string label = 2; string label_plural = 3; Json item_schema = 4; }  // item_schema: JSON Schema
-message InventoryItem { string kind = 1; string id = 2; Json body = 3; int64 if_version = 4; }
-message ItemRef { string kind = 1; string id = 2; }
-message ItemsRequest { string kind = 1; InventoryFilter filter = 2; }
-message ItemList { repeated InventoryItem items = 1; PageInfo page = 2; }
-
-// --------------------------------------------------------------- Compliance
-// Permission: compliance:ingest. Batch is compliance.v1 (docs/compliance-schema.md)
-// carried as Json, plus the subject kind (node | device | <registered kind>).
-service Compliance { rpc Ingest(ComplianceBatch) returns (IngestReceipt); }
-message ComplianceBatch { string subject_kind = 1; Json batch = 2; }
-message IngestReceipt { int32 controls = 1; string benchmark = 2; }
-
 // --------------------------------------------------------------------- Auth
-// Permission: tokens:issue. Scopes are namespaced pack:<id>:<scope>.
+// Permission: tokens:issue. Scopes are namespaced expansion:<id>:<scope>.
 service Auth {
   rpc IssueToken(IssueTokenRequest) returns (IssuedToken);
   rpc Verify(VerifyTokenRequest) returns (Principal);
@@ -145,62 +74,711 @@ message VerifyTokenRequest { string secret = 1; string scope = 2; }
 message Principal { string token_id = 1; string label = 2; repeated string scopes = 3; }
 message TokenRef { string token_id = 1; }
 
-// -------------------------------------------------------------------- Forge
-// Permission: forge:rw. Resolves the pack's Content module. The live Forge service is proto/stagehand/host/v1/host.proto.
-service Forge {
-  rpc Resolve(ForgeResolveRequest) returns (ForgeRelease);
-  rpc Installed(ForgeSlug) returns (ForgeRelease);
-}
-message ForgeSlug { string slug = 1; }
-message ForgeResolveRequest { string slug = 1; string version_range = 2; }
-message ForgeRelease { string slug = 1; string version = 2; string sha256 = 3; string download_url = 4; }
+// --------------------------------------------------------------- Inventory
+// Permission: inventory:rw (added to manifest/ in Phase 3) for every RPC
+// below, including OnboardNode, uniformly — there is no separate
+// facet-level trust boundary for OnboardNode (D-01). Its actual gate is
+// NOT an Auth token scope: host.Local's implementation (Phase 3/4) looks
+// the caller-supplied proposal_id up via Documents.Get and refuses unless
+// the proposal's stored status field is "approved" — approval is a fact
+// recorded by whatever upstream workflow sets that status, not something
+// this RPC call itself is authorized against. Callers and reviewers must
+// not assume a separate approve-scope check exists here (see PITFALLS.md
+// Pitfall 4 — self-approval is the headline risk this milestone has to
+// structurally prevent in the propose/approve call graph, not paper over
+// in a comment).
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Inventory service (schema/proto/stagehand/host/v1/host.proto, commit
+// b10af30) — that design is a generic PQL-string "kind"-registry CRUD
+// surface (Nodes/Devices/RegisterKind/UpsertItem/Items) with no group
+// membership, no classification, and no onboarding-proposal concept. This
+// shape is designed fresh from this milestone's actual node/facts/groups/
+// classification/onboarding requirements; the reference tree was consulted
+// only for the Node/Group/Class/GroupRef naming, never for RPC/message
+// shape.
+service Inventory {
+  rpc GetNode(GetNodeRequest) returns (Node);
 
-// ------------------------------------------------------------------ PuppetDB
-// Permission: puppetdb:read. Rate-limited per pack; result cap 5000 rows.
-service PuppetDB {
-  rpc Query(PdbQuery) returns (PdbRows);
-  rpc Facts(FactsRequest) returns (FactsResponse);
-  rpc Reports(ReportsRequest) returns (ReportsResponse);
-}
-message PdbQuery { string pql = 1; Page page = 2; }
-message PdbRows { repeated Json rows = 1; PageInfo page = 2; }
-message FactsRequest { repeated string certnames = 1; repeated string names = 2; }
-message FactsResponse { map<string, Json> facts_by_certname = 1; }
-message ReportsRequest { string certname = 1; TimeRange range = 2; Page page = 3; }
-message Report { string certname = 1; string status = 2; google.protobuf.Timestamp at = 3; string environment = 4; Json metrics = 5; }
-message ReportsResponse { repeated Report reports = 1; PageInfo page = 2; }
+  // Discover returns not-yet-onboarded candidates from host.Local's
+  // fixture/seed source. No filter fields in v1 (parameterless by design —
+  // D-03: nothing in this milestone's fixture-backed example needs one).
+  rpc Discover(google.protobuf.Empty) returns (DiscoverResponse);
 
-// ------------------------------------------------------------ Classification
-// Permission: classification:read (no writes in contract 1).
-service Classification {
-  rpc Groups(google.protobuf.Empty) returns (GroupList);
-  rpc NodeGroups(Certname) returns (GroupList);
-  rpc Classes(GroupRef) returns (ClassList);
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  // Mirrors Documents.QueryDocumentsRequest's field/Op/value shape exactly
+  // (single-field filter) rather than inventing a second query grammar.
+  rpc QueryNodes(QueryNodesRequest) returns (ListNodesResponse);
+  rpc PutFacts(PutFactsRequest) returns (Node);
+
+  // Group membership is static (no rule engine). AddNodeToGroup
+  // auto-creates the named group on first use — there is no separate
+  // CreateGroup RPC in v1.
+  rpc ListGroups(google.protobuf.Empty) returns (GroupList);
+  rpc ListGroupNodes(ListGroupNodesRequest) returns (ListNodesResponse);
+  rpc ListNodeGroups(ListNodeGroupsRequest) returns (GroupList);
+  rpc AddNodeToGroup(GroupMembershipRequest) returns (google.protobuf.Empty);
+
+  // Read-only in v1 (no rule engine, no ancestor-group merging).
+  rpc ListClasses(GroupRef) returns (ClassList);
+
+  // OnboardNode takes a proposal_id, never a Node payload (D-01):
+  // host.Local's implementation (Phase 3/4) looks the proposal up via
+  // Documents.Get and refuses unless its status is "approved". Idempotent
+  // (D-02): calling it twice for the same already-approved proposal_id
+  // returns the existing node, not ALREADY_EXISTS.
+  rpc OnboardNode(OnboardNodeRequest) returns (Node);
 }
+
+message Node {
+  string id = 1;               // proposer-chosen at Discover/Propose time (D-04); Inventory never mints its own
+  string display_name = 2;
+  enum Status { STATUS_UNSPECIFIED = 0; DISCOVERED = 1; ONBOARDED = 2; }
+  Status status = 3;
+  string environment = 4;
+  map<string, Json> facts = 5; // flat key-value; PuppetDB-style nested facts deferred to v2 (INV-05)
+}
+message GetNodeRequest { string id = 1; }
+message DiscoverResponse { repeated Node candidates = 1; }
+message ListNodesRequest { Page page = 1; }
+message ListNodesResponse { repeated Node nodes = 1; PageInfo page = 2; }
+message QueryNodesRequest {
+  string field = 1;  // dotted path into facts, mirrors QueryDocumentsRequest.field
+  enum Op { OP_UNSPECIFIED = 0; EQ = 1; NE = 2; GT = 3; GTE = 4; LT = 5; LTE = 6; CONTAINS = 7; }
+  Op op = 2; Json value = 3; Page page = 4;
+}
+message PutFactsRequest { string node_id = 1; map<string, Json> facts = 2; }
+
+message Group { string id = 1; string name = 2; }
 message GroupRef { string id = 1; }
-message Group { string id = 1; string name = 2; string parent_id = 3; string environment = 4; }
 message GroupList { repeated Group groups = 1; }
+message ListGroupNodesRequest { string group_id = 1; Page page = 2; }
+message ListNodeGroupsRequest { string node_id = 1; }
+message GroupMembershipRequest { string node_id = 1; string group_id = 2; }
+
 message Class { string name = 1; Json parameters = 2; }
 message ClassList { repeated Class classes = 1; }
 
-// --------------------------------------------------------------------- Code
-// Permission: code:read. Scoped to repos the operator grants the pack.
-service Code {
-  rpc Repos(google.protobuf.Empty) returns (RepoList);
-  rpc Tree(TreeRequest) returns (TreeResponse);
-  rpc File(FileRequest) returns (FileResponse);
-}
-message Repo { string id = 1; string name = 2; string default_ref = 3; }
-message RepoList { repeated Repo repos = 1; }
-message TreeRequest { string repo_id = 1; string ref = 2; string path = 3; }
-message TreeEntry { string path = 1; bool dir = 2; int64 size = 3; }
-message TreeResponse { repeated TreeEntry entries = 1; }
-message FileRequest { string repo_id = 1; string ref = 2; string path = 3; }
-message FileResponse { bytes content = 1; string sha = 2; }
+message OnboardNodeRequest { string proposal_id = 1; }
 
-// ------------------------------------------------------------------- Legacy
-// Permission: legacy:read:<table>. TEMPORARY — granted only to a pack that is
-// extracting a console feature; removed one release after that pack ships.
-service Legacy { rpc Read(LegacyReadRequest) returns (LegacyRows); }
-message LegacyReadRequest { string table = 1; Page page = 2; }
-message LegacyRows { repeated Json rows = 1; PageInfo page = 2; }
+// --------------------------------------------------------------------- Code
+// Permission: code:rw (added to manifest/ in this phase) for every RPC below,
+// uniformly, including the read-only ones — the same single facet-level gate
+// Inventory uses. There is no narrower per-RPC permission: code:rw is the
+// floor for every RPC. The three import RPCs (InspectImport, ProposeImport,
+// ApplyImport) additionally require code:import, which is an additional grant
+// stacked on that floor, not a narrower substitute for it.
+//
+// Scope this milestone is AUTHOR-ONLY: this facet models a control repo's
+// content as structured, versioned resources. It never executes r10k/g10k,
+// never writes to a real filesystem, and never writes back to a real repo.
+// Import is the one place it reaches outside: it fetches a remote repo
+// read-only through the host's git client, never checks out a working tree,
+// and turns what it fetched into the same structured resources. Every RPC
+// below reads and writes namespaced JSON Documents through the SAME
+// documentsServer instance host.Host.Documents holds, across four collections kept deliberately
+// separate — code-environments, code-puppetfiles, code-hiera-hierarchy,
+// code-hiera-data — because they have different write cadences, different
+// round-trip risk profiles, and different future approval-gate granularity.
+//
+// This service is NOT derived from the dormant 14-facet reference tree's
+// Code service (schema/proto/stagehand/host/v1/host.proto) — that design is a
+// read-only git file browser (Repos/Tree/File). This shape is designed fresh
+// from this milestone's actual environment/Puppetfile/Hiera authoring
+// requirements; no RPC or message name was taken from the reference tree.
+//
+// Overwriting existing content is approval-gated, and creating new content
+// never is. A Put* that would replace something already stored is refused
+// outright with FAILED_PRECONDITION and a structured ErrorDetail whose fix
+// line says what to do next; it never applies the change silently. The path
+// to a deliberate overwrite has three steps, in three separate call graphs:
+//   1. Propose. The caller writes a pending proposal into the shared
+//      "code-overwrites" Documents collection. The proposal body names the
+//      exact target (environment, resource kind, name, path, source) and
+//      freezes the payload to be written.
+//   2. Approve. An operator holding a token scoped "code:approve" decides
+//      the proposal through the approval package. That scope is a route
+//      access scope, never a manifest permission, and nothing in this
+//      service can decide a proposal.
+//   3. Apply. The caller invokes the matching Apply* RPC with only the
+//      proposal_id. The Apply RPC reads the approved proposal, writes the
+//      payload frozen inside it, and never accepts a payload from its
+//      caller, so an approved proposal cannot be used to write content its
+//      approver never saw. The one exception is ApplyEnvironmentDuplicate,
+//      which freezes only the source and target names and reads the source
+//      at apply time; see its comment.
+// One collection and one scope cover every overwrite resource type; the
+// type is carried inside the proposal body, not in a separate collection.
+// The five Apply* RPCs for existing resource kinds need code:rw and nothing
+// narrower; ApplyImport needs code:rw plus code:import.
+//
+// What the gate is and is not. It refuses an in-place replace made through a
+// Put*, which stops accidental replacement and gives deliberate replacement a
+// reviewable path. It is not a control against a caller with code:rw who means
+// to get around it: the delete RPCs (RemovePuppetfileModule, RemoveHieraLevel,
+// RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
+// putting an item back after removing it is an ungated create, so a replace
+// can be done as a remove followed by a put. ReorderHieraLevels and
+// SetModuledir change effective behaviour and are ungated too. A caller that
+// can also write the Documents facet directly can bypass the gate on
+// host.Local, since Documents has no access control.
+service Code {
+  // ------------------------------------------------------ Environments
+  // An environment's name is its branch/directory identity, 1:1 with the
+  // name r10k/g10k will map to at deploy time.
+  rpc ListEnvironments(ListEnvironmentsRequest) returns (ListEnvironmentsResponse);
+  rpc GetEnvironment(GetEnvironmentRequest) returns (Environment);
+  rpc CreateEnvironment(CreateEnvironmentRequest) returns (Environment);
+  rpc RenameEnvironment(RenameEnvironmentRequest) returns (Environment);
+  rpc DeleteEnvironment(DeleteEnvironmentRequest) returns (google.protobuf.Empty);
+  // DuplicateEnvironment copies the source environment's Puppetfile, Hiera
+  // hierarchy, Hiera data files and settings to a NEW target name in one
+  // atomic write. A target that already exists is refused, never merged.
+  rpc DuplicateEnvironment(DuplicateEnvironmentRequest) returns (Environment);
+  // ApplyEnvironmentDuplicate materializes an approved environment-duplicate
+  // proposal: the target environment's whole owned document set (Puppetfile,
+  // Hiera hierarchy, Hiera data files and settings) is replaced with a copy of
+  // the source environment's, in one atomic step. The request carries only a
+  // proposal_id, and unlike the other Apply* RPCs nothing is frozen in the
+  // proposal but the source and target names: the source is read at apply
+  // time, so the approver approved the operation "replace the target with a
+  // copy of the source", not a fixed set of documents. It refuses with
+  // NOT_FOUND for an unknown proposal or a source environment that no longer
+  // exists, and with FAILED_PRECONDITION unless the proposal is approved by a
+  // decision made under the code:approve scope and targets an environment
+  // duplicate, or when source and target are the same environment. An approval
+  // covers one application: a repeat call after the proposal was applied
+  // returns the environment without writing when the target already equals a
+  // copy of the source, and is refused with FAILED_PRECONDITION when the source
+  // or target has changed since, so an approval is never a standing permission
+  // to copy whatever the source later becomes. Requires code:rw only.
+  rpc ApplyEnvironmentDuplicate(ApplyEnvironmentDuplicateRequest) returns (Environment);
+
+  // ------------------------------------------------- environment.conf
+  // Fields a pack never wrote come back absent, not pre-filled with Puppet's
+  // documented defaults — Puppet applies those at catalog-compile time, and a
+  // second copy of them here would be a second source of truth.
+  rpc GetEnvironmentSettings(GetEnvironmentSettingsRequest) returns (EnvironmentSettings);
+  rpc PutEnvironmentSettings(PutEnvironmentSettingsRequest) returns (EnvironmentSettings);
+  // ApplyEnvironmentSettings materializes an approved environment settings overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
+  rpc ApplyEnvironmentSettings(ApplyEnvironmentSettingsRequest) returns (EnvironmentSettings);
+
+  // ------------------------------------------------------- Puppetfile
+  rpc ListPuppetfileModules(ListPuppetfileModulesRequest) returns (ListPuppetfileModulesResponse);
+  // PutPuppetfileModule upserts by module name: a name not present is
+  // appended, a name already present is replaced in place, preserving its
+  // position in the render order.
+  rpc PutPuppetfileModule(PutPuppetfileModuleRequest) returns (PuppetfileModule);
+  // ApplyPuppetfileModuleOverwrite materializes an approved Puppetfile module overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
+  rpc ApplyPuppetfileModuleOverwrite(ApplyPuppetfileModuleOverwriteRequest) returns (PuppetfileModule);
+  rpc RemovePuppetfileModule(RemovePuppetfileModuleRequest) returns (google.protobuf.Empty);
+  rpc SetModuledir(SetModuledirRequest) returns (Puppetfile);
+  // RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
+  // module model. Re-parsing that text yields the identical model — the
+  // writer is a fixed point of its own parser, so an unchanged save produces
+  // no diff. It does NOT preserve an original file's comments or quoting
+  // style; the ecosystem's own tooling discards those on parse too.
+  rpc RenderPuppetfile(RenderPuppetfileRequest) returns (RenderedPuppetfile);
+
+  // -------------------------------------------------- Hiera hierarchy
+  rpc GetHieraHierarchy(GetHieraHierarchyRequest) returns (HieraHierarchy);
+  // PutHieraLevel inserts or replaces one level. Level order is preserved and
+  // semantically meaningful (first match wins). The response carries lint
+  // warnings alongside the already-applied write — a flagged anti-pattern
+  // never blocks the write.
+  rpc PutHieraLevel(PutHieraLevelRequest) returns (PutHieraLevelResponse);
+  // ApplyHieraLevelOverwrite materializes an approved Hiera level overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
+  rpc ApplyHieraLevelOverwrite(ApplyHieraLevelOverwriteRequest) returns (PutHieraLevelResponse);
+  rpc RemoveHieraLevel(RemoveHieraLevelRequest) returns (HieraHierarchy);
+  rpc ReorderHieraLevels(ReorderHieraLevelsRequest) returns (HieraHierarchy);
+
+  // ------------------------------------------------ Hiera data files
+  rpc ListHieraDataFiles(ListHieraDataFilesRequest) returns (ListHieraDataFilesResponse);
+  rpc GetHieraDataFile(GetHieraDataFileRequest) returns (HieraDataFile);
+  rpc PutHieraDataKey(PutHieraDataKeyRequest) returns (HieraDataFile);
+  // ApplyHieraDataKeyOverwrite materializes an approved Hiera data key overwrite proposal.
+  // The request carries only a proposal_id; the payload written is the one
+  // frozen in the proposal at propose time, never one supplied by the caller.
+  // It refuses with NOT_FOUND for an unknown proposal, and with
+  // FAILED_PRECONDITION unless the proposal is approved by a decision made
+  // under the code:approve scope, targets this resource kind, and still
+  // applies (the environment, and for a replace the item, must exist). An
+  // approval covers one application: a repeat call for an already applied
+  // proposal returns the current result without writing when the target
+  // already equals the payload, and is refused with FAILED_PRECONDITION when
+  // the target has changed since. Requires code:rw only.
+  rpc ApplyHieraDataKeyOverwrite(ApplyHieraDataKeyOverwriteRequest) returns (HieraDataFile);
+  rpc RemoveHieraDataKey(RemoveHieraDataKeyRequest) returns (HieraDataFile);
+  rpc DeleteHieraDataFile(DeleteHieraDataFileRequest) returns (google.protobuf.Empty);
+
+  // ------------------------------------------------------------ Import
+  // Import turns a remote git repo into environments. It is split into three
+  // calls in three separate call graphs, mirroring the overwrite gate's
+  // refuse-then-Apply shape, so nothing is committed before the findings
+  // report has been seen and approved.
+
+  // InspectImport requires code:rw and code:import. It shallow-clones the
+  // repo, parses every discovered branch and returns the full per-branch
+  // findings report. It writes nothing to the Code model and creates no
+  // proposal. It refuses an unreachable host with UNAVAILABLE, an unknown
+  // credential name with NOT_FOUND, and a URL whose scheme is outside the
+  // https/ssh allowlist with INVALID_ARGUMENT.
+  rpc InspectImport(InspectImportRequest) returns (InspectImportResponse);
+
+  // ProposeImport requires code:rw and code:import. It re-fetches the repo,
+  // freezes the parsed per-branch snapshot plus each branch's commit SHA into
+  // a pending proposal in the shared code-overwrites collection, under the
+  // code:approve scope. It refuses with FAILED_PRECONDITION when a selected
+  // branch has moved against expected_commits or when no importable branch
+  // remains, and with INVALID_ARGUMENT when the explicit branch list names an
+  // unknown or non-importable branch. Nothing in this RPC can decide the
+  // proposal it files.
+  rpc ProposeImport(ProposeImportRequest) returns (ProposeImportResponse);
+
+  // ApplyImport requires code:rw and code:import. It reads the referenced
+  // proposal and refuses unless its status is approved with recorded approval
+  // provenance. It makes no network call and needs no credential: it writes
+  // exactly the snapshot frozen at propose time, never anything its caller
+  // supplies. It is atomic across every selected branch (all or none), is
+  // idempotent on a repeat call, and is single-use once the content has
+  // drifted.
+  rpc ApplyImport(ApplyImportRequest) returns (ApplyImportResponse);
+}
+
+// ------------------------------------------------------- Overwrite approval
+// Every Apply* request carries only the proposal id. The resource payload was
+// frozen into the proposal body at propose time and is never taken from the
+// caller of Apply. (For ApplyEnvironmentDuplicate the frozen part is the source
+// and target names; the source's contents are read at apply time. For
+// ApplyImport the frozen part is the whole ImportSnapshot.) The six requests
+// are deliberately identical in shape: an Apply that accepted content from its
+// caller could write content the approver never reviewed.
+message ApplyEnvironmentDuplicateRequest { string proposal_id = 1; }
+message ApplyEnvironmentSettingsRequest { string proposal_id = 1; }
+message ApplyPuppetfileModuleOverwriteRequest { string proposal_id = 1; }
+message ApplyHieraLevelOverwriteRequest { string proposal_id = 1; }
+message ApplyHieraDataKeyOverwriteRequest { string proposal_id = 1; }
+message ApplyImportRequest { string proposal_id = 1; }
+
+// ------------------------------------------------------------------ Import
+
+// ImportFinding is one thing the importer noticed in a branch. A construct the
+// Code model cannot represent is listed as a finding instead of being silently
+// dropped.
+message ImportFinding {
+  // Severity has exactly two usable values. A WARNING means the construct was
+  // skipped and the file was otherwise imported. An ERROR means the file is
+  // absent from the snapshot. Nothing else exists, and nothing auto-blocks a
+  // branch except an invalid branch name.
+  enum Severity { SEVERITY_UNSPECIFIED = 0; WARNING = 1; ERROR = 2; }
+  string branch = 1;
+  // file is repo-relative; empty for a branch-level finding.
+  string file = 2;
+  // line is zero when the finding is not line-scoped. It is an int32, not an
+  // int64: protojson renders an int64 as a JSON string, so a line number stored
+  // in a proposal body would change type on the way back out.
+  int32 line = 3;
+  // kind is the stable catalog token, for example puppetfile_forge_directive.
+  string kind = 4;
+  Severity severity = 5;
+  // excerpt is the raw construct, truncated on a rune boundary and capped.
+  string excerpt = 6;
+  // message is the human sentence; it names the rule or decision the finding
+  // enforces.
+  string message = 7;
+}
+
+// ImportDataFile is one Hiera data file captured from a branch.
+message ImportDataFile {
+  // path is relative to the hierarchy level's declared datadir, the same path
+  // dimension HieraDataFile.path uses.
+  string path = 1;
+  string yaml = 2;
+}
+
+// ImportBranchSnapshot is everything captured from one branch, with exactly one
+// copy of each file's bytes.
+message ImportBranchSnapshot {
+  // branch is the git branch name and, by identity, the environment name it
+  // imports as (branch equals environment).
+  string branch = 1;
+  // commit is the SHA actually fetched.
+  string commit = 2;
+  bool importable = 3;
+  // will_overwrite true is the approver's record that an existing environment
+  // of this name is being replaced.
+  bool will_overwrite = 4;
+  // puppetfile_text is the canonical rendered text; empty when the branch has
+  // no Puppetfile.
+  string puppetfile_text = 5;
+  // hiera_yaml is the branch's raw hiera.yaml text; empty when absent.
+  string hiera_yaml = 6;
+  repeated ImportDataFile data_files = 7;
+  // settings is unset when environment.conf is absent or parses to all-nil.
+  EnvironmentSettings settings = 8;
+  repeated ImportFinding findings = 9;
+}
+
+// ImportSnapshot is the frozen content of one import: the repo URL and every
+// selected branch's captured content.
+message ImportSnapshot {
+  string url = 1;
+  repeated ImportBranchSnapshot branches = 2;
+}
+
+message InspectImportRequest {
+  string url = 1;
+  // credential names a sealed Secret configured through the Secrets facet.
+  // There is no default credential; unset means an anonymous fetch.
+  string credential = 2;
+  // branches filters the discovered branches; empty means every discovered
+  // branch.
+  repeated string branches = 3;
+}
+message InspectImportResponse { ImportSnapshot snapshot = 1; }
+
+message ProposeImportRequest {
+  string proposal_id = 1;
+  string url = 2;
+  // credential names a sealed Secret configured through the Secrets facet.
+  // There is no default credential; unset means an anonymous fetch.
+  string credential = 3;
+  // branches selects branches to import; empty means every importable branch.
+  repeated string branches = 4;
+  // expected_commits is an optional branch-to-SHA guard: the import refuses
+  // when a branch has moved since the report the human read.
+  map<string, string> expected_commits = 5;
+}
+// ProposeImportResponse returns the frozen snapshot alongside the proposal id,
+// so a caller can show the approver exactly what was filed without a second
+// read.
+message ProposeImportResponse {
+  string proposal_id = 1;
+  ImportSnapshot snapshot = 2;
+}
+
+message ApplyImportResponse { repeated Environment environments = 1; }
+
+// ------------------------------------------------------------ Environments
+
+message Environment {
+  // name is both the git branch name and the on-disk directory name a
+  // deploy would use. Validated against Puppet's real deploy-time rule
+  // ^[a-z0-9_]+$ at create and rename time, because a name violating it can
+  // never actually deploy.
+  string name = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
+}
+message ListEnvironmentsRequest { Page page = 1; }
+message ListEnvironmentsResponse { repeated Environment environments = 1; PageInfo page = 2; }
+message GetEnvironmentRequest { string name = 1; }
+message CreateEnvironmentRequest { string name = 1; }
+message RenameEnvironmentRequest { string name = 1; string new_name = 2; }
+message DeleteEnvironmentRequest { string name = 1; }
+message DuplicateEnvironmentRequest { string source_name = 1; string target_name = 2; }
+
+// -------------------------------------------------------- environment.conf
+
+// EnvironmentSettings is the structured form of one environment's
+// environment.conf. Every setting uses proto3 explicit presence so "never
+// written" stays distinguishable from "written as empty".
+message EnvironmentSettings {
+  string environment = 1;
+  // Primary fields.
+  optional string modulepath = 2;
+  optional string manifest = 3;
+  optional string config_version = 4;
+  // environment_timeout is a string, not a number: Puppet accepts 0,
+  // unlimited, and duration forms like 5m.
+  optional string environment_timeout = 5;
+  // Advanced/collapsed group.
+  optional bool disable_per_environment_manifest = 6;
+  optional bool static_catalogs = 7;
+  optional bool rich_data = 8;
+}
+message GetEnvironmentSettingsRequest { string environment = 1; }
+message PutEnvironmentSettingsRequest { EnvironmentSettings settings = 1; }
+
+// -------------------------------------------------------------- Puppetfile
+
+message PuppetfileModule {
+  // name is the full slug for a Forge module (puppetlabs/apache) and the
+  // bare module name for a Git module (apache).
+  string name = 1;
+  oneof source {
+    ForgeSource forge = 2;
+    GitSource git = 3;
+  }
+}
+// ForgeSource renders `mod 'ns/name', 'x.y.z'` when version is set,
+// `mod 'ns/name', :latest` when latest is true, and a bare `mod 'ns/name'`
+// when neither is set. Setting both is refused.
+message ForgeSource {
+  string version = 1;
+  bool latest = 2;
+}
+// GitSource's ref_kind group holds at most one ref selector. control_branch
+// is a VALUE of the DSL's :branch key (`:branch => :control_branch`), not a
+// key of its own, which is why it sits inside the same group as branch
+// rather than beside it. default_branch is a genuinely separate DSL key and
+// may accompany any ref_kind arm.
+message GitSource {
+  string url = 1;
+  oneof ref_kind {
+    string ref = 2;
+    string tag = 3;
+    string branch = 4;
+    string commit = 5;
+    ControlBranch control_branch = 6;
+  }
+  string default_branch = 7;
+}
+// ControlBranch is a presence-only marker: its presence in GitSource.ref_kind
+// means `:branch => :control_branch`. It carries no fields, so there is no
+// "set but false" state to misread.
+message ControlBranch {}
+
+message Puppetfile {
+  string environment = 1;
+  // moduledir renders a leading `moduledir '<path>'` line when set; empty
+  // means the line is absent entirely.
+  string moduledir = 2;
+  // modules is the render order, preserved exactly.
+  repeated PuppetfileModule modules = 3;
+}
+message ListPuppetfileModulesRequest { string environment = 1; Page page = 2; }
+message ListPuppetfileModulesResponse {
+  repeated PuppetfileModule modules = 1;
+  PageInfo page = 2;
+  string moduledir = 3;
+}
+message PutPuppetfileModuleRequest { string environment = 1; PuppetfileModule module = 2; }
+message RemovePuppetfileModuleRequest { string environment = 1; string name = 2; }
+message SetModuledirRequest { string environment = 1; string moduledir = 2; }
+message RenderPuppetfileRequest { string environment = 1; }
+message RenderedPuppetfile { string text = 1; }
+
+// ------------------------------------------------------------------- Hiera
+
+// HieraLevel is one entry of a hiera.yaml v5 hierarchy. Exactly one of
+// path/paths/glob/mapped_paths selects the level's data.
+message HieraLevel {
+  string name = 1;
+  string path = 2;
+  repeated string paths = 3;
+  string glob = 4;
+  // mapped_paths carries exactly three elements when set: the source fact,
+  // the loop variable, and the path template referencing that variable.
+  repeated string mapped_paths = 5;
+  string datadir = 6;
+  string data_hash = 7;
+  // lookup_options is READ-ONLY this milestone: the server populates it for
+  // display from the data file a non-interpolated path names, and refuses a
+  // write that carries it. Values are merge behaviors: first, unique, hash,
+  // deep.
+  map<string, string> lookup_options = 8;
+}
+message HieraHierarchy {
+  string environment = 1;
+  int32 version = 2;
+  string default_datadir = 3;
+  string default_data_hash = 4;
+  // levels order is first-match-wins and is preserved byte-for-byte across a
+  // read/modify/write cycle, comments included.
+  repeated HieraLevel levels = 5;
+}
+// LintWarning is advisory only. It accompanies a write that already
+// succeeded; it is never returned in place of one.
+message LintWarning {
+  string code = 1;
+  string message = 2;
+  string field = 3;
+}
+message GetHieraHierarchyRequest { string environment = 1; }
+message PutHieraLevelRequest {
+  string environment = 1;
+  HieraLevel level = 2;
+  // index is the insert position when insert is true. When insert is false
+  // the level whose name matches level.name is replaced in place and index
+  // is ignored.
+  int32 index = 3;
+  bool insert = 4;
+}
+message PutHieraLevelResponse {
+  HieraHierarchy hierarchy = 1;
+  repeated LintWarning warnings = 2;
+}
+message RemoveHieraLevelRequest { string environment = 1; string name = 2; }
+// ReorderHieraLevelsRequest.names must be a permutation of the current level
+// names — every existing name exactly once, no additions, no omissions.
+message ReorderHieraLevelsRequest { string environment = 1; repeated string names = 2; }
+
+message HieraDataFile {
+  string environment = 1;
+  // path is relative to the datadir, e.g. common.yaml or nodes/web01.yaml.
+  // Absolute paths and any .. segment are refused.
+  string path = 2;
+  // values holds the file's top-level keys with lookup_options excluded.
+  map<string, Json> values = 3;
+  // lookup_options is READ-ONLY this milestone, surfaced for display only.
+  map<string, string> lookup_options = 4;
+}
+message ListHieraDataFilesRequest { string environment = 1; Page page = 2; }
+message ListHieraDataFilesResponse { repeated string paths = 1; PageInfo page = 2; }
+message GetHieraDataFileRequest { string environment = 1; string path = 2; }
+message PutHieraDataKeyRequest {
+  string environment = 1;
+  string path = 2;
+  string key = 3;
+  Json value = 4;
+}
+message RemoveHieraDataKeyRequest { string environment = 1; string path = 2; string key = 3; }
+message DeleteHieraDataFileRequest { string environment = 1; string path = 2; }
+
+// ---------------------------------------------------------------------- Forge
+// Permission: Search and Resolve require forge:rw; Recommend requires
+// forge:recommend. The two grants are orthogonal: holding one never implies
+// the other. Forge is an authoring-advisory facet: these RPCs inspect
+// registry data and never modify a Puppetfile or run r10k/g10k deployment
+// work.
+service Forge {
+  // Search returns metadata-rich module candidates from exactly one selected
+  // registry source. It does not resolve dependencies for every result.
+  rpc Search(SearchRequest) returns (SearchResponse);
+  // Resolve walks one selected module release and returns a reviewable,
+  // advisory dependency tree. It does not apply the result to a Puppetfile.
+  rpc Resolve(ResolveRequest) returns (ResolveResponse);
+  // Recommend turns free text into ranked module suggestions. It asks the
+  // named LLM provider for search queries, runs real Forge searches, then
+  // asks the provider to rank the real candidates. Every module fact in the
+  // response is a host-owned copy of a real search result; only rank order
+  // and reasoning come from the model. PRIVACY: the caller's text and the
+  // candidate module metadata are sent to the operator-configured
+  // third-party LLM provider.
+  rpc Recommend(RecommendRequest) returns (RecommendResponse);
+}
+
+// Source identifies the registry queried by a Forge operation. The public
+// registry uses the stable name "puppet-forge"; private names refer to a
+// source configured by the pack through the Secrets facet.
+message ForgeSourceSelection { string name = 1; }
+message ForgeSourceConfig {
+  string name = 1;
+  string label = 2;
+  string secret_ref = 3;
+}
+
+message SearchRequest {
+  string query = 1;
+  ForgeSourceSelection source = 2;
+  Page page = 3;
+}
+message SearchResponse {
+  repeated ForgeSearchResult results = 1;
+  PageInfo page = 2;
+}
+message ForgeSearchResult {
+  string name = 1;
+  string version = 2;
+  string source = 3;
+  string endorsement = 4;
+  double quality_score = 5;
+  google.protobuf.Timestamp release_date = 6;
+  bool deprecated = 7;
+  string superseded_by = 8;
+  // summary is the module's short description, when the registry supplies one.
+  string summary = 9;
+  // tags are the module's registry tags, when the registry supplies any.
+  repeated string tags = 10;
+}
+
+message RecommendRequest {
+  // text is the caller's free-text need. It is sent to the LLM provider.
+  string text = 1;
+  // llm_provider names a provider configured in the llm-providers index.
+  // There is no default provider.
+  string llm_provider = 2;
+  // sources selects the registries to search; unset means the public registry.
+  repeated ForgeSourceSelection sources = 3;
+  // Optional caps; zero means the host default. The host enforces hard maxima.
+  int32 max_queries = 4;
+  int32 max_candidates = 5;
+  int32 max_suggestions = 6;
+}
+message RecommendedModule {
+  // rank is host-assigned (1..n) from the ranker's ordering, after the host moves deprecated modules below non-deprecated ones.
+  int32 rank = 1;
+  // reasoning is LLM-authored, untrusted display text.
+  string reasoning = 2;
+  // module is host-owned: a copy of a real search result.
+  ForgeSearchResult module = 3;
+}
+message RecommendResponse {
+  repeated RecommendedModule suggestions = 1;
+  // queries echoes the search queries the host actually ran.
+  repeated string queries = 2;
+  repeated ForgeAdvisoryWarning warnings = 3;
+}
+
+message ResolveRequest {
+  string name = 1;
+  string version = 2;
+  ForgeSourceSelection source = 3;
+  string environment = 4;
+}
+message ResolveResponse {
+  DependencyNode root = 1;
+  repeated ForgeAdvisoryWarning warnings = 2;
+  bool advisory_only = 3;
+  string advisory_message = 4;
+}
+message DependencyNode {
+  string name = 1;
+  string version = 2;
+  string version_requirement = 3;
+  string source = 4;
+  repeated DependencyNode dependencies = 5;
+  bool cycle = 6;
+  bool conflict = 7;
+  bool unresolved = 8;
+  bool already_in_puppetfile = 9;
+  repeated ForgeAdvisoryWarning warnings = 10;
+}
+message ForgeAdvisoryWarning {
+  string code = 1;
+  string message = 2;
+  string module = 3;
+  string requirement = 4;
+  repeated string origins = 5;
+}

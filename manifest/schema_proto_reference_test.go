@@ -7,34 +7,35 @@ import (
 )
 
 // This file guards a published reference document, not a manifest. It lives in
-// package manifest only because schema/proto/ holds no Go package. It follows
-// the repo's precedent of tests that read a file outside the package
-// (validate_test.go reads schema.json; examples/opentofu-lite reads
-// ../../manifest/testdata/).
+// package manifest only because schema/proto/ holds no Go package. It follows the repo's precedent of tests that read a file
+// outside the package (validate_test.go reads schema.json;
+// examples/opentofu-lite reads ../../manifest/testdata/).
+//
+// schema/proto/ is a verbatim copy of proto/ maintained by `go generate
+// ./schema` (SD-4 resolved by D-01); schema.TestSchemaProtoMatchesProto owns
+// byte equality. This test keeps the Forge permission wording pinned in both.
 
-// TestSchemaProtoReferenceForgePermissionIsCurrent pins WR-04: the reference
-// tree names the Forge permission that exists, points at the live contract,
-// and the permission Phase 12 deleted never reappears in either proto tree.
+// TestSchemaProtoReferenceForgePermissionIsCurrent pins WR-04: the agent-facing
+// tree names the Forge permission that exists, and the permission Phase 12
+// deleted never reappears in either proto tree.
 func TestSchemaProtoReferenceForgePermissionIsCurrent(t *testing.T) {
 	const deleted = "forge:read"
-	const wantLine = "// Permission: forge:rw. Resolves the pack's Content module. The live Forge service is proto/stagehand/host/v1/host.proto."
+	const wantLine = "// Permission: Search and Resolve require forge:rw; Recommend requires"
 
-	ref, err := os.ReadFile("../schema/proto/stagehand/host/v1/host.proto")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(ref), deleted) {
-		t.Errorf("schema/proto/stagehand/host/v1/host.proto mentions %q, a permission Phase 12 removed: that tree is what CLAUDE.md, AGENTS.md, README.md and llms.txt point coding agents at, so a stale permission there teaches an author to declare one that pack-check refuses (permission_unknown)", deleted)
-	}
-	if !strings.Contains(string(ref), wantLine) {
-		t.Errorf("schema/proto/stagehand/host/v1/host.proto lost the Forge permission line %q: it names the permission the Forge facet requires and points at the live contract, so a reword must not drop either", wantLine)
-	}
-
-	live, err := os.ReadFile("../proto/stagehand/host/v1/host.proto")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(live), deleted) {
-		t.Errorf("proto/stagehand/host/v1/host.proto mentions %q: Phase 12 (INT-2) removed that permission, and the wire comments must agree with the manifest vocabularies", deleted)
+	for _, path := range []string{
+		"../schema/proto/stagehand/host/v1/host.proto",
+		"../proto/stagehand/host/v1/host.proto",
+	} {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := string(raw)
+		if strings.Contains(body, deleted) {
+			t.Errorf("%s mentions %q, a permission Phase 12 removed: schema/proto is what CLAUDE.md, AGENTS.md, README.md and llms.txt point coding agents at, so a stale permission there teaches an author to declare one that pack-check refuses (permission_unknown)", path, deleted)
+		}
+		if !strings.Contains(body, wantLine) {
+			t.Errorf("%s lost the Forge permission line %q: it names the permission the Forge facet requires, so a reword must not drop it (if proto/ changed, run go generate ./schema)", path, wantLine)
+		}
 	}
 }
