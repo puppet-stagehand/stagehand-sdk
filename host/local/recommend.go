@@ -12,7 +12,9 @@ package local
 //	validate -> resolve provider -> resolve every requested source (no LLM
 //	cost on a bad request) -> LLM call #1 (extract several search queries) ->
 //	one real Search per (source, query) pair -> interleaved merge, de-duplicate
-//	and cap -> LLM call #2 (rank the real candidates) -> structural join.
+//	and cap -> LLM call #2 (rank the real candidates) -> structural join ->
+//	the host's demote-only ordering rule (deprecated modules after the rest,
+//	applied before the suggestion cap) -> rank numbering.
 
 import (
 	"context"
@@ -99,6 +101,10 @@ const (
 	// recommendWarnSearchFailed: one (source, query) search failed while at
 	// least one other succeeded, so the candidate set is narrower than asked.
 	recommendWarnSearchFailed = "recommend_search_failed"
+	// recommendWarnSupersededModuleListed: a deprecated module is in the answer
+	// while the module that supersedes it is also among the real candidates.
+	// The host never swaps the superseder in; it only tells the caller.
+	recommendWarnSupersededModuleListed = "recommend_superseded_module_listed"
 )
 
 // recommendKey is the join key: normalized, lower-cased module name plus the
@@ -426,13 +432,21 @@ fanout:
 		return nil, err
 	}
 
-	// Structural join (D-07): the key must name a real candidate; rank comes
-	// from output position and every module fact from the candidate.
+	// Structural join (D-07): the key must name a real candidate and every
+	// module fact comes from that candidate, never from the ranker reply.
+	//
+	// Pass 1, accept. The loop deliberately runs to the end of the reply so
+	// that every unknown or duplicate key is reported, even once the answer is
+	// already full. It is bounded on both axes: acceptance by the candidate
+	// budget (each accepted entry consumes a distinct key in seen) and
+	// iteration by the decoded reply (llmMaxOutputTokensRank).
+	type acceptedEntry struct {
+		candidate *hostv1.ForgeSearchResult
+		reasoning string
+	}
 	seen := make(map[string]bool, len(ranked.Suggestions))
+	accepted := make([]acceptedEntry, 0, len(ranked.Suggestions))
 	for _, entry := range ranked.Suggestions {
-		if len(resp.Suggestions) == maxSuggestions {
-			break
-		}
 		k := recommendKey(entry.Name, entry.Source)
 		c, ok := candidates[k]
 		switch {
@@ -450,14 +464,61 @@ fanout:
 			})
 		default:
 			seen[k] = true
-			resp.Suggestions = append(resp.Suggestions, &hostv1.RecommendedModule{
-				Rank:      int32(len(resp.Suggestions) + 1),
-				Reasoning: cleanReasoning(entry.Reasoning),
-				Module:    proto.Clone(c).(*hostv1.ForgeSearchResult),
-			})
+			accepted = append(accepted, acceptedEntry{candidate: c, reasoning: cleanReasoning(entry.Reasoning)})
 		}
 	}
-	if len(ranked.Suggestions) > 0 && len(resp.Suggestions) == 0 {
+
+	// Pass 2, demote-only stable partition: non-deprecated entries first, then
+	// deprecated ones, each group in the ranker's own order. Two append loops,
+	// not a sort, so stability holds by construction. Deprecated is a registry
+	// fact read from the joined candidate; the ranker reply has no such field.
+	ordered := make([]acceptedEntry, 0, len(accepted))
+	for _, a := range accepted {
+		if !a.candidate.Deprecated {
+			ordered = append(ordered, a)
+		}
+	}
+	for _, a := range accepted {
+		if a.candidate.Deprecated {
+			ordered = append(ordered, a)
+		}
+	}
+
+	// Pass 3, cap and number: the cap applies after ordering so a deprecated
+	// module can never take a slot a live one would have had.
+	for _, a := range ordered {
+		if len(resp.Suggestions) == maxSuggestions {
+			break
+		}
+		resp.Suggestions = append(resp.Suggestions, &hostv1.RecommendedModule{
+			Rank:      int32(len(resp.Suggestions) + 1),
+			Reasoning: a.reasoning,
+			Module:    proto.Clone(a.candidate).(*hostv1.ForgeSearchResult),
+		})
+	}
+
+	// Pass 4, superseder warning. The superseder is looked up in the same
+	// source (a registry slug names a module in that registry); recommendKey
+	// folds the hyphen slug to the slash form. The message is built from the
+	// two candidates' own names only, never from the raw registry string.
+	for _, sug := range resp.Suggestions {
+		c := sug.Module
+		if !c.Deprecated || c.SupersededBy == "" {
+			continue
+		}
+		sup, ok := candidates[recommendKey(c.SupersededBy, c.Source)]
+		if !ok {
+			continue
+		}
+		resp.Warnings = append(resp.Warnings, &hostv1.ForgeAdvisoryWarning{
+			Code: recommendWarnSupersededModuleListed,
+			Message: fmt.Sprintf("%s is deprecated and its replacement %s was also among the search results; consider %s instead",
+				c.Name, sup.Name, sup.Name),
+			Module:  c.Name,
+			Origins: []string{c.Source},
+		})
+	}
+	if len(ranked.Suggestions) > 0 && len(accepted) == 0 {
 		// Every key was unknown: the answer is unusable. Never fall back to
 		// unranked search hits (D-09).
 		return nil, status.Error(codes.Internal, "llm ranking reply named no module from the search results")
