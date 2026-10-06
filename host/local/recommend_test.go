@@ -1591,3 +1591,225 @@ func TestRecommendSurfacesDegradedMetadata(t *testing.T) {
 		t.Fatalf("a failed fetch must not be sent as unscored: %s", user)
 	}
 }
+
+// ------------------------------------------------- deprecated-module ordering
+
+// deprecationCandidates is the candidate set the ordering tests rank over. The
+// hyphen slug in SupersededBy is how the registry spells a superseder; the
+// host's join must fold it to the slash form.
+func deprecationCandidates() staticForge {
+	return staticForge{results: []*hostv1.ForgeSearchResult{
+		{Name: "vendor/old", Version: "1.0.0", QualityScore: 0.92, Deprecated: true, SupersededBy: "vendor-new"},
+		{Name: "vendor/new", Version: "3.0.0", QualityScore: 0.80},
+		{Name: "other/fresh", Version: "2.0.0", QualityScore: 0.70},
+	}}
+}
+
+func rankedNames(resp *hostv1.RecommendResponse) []string {
+	out := make([]string, 0, len(resp.Suggestions))
+	for _, s := range resp.Suggestions {
+		out = append(out, s.Module.Name)
+	}
+	return out
+}
+
+func assertContiguousRanks(t *testing.T, resp *hostv1.RecommendResponse) {
+	t.Helper()
+	for i, s := range resp.Suggestions {
+		if s.Rank != int32(i+1) {
+			t.Fatalf("expected contiguous ranks 1..n, got rank %d at index %d", s.Rank, i)
+		}
+	}
+}
+
+func TestRecommendDemotesDeprecatedModules(t *testing.T) {
+	const src = "puppet-forge"
+
+	t.Run("a deprecated suggestion sinks below every non-deprecated one", func(t *testing.T) {
+		h, _ := recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"vendor/old", src, "Old."},
+				scriptedRank{"other/fresh", src, "Fresh."},
+				scriptedRank{"vendor/new", src, "New."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := rankedNames(resp)
+		want := []string{"other/fresh", "vendor/new", "vendor/old"}
+		if fmt.Sprint(got) != fmt.Sprint(want) {
+			t.Fatalf("expected %v, got %v", want, got)
+		}
+		assertContiguousRanks(t, resp)
+		if resp.Suggestions[2].Reasoning != "Old." {
+			t.Fatalf("expected the demoted suggestion to keep its own reasoning, got %+v", resp.Suggestions[2])
+		}
+	})
+
+	t.Run("demotion happens before the max_suggestions cap", func(t *testing.T) {
+		h, _ := recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"vendor/old", src, "Old."},
+				scriptedRank{"other/fresh", src, "Fresh."},
+				scriptedRank{"vendor/new", src, "New."},
+			))
+		resp, err := h.Forge.Recommend(context.Background(), &hostv1.RecommendRequest{
+			Text: canonicalNeed, LlmProvider: "primary", MaxSuggestions: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 1 || resp.Suggestions[0].Module.Name != "other/fresh" || resp.Suggestions[0].Rank != 1 {
+			t.Fatalf("expected other/fresh alone at rank 1, got %+v", resp.Suggestions)
+		}
+	})
+
+	t.Run("a deprecated suggestion whose superseder is a candidate is warned about", func(t *testing.T) {
+		// The ranker never names vendor/new: the live failure mode.
+		h, _ := recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"vendor/old", src, "Old."},
+				scriptedRank{"other/fresh", src, "Fresh."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var found []*hostv1.ForgeAdvisoryWarning
+		for _, w := range resp.Warnings {
+			if w.Code == "recommend_superseded_module_listed" {
+				found = append(found, w)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("expected exactly one superseded-module warning, got %v", resp.Warnings)
+		}
+		w := found[0]
+		if w.Module != "vendor/old" || !strings.Contains(w.Message, "vendor/old") || !strings.Contains(w.Message, "vendor/new") {
+			t.Fatalf("warning must name both modules, got %+v", w)
+		}
+		if strings.Contains(w.Message, "vendor-new") {
+			t.Fatalf("the raw registry slug must never be interpolated: %q", w.Message)
+		}
+		if len(w.Origins) != 1 || w.Origins[0] != src {
+			t.Fatalf("expected the candidate's source as origin, got %v", w.Origins)
+		}
+		// Nothing is inserted: vendor/new was not named, so it is not returned.
+		for _, s := range resp.Suggestions {
+			if s.Module.Name == "vendor/new" {
+				t.Fatalf("the host must never promote a module the ranker did not name: %+v", resp.Suggestions)
+			}
+		}
+	})
+
+	t.Run("no warning when the superseder is not a candidate", func(t *testing.T) {
+		forge := staticForge{results: []*hostv1.ForgeSearchResult{
+			{Name: "vendor/old", Version: "1.0.0", Deprecated: true, SupersededBy: "vendor-gone"},
+			{Name: "other/fresh", Version: "2.0.0"},
+		}}
+		h, _ := recommendHost(t, forge,
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"vendor/old", src, "Old."},
+				scriptedRank{"other/fresh", src, "Fresh."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(rankedNames(resp)) != fmt.Sprint([]string{"other/fresh", "vendor/old"}) {
+			t.Fatalf("expected vendor/old returned and demoted, got %v", rankedNames(resp))
+		}
+		if hasWarning(resp.Warnings, "recommend_superseded_module_listed") {
+			t.Fatalf("unexpected superseded-module warning: %v", resp.Warnings)
+		}
+	})
+
+	t.Run("drop warnings survive a full suggestion budget", func(t *testing.T) {
+		h, _ := recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"other/fresh", src, "Fresh."},
+				scriptedRank{"vendor/new", src, "New."},
+				scriptedRank{"vendor/old", src, "Old."},
+				scriptedRank{"ghost/one", src, "Invented."},
+				scriptedRank{"other/fresh", src, "Again."},
+			))
+		resp, err := h.Forge.Recommend(context.Background(), &hostv1.RecommendRequest{
+			Text: canonicalNeed, LlmProvider: "primary", MaxSuggestions: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(resp.Suggestions) != 1 || resp.Suggestions[0].Module.Name != "other/fresh" {
+			t.Fatalf("expected one suggestion (other/fresh), got %+v", resp.Suggestions)
+		}
+		if !hasWarning(resp.Warnings, "recommend_unknown_module_dropped") || !hasWarning(resp.Warnings, "recommend_duplicate_dropped") {
+			t.Fatalf("expected both drop warnings after the budget filled, got %v", warningCodes(resp.Warnings))
+		}
+	})
+
+	t.Run("an all-deprecated candidate set is still ranked, never filtered", func(t *testing.T) {
+		forge := staticForge{results: []*hostv1.ForgeSearchResult{
+			{Name: "a/one", Version: "1.0.0", Deprecated: true},
+			{Name: "b/two", Version: "1.0.0", Deprecated: true},
+			{Name: "c/three", Version: "1.0.0", Deprecated: true},
+		}}
+		h, _ := recommendHost(t, forge,
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"b/two", src, "Two."},
+				scriptedRank{"a/one", src, "One."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(rankedNames(resp)) != fmt.Sprint([]string{"b/two", "a/one"}) {
+			t.Fatalf("expected the ranker's order inside the deprecated group, got %v", rankedNames(resp))
+		}
+		assertContiguousRanks(t, resp)
+		if hasWarning(resp.Warnings, "recommend_no_relevant_modules") {
+			t.Fatalf("unexpected no-relevant-modules warning: %v", resp.Warnings)
+		}
+	})
+
+	t.Run("every existing grounding behaviour is unchanged", func(t *testing.T) {
+		h, _ := recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(
+				scriptedRank{"acme/invented", src, "Invented."},
+				scriptedRank{"other-fresh", src, "Hyphen slug."},
+				scriptedRank{"other/fresh", src, "Repeat."},
+				scriptedRank{"vendor/new", src, "New."},
+			))
+		resp, err := recommend(h)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fmt.Sprint(rankedNames(resp)) != fmt.Sprint([]string{"other/fresh", "vendor/new"}) {
+			t.Fatalf("unexpected suggestions %v", rankedNames(resp))
+		}
+		assertContiguousRanks(t, resp)
+		if !hasWarning(resp.Warnings, "recommend_unknown_module_dropped") || !hasWarning(resp.Warnings, "recommend_duplicate_dropped") {
+			t.Fatalf("expected unknown and duplicate warnings, got %v", warningCodes(resp.Warnings))
+		}
+
+		h, _ = recommendHost(t, deprecationCandidates(),
+			extractionReply("thing"),
+			rankingReply(scriptedRank{"acme/invented", src, "Invented."}))
+		if _, err := recommend(h); status.Code(err) != codes.Internal {
+			t.Fatalf("expected Internal when every key is unknown, got %v", err)
+		}
+
+		h, _ = recommendHost(t, deprecationCandidates(), extractionReply("thing"), rankingReply())
+		resp, err = recommend(h)
+		if err != nil || len(resp.Suggestions) != 0 || !hasWarning(resp.Warnings, "recommend_no_relevant_modules") {
+			t.Fatalf("expected a valid empty ranking to succeed with a warning, got %+v, %v", resp, err)
+		}
+	})
+}
