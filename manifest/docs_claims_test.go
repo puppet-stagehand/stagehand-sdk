@@ -110,6 +110,37 @@ func TestDocsClaimsAreCurrent(t *testing.T) {
 			why: "D-13 caveat in Step 17; D-14 and D-01 resolved SD-4 and SD-6; Steps 20-23 are the manual proofs of the Phase 13 controls",
 		},
 		{
+			path: "../docs/control-repo-authoring.md",
+			mustContain: []string{
+				"Why the module folder must be one plain name",
+				"Why some notes are locked",
+			},
+			mustNotContain: []string{
+				"is still fine: the facet checks only whether the value can be",
+			},
+			why: "FND-02 and FND-03: the ELI10 guide explains both new refusals and must not keep the superseded SD-6 claim that a path outside the environment is fine",
+		},
+		{
+			path: "../approval/require.go",
+			mustContain: []string{
+				"FND-03",
+			},
+			mustNotContain: []string{
+				"because the Documents store has no ACL",
+			},
+			why: "D-14: the comment on the single read-side definition of approved must not say Documents has no ACL",
+		},
+		{
+			path: "../host/local/inventory.go",
+			mustContain: []string{
+				"FND-03",
+			},
+			mustNotContain: []string{
+				"the Documents store has no ACL and anything holding the host can write one",
+			},
+			why: "D-14: the OnboardNode comment must not say Documents has no ACL",
+		},
+		{
 			path:           "../README.md",
 			mustNotContain: []string{"has no access control", "has no ACL"},
 			why:            "D-14: README.md and llms.txt carry no Documents-ACL claim",

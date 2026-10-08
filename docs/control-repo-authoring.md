@@ -28,6 +28,9 @@ made up for the proof and is not advice.
 - **`environment.conf`** and **settings** - `environment.conf` is a small
   settings file each environment can have. The Code facet calls its contents the
   environment **settings**.
+- **Moduledir** - the folder inside an environment where r10k or g10k puts the
+  modules from the Puppetfile. Most people leave it as `modules`. Think of it as
+  the shelf the modules are unpacked onto.
 - **Proposal** - a written request that says exactly what you want to replace
   and what you want to replace it with. It holds a frozen copy of the change.
 - **Approval scope** - a label on a short-lived token. The scope `code:approve`
@@ -168,9 +171,9 @@ escape it.** An escaped value would read back as something different from what
 was written, and the facet's promise is that what it writes is what it reads. So
 if a write is refused, change the value; do not look for a way to quote it.
 
-The module directory setting follows the same rule. A path that starts with `/`
-or contains `..` is still fine: the facet checks only whether the value can be
-written back faithfully, not where you keep your modules.
+The module directory setting follows the same rule and one stricter one: it
+must be a single plain folder name. See "Why the module folder must be one plain
+name" below.
 
 ## 5. A Hiera level and a data key
 
@@ -313,6 +316,52 @@ canonical lowercase hyphen form, which is why `puppetlabs/ntp` reads back as
 module name exactly as it was written, and never rewrites your file's spelling.
 Either way, matching still treats the two spellings as one module.
 
+## Why the module folder must be one plain name
+
+The deploy tools, r10k and g10k, do two things with the module folder named in a
+Puppetfile. They install modules into it, and they clean it up by deleting
+anything in it that the Puppetfile does not list. That is fine for a folder
+called `modules` inside the environment. It is dangerous if the setting names a
+folder somewhere else: `/srv/modules` or `../up` can point outside the
+environment, and the tool would then delete files there that have nothing to do
+with Puppet.
+
+So the facet accepts only one plain folder name: letters, digits, `_`, `.` and
+`-`, at most 64 characters, and not starting with `.` or `-`. `modules` and
+`thirdparty` are fine. A slash, `..`, a leading dot or a leading dash is
+refused with the error code `moduledir_invalid`, and the error's fix line says
+what to do. The facet never "tidies" a bad value for you, because a value it
+changed would not be the value you meant.
+
+If a write is refused, pick a plain name. If an environment already stores a
+value that is no longer allowed (for example one stored before this rule), other
+Puppetfile writes on that environment are refused with the same code until you
+clear it. Call `SetModuledir` with an empty value, which removes the setting, or
+set a plain name, and writes work again. Clearing is never refused.
+
+## Why some notes are locked
+
+The Documents facet is a plain notebook every pack can write in. The facets
+keep their own working notes in it too: the Code facet's environments, the
+overwrite proposals, the Inventory proposals, and the provider and source lists.
+If a pack could edit those notes, it could rewrite the facet's records, or write
+"approved" on a proposal and approve itself.
+
+So the notebook now has locked pages. A pack may read them but not write or
+delete them. The locked names start with `code-`, `deploy-`, `bolt-` or
+`inventory-`, and the two names `forge-sources` and `llm-providers` are locked
+too. A write to one is refused with the error code `collection_reserved`, and
+the fix line lists every locked name. If your pack used one of those names for
+its own notes, rename its collection.
+
+Approvals have one more lock. Saying "approved" on a proposal needs the
+approver's key, the short-lived token from the person deciding, sent along with
+the write. A pack that only holds the notebook has no such key, so it cannot
+approve its own proposal by editing the note. A decided proposal is also frozen:
+it cannot be edited afterwards. Writing a fresh *pending* proposal is still an
+ordinary write. Your own collections, such as `state` or `locks`, are not
+locked. `docs/approval-pattern.md` has the technical detail.
+
 ## What the errors look like
 
 Branch on the exported helper, never on the message. Several of these share one
@@ -329,10 +378,11 @@ status code, so the helper is the only honest way to tell them apart.
 | An import whose branch moved since the report | `FailedPrecondition` | `import_branch_moved` | `local.IsCodeImportBranchMoved` |
 | A proposal decided a second time | `FailedPrecondition` | `proposal_already_decided` | `approval.IsAlreadyDecided` |
 | A rejection with no reason | `InvalidArgument` | `reject_reason_required` | none exported; use the status code |
-| A write whose module value cannot be stored safely (a name, version, url, ref or module directory with a quote, a backslash, a line break or a control character) | `InvalidArgument` | none | none; only the status code is meaningful |
+| A write whose module value cannot be stored safely (a name, version, url or ref with a quote, a backslash, a line break or a control character) | `InvalidArgument` | none | none; only the status code is meaningful |
+| A module directory that is not one plain folder name (`/srv/modules`, `../up`, `modules/third`, `.hidden`) | `InvalidArgument` | `moduledir_invalid` | `local.IsModuledirInvalid` |
 | A proposal id that is already used | `AlreadyExists` | `proposal_already_exists` | none exported; use the status code |
 
-Never match an error message as a string. Eight of these eleven rows share
+Never match an error message as a string. Eight of these twelve rows share
 `FailedPrecondition`, so the helper is the only honest discriminator. For the
 rows with no helper, check the status code and then check that nothing was
 written.
@@ -354,8 +404,9 @@ written.
   guards against accidental replacement through the Code facet's own calls.
   Section 6 of [`docs/code-overwrite-gating.md`](code-overwrite-gating.md) and
   the closing section of [`docs/code-import.md`](code-import.md) say exactly
-  what it does not stop. The one route that is now closed is smuggling extra
-  lines in through a module value; the route that remains is the documented one
+  what it does not stop. Two routes are now closed: smuggling extra lines in
+  through a module value, and a pack that holds only the Documents facet writing
+  an approval or a facet's records itself; the route that remains is the documented one
   of removing an item and putting it back (section 6 of the gating guide).
 
 ## Where to go next

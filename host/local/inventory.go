@@ -589,11 +589,13 @@ func nodeFromProposal(m map[string]any, proposalID string) (*hostv1.Node, error)
 // materialize anything unless the referenced document records an approval:
 // approval.RequireApproved(doc, inventoryApprovalKind) requires the status to
 // read "approved", approved_scope to equal inventoryApprovalKind.ApproveScope
-// and decided_by to be non-empty. A status string alone is not enough, because
-// the Documents store has no ACL and anything holding the host can write one;
-// the scope and the decider are the provenance only approval.Approve records,
-// so only forged or hand-written records are refused that it would accept
-// before. This is the only additional check OnboardNode carries beyond the
+// and decided_by to be non-empty. A status string alone proves nothing: the
+// host's Documents guard refuses a pack's forged transition (FND-03), but
+// RequireApproved stays the single read-side definition and still demands the
+// provenance, so a record that reaches the store by any other path is judged
+// the same way. The scope and the decider are the provenance only
+// approval.Approve records, so only forged or hand-written records are refused
+// that it would accept before. This is the only additional check OnboardNode carries beyond the
 // facet-level inventory:rw gate (D-01) — it reads a decision someone else
 // recorded. It never consults a token, never evaluates a scope against one,
 // and never writes back into proposalCollection; the approval decision and

@@ -43,10 +43,11 @@ func IsNotApproved(err error) bool {
 // proposal is. It returns nil only when doc's body records all three facts
 // approval.Approve writes: a status equal to StatusApproved, an
 // approved_scope equal to kind.ApproveScope, and a non-empty decided_by. A
-// status string alone proves nothing, because the Documents store has no ACL
-// and anything holding the host can write any body into a proposals
-// collection; the scope and the decider are the provenance only Approve
-// records.
+// status string alone proves nothing: the host's Documents guard refuses a
+// pack's forged transition (FND-03), but RequireApproved stays the single
+// read-side definition and still demands the provenance, so a record that
+// reaches the store by any other path is judged the same way. The scope and
+// the decider are the provenance only Approve records.
 //
 // It is read-only by construction. Its only inputs are a document and a
 // code-defined Kind: it holds no *host.Host, writes nothing, verifies no token
