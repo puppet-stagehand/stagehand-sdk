@@ -74,6 +74,8 @@ var reservedCollections = []reservedCollection{
 	{prefix: "deploy-", owner: "the Deploy facet", fix: "write deploy state through the Deploy facet RPCs; " + reservedNamesSentence},
 	{prefix: "bolt-", owner: "the Bolt facet", fix: "write Bolt state through the Bolt facet RPCs; " + reservedNamesSentence},
 	{prefix: "inventory-", owner: "the Inventory facet", fix: "write Inventory state through the Inventory facet RPCs; onboarding proposals go through approval.Propose; " + reservedNamesSentence},
+	{exact: "forge-sources", owner: "the Forge facet", fix: "on host.Local seed a source with local.SeedDocument; on the console an operator configures registry sources; " + reservedNamesSentence},
+	{exact: "llm-providers", owner: "the Forge Recommend facet", fix: "on host.Local seed a provider with local.SeedDocument; on the console an operator configures providers; " + reservedNamesSentence},
 }
 
 // reservedFor returns the reserved entry that covers collection. The match

@@ -66,9 +66,11 @@ func (f *llmResolveFixture) index(name, ref string) {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	if _, err := f.srv.docs.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: llmProviderCollection, DocId: name, Body: &hostv1.Json{Value: body},
-	}); err != nil {
+	// The fixture has no host.Host, so write through the same in-process path
+	// SeedDocument uses; the pack-facing Put refuses llm-providers (FND-03).
+	f.srv.docs.mu.Lock()
+	defer f.srv.docs.mu.Unlock()
+	if _, err := f.srv.docs.putLocked(llmProviderCollection, name, &hostv1.Json{Value: body}, false); err != nil {
 		f.t.Fatal(err)
 	}
 }

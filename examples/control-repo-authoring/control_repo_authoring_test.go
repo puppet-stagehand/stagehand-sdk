@@ -24,7 +24,6 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // fixtureAPIKey is the sealed LLM provider key every test host is configured
@@ -110,14 +109,10 @@ func configureLLMProvider(t *testing.T, h *host.Host) string {
 	if err != nil {
 		t.Fatalf("configureLLMProvider: Secrets.Store: %v", err)
 	}
-	body, err := structpb.NewStruct(map[string]any{"name": name, "label": "Primary", "secret_ref": ref.Ref})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: "llm-providers", DocId: name, Body: &hostv1.Json{Value: body}, IfVersion: 0,
-	}); err != nil {
-		t.Fatalf("configureLLMProvider: Documents.Put: %v", err)
+	// llm-providers is operator configuration (FND-03): the pack-facing
+	// Documents facet refuses it, so the fixture seeds it the way an operator would.
+	if err := local.SeedDocument(h, "llm-providers", name, map[string]any{"name": name, "label": "Primary", "secret_ref": ref.Ref}); err != nil {
+		t.Fatalf("configureLLMProvider: SeedDocument: %v", err)
 	}
 	return name
 }

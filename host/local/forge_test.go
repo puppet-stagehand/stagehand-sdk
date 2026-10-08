@@ -9,7 +9,6 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/host"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // forgeFixture is a deterministic ForgeClient double used by every
@@ -123,14 +122,7 @@ func mustConfigureForgeSource(t *testing.T, h *host.Host, name, label, baseURL, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := structpb.NewStruct(map[string]any{"name": name, "label": label, "secret_ref": ref.Ref})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: forgeSourceCollection, DocId: name,
-		Body: &hostv1.Json{Value: body}, IfVersion: 0,
-	}); err != nil {
+	if err := SeedDocument(h, forgeSourceCollection, name, map[string]any{"name": name, "label": label, "secret_ref": ref.Ref}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -250,18 +242,11 @@ func TestForgeSearchCorruptSecretRefIsInternal(t *testing.T) {
 	// Write the index document directly, pointing at a secret_ref that was
 	// never actually Stored — simulates the index and secret store
 	// disagreeing.
-	body, err := structpb.NewStruct(map[string]any{"name": "broken", "label": "Broken", "secret_ref": "does-not-exist"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: forgeSourceCollection, DocId: "broken",
-		Body: &hostv1.Json{Value: body}, IfVersion: 0,
-	}); err != nil {
+	if err := SeedDocument(h, forgeSourceCollection, "broken", map[string]any{"name": "broken", "label": "Broken", "secret_ref": "does-not-exist"}); err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = h.Forge.Search(context.Background(), &hostv1.SearchRequest{
+	_, err := h.Forge.Search(context.Background(), &hostv1.SearchRequest{
 		Query: "widget", Source: &hostv1.ForgeSourceSelection{Name: "broken"},
 	})
 	if status.Code(err) != codes.Internal {

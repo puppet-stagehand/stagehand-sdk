@@ -64,14 +64,7 @@ func mustConfigureLLMProvider(t *testing.T, h *host.Host, name, label, kind, bas
 	if err != nil {
 		t.Fatal(err)
 	}
-	body, err := structpb.NewStruct(map[string]any{"name": name, "label": label, "secret_ref": ref.Ref})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: llmProviderCollection, DocId: name,
-		Body: &hostv1.Json{Value: body}, IfVersion: 0,
-	}); err != nil {
+	if err := SeedDocument(h, llmProviderCollection, name, map[string]any{"name": name, "label": label, "secret_ref": ref.Ref}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -406,16 +399,10 @@ func TestForgeRecommendPermission(t *testing.T) {
 		// (Reveal failed); PermissionDenied proves no reveal was attempted.
 		llm := &scriptedLLM{replies: forgeReplies}
 		h := New(nil, "pkg", WithForgeClient(twoModules()), WithLLMClient(llm))
-		body, err := structpb.NewStruct(map[string]any{"name": "primary", "label": "Primary", "secret_ref": "does-not-exist"})
-		if err != nil {
+		if err := SeedDocument(h, llmProviderCollection, "primary", map[string]any{"name": "primary", "label": "Primary", "secret_ref": "does-not-exist"}); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-			Collection: llmProviderCollection, DocId: "primary", Body: &hostv1.Json{Value: body},
-		}); err != nil {
-			t.Fatal(err)
-		}
-		_, err = h.Forge.Recommend(context.Background(), recommendReq)
+		_, err := h.Forge.Recommend(context.Background(), recommendReq)
 		if status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("expected PermissionDenied before any provider resolution, got %v", err)
 		}

@@ -761,6 +761,7 @@ func TestDocumentsGuard_ReservedCollections(t *testing.T) {
 		"deploy-runs", "deploy-proposals",
 		"bolt-runs",
 		"inventory-nodes",
+		"forge-sources", "llm-providers",
 	} {
 		t.Run(collection, func(t *testing.T) {
 			h := newGuardHost()
@@ -793,7 +794,7 @@ func TestDocumentsGuard_ReservedCollections(t *testing.T) {
 func TestDocumentsGuard_ReservedReadsAllowed(t *testing.T) {
 	h := newGuardHost()
 	ctx := context.Background()
-	for _, collection := range []string{"code-puppetfiles", "deploy-runs", "bolt-runs", "inventory-nodes"} {
+	for _, collection := range []string{"code-puppetfiles", "deploy-runs", "bolt-runs", "inventory-nodes", "forge-sources", "llm-providers"} {
 		if err := local.SeedDocument(h, collection, "doc", map[string]any{"k": "v"}); err != nil {
 			t.Fatalf("SeedDocument(%s): %v", collection, err)
 		}
@@ -843,7 +844,7 @@ func TestDocumentsGuard_FacetsUnaffected(t *testing.T) {
 
 func TestDocumentsGuard_ReservedNameAdjacency(t *testing.T) {
 	h := newGuardHost()
-	for _, name := range []string{"CODE-ENVIRONMENTS", "Code-x", "code-", "deploy-", "Bolt-runs"} {
+	for _, name := range []string{"CODE-ENVIRONMENTS", "Code-x", "code-", "deploy-", "Bolt-runs", "FORGE-SOURCES", "Llm-Providers"} {
 		requireReserved(t, reservedPut(h, name, "doc", 0), name, "Put")
 		if err := reservedDelete(h, name, "doc"); !local.IsCollectionReserved(err) {
 			t.Errorf("Delete on %s: want collection_reserved, got %v", name, err)
