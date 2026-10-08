@@ -1,14 +1,15 @@
 // Package harness holds the real-tool evidence harness: containers that run
 // r10k, g10k and Bolt for real, and the recorded fixtures those runs produce.
 //
-// This file is untagged, so the default go test ./... compiles it and (once the
-// validator lands) checks the committed fixtures offline with no Docker. The
+// This file is untagged, so the default go test ./... compiles it and checks the committed fixtures offline with no Docker. The
 // container-driving tests live in harness_test.go behind the harness build tag
 // and run only through harness/run.sh. See docs/harness.md for the overview.
 package harness
 
 import (
+	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,21 +62,221 @@ type Fixture struct {
 	Notes string `json:"notes,omitempty"`
 }
 
-// ---- offline validator (RED stage: the helpers below are deliberate no-ops) ----
+// ---- offline validator ----
+//
+// These helpers take a root directory so the negative cases can run against
+// copies in t.TempDir(). They return one human-readable problem string per
+// defect and never touch Docker or the network.
+
+// toolPinKeys maps a fixture tool to the KEY holding its pinned version.
+// puppetserver is pinned in images.lock (written by the image pipeline); the
+// others are pinned in versions.env.
+var toolPinKeys = map[string]struct {
+	key    string
+	inLock bool
+}{
+	"r10k":         {"R10K_VERSION", false},
+	"g10k":         {"G10K_VERSION", false},
+	"bolt":         {"BOLT_VERSION", false},
+	"puppetserver": {"PUPPETSERVER_VERSION", true},
+}
 
 // readKeyValues reads a KEY=VALUE file, ignoring blank lines and # comments.
-func readKeyValues(path string) (map[string]string, error) { return nil, nil }
+func readKeyValues(path string) (map[string]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]string{}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		out[strings.TrimSpace(k)] = strings.TrimSpace(v)
+	}
+	return out, nil
+}
 
-// checkFixturesValid returns one problem string per defect found under root.
-func checkFixturesValid(root string) []string { return nil }
+// checkFixturesValid returns one problem string per defect found under root:
+// unparsable JSON, unknown or empty required fields, and a directory or file
+// name that disagrees with the fixture's own tool, tool_version and scenario.
+func checkFixturesValid(root string) []string {
+	var problems []string
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return []string{"cannot read the fixtures directory: " + err.Error()}
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, err := os.ReadDir(filepath.Join(root, e.Name()))
+		if err != nil {
+			problems = append(problems, e.Name()+": cannot read directory: "+err.Error())
+			continue
+		}
+		for _, f := range files {
+			if f.IsDir() || !strings.HasSuffix(f.Name(), ".json") {
+				continue
+			}
+			rel := e.Name() + "/" + f.Name()
+			data, err := os.ReadFile(filepath.Join(root, e.Name(), f.Name()))
+			if err != nil {
+				problems = append(problems, rel+": cannot read: "+err.Error())
+				continue
+			}
+			var fx Fixture
+			dec := json.NewDecoder(bytes.NewReader(data))
+			dec.DisallowUnknownFields()
+			if err := dec.Decode(&fx); err != nil {
+				problems = append(problems, rel+": cannot parse as a fixture: "+err.Error())
+				continue
+			}
+			required := []struct {
+				name  string
+				empty bool
+			}{
+				{"tool", fx.Tool == ""},
+				{"tool_version", fx.ToolVersion == ""},
+				{"scenario", fx.Scenario == ""},
+				{"recorded_on_platform", fx.RecordedOnPlatform == ""},
+				{"argv", len(fx.Argv) == 0},
+				{"run_as", fx.RunAs == ""},
+			}
+			for _, r := range required {
+				if r.empty {
+					problems = append(problems, rel+": field "+r.name+" is missing or empty")
+				}
+			}
+			if want := fx.Tool + "-" + fx.ToolVersion; e.Name() != want {
+				problems = append(problems, rel+": directory name must equal tool-tool_version, want \""+want+"\"")
+			}
+			if want := fx.Scenario + ".json"; f.Name() != want {
+				problems = append(problems, rel+": file name must equal scenario.json, want \""+want+"\"")
+			}
+		}
+	}
+	return problems
+}
 
 // checkFixtureDirsPinned returns one problem string per fixture directory whose
-// version is not the pinned version of its tool.
-func checkFixtureDirsPinned(root, versionsEnv, imagesLock string) []string { return nil }
+// version is not the pinned version of its tool, and per file at the fixtures
+// root other than README.md or *.UNVERIFIED.md.
+func checkFixtureDirsPinned(root, versionsEnv, imagesLock string) []string {
+	var problems []string
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return []string{"cannot read the fixtures directory: " + err.Error()}
+	}
+	pins, pinsErr := readKeyValues(versionsEnv)
+	var lock map[string]string
+	var lockErr error
+	if imagesLock == "" {
+		lockErr = os.ErrNotExist
+	} else {
+		lock, lockErr = readKeyValues(imagesLock)
+	}
+
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() {
+			if name != "README.md" && !strings.HasSuffix(name, ".UNVERIFIED.md") {
+				problems = append(problems, name+": only README.md or *.UNVERIFIED.md may sit at the fixtures root")
+			}
+			continue
+		}
+		tool, version, ok := strings.Cut(name, "-")
+		if !ok {
+			problems = append(problems, name+": fixture directories must be named <tool>-<version>")
+			continue
+		}
+		pin, known := toolPinKeys[tool]
+		if !known {
+			problems = append(problems, name+": no pin is known for tool \""+tool+"\"; add it to toolPinKeys and to versions.env or images.lock")
+			continue
+		}
+		source, sourceName, sourceErr := pins, "versions.env", pinsErr
+		if pin.inLock {
+			source, sourceName, sourceErr = lock, "images.lock", lockErr
+		}
+		if sourceErr != nil {
+			problems = append(problems, name+": cannot check the "+pin.key+" pin because "+sourceName+" is missing or unreadable ("+sourceErr.Error()+")")
+			continue
+		}
+		want, has := source[pin.key]
+		if !has || want == "" {
+			problems = append(problems, name+": "+sourceName+" has no "+pin.key+" to check this directory against")
+			continue
+		}
+		if version != want {
+			problems = append(problems, name+": version \""+version+"\" does not match "+pin.key+"=\""+want+"\" in "+sourceName)
+		}
+	}
+	return problems
+}
 
 // checkFixturesCarryNoSecrets returns one problem string per secret-shaped
-// string found under root or in imagesLock.
-func checkFixturesCarryNoSecrets(root, imagesLock, harborHost string) []string { return nil }
+// string found in any file under root or in imagesLock. Messages name the file
+// and the kind of secret, never the matched value.
+func checkFixturesCarryNoSecrets(root, imagesLock, harborHost string) []string {
+	type needle struct{ label, value string }
+	needles := []needle{
+		{"the secret-leak canary", "STAGEHAND-CANARY"},
+		{"a private key marker", "PRIVATE KEY"},
+		{"an approver token marker", "stagehand-approver-token"},
+	}
+	if harborHost != "" {
+		needles = append(needles, needle{"the operator's registry host", strings.ToLower(harborHost)})
+	}
+
+	var problems []string
+	scan := func(path, label string) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			problems = append(problems, label+": cannot read: "+err.Error())
+			return
+		}
+		lower := strings.ToLower(string(data))
+		for _, n := range needles {
+			hay := string(data)
+			if n.label == "the operator's registry host" {
+				hay = lower
+			}
+			if strings.Contains(hay, n.value) {
+				problems = append(problems, label+": contains "+n.label)
+			}
+		}
+	}
+
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		rel, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			rel = path
+		}
+		scan(path, filepath.ToSlash(rel))
+		return nil
+	})
+	if err != nil {
+		problems = append(problems, "cannot walk the fixtures directory: "+err.Error())
+	}
+	if imagesLock != "" {
+		if _, statErr := os.Stat(imagesLock); statErr == nil {
+			scan(imagesLock, filepath.Base(imagesLock))
+		}
+	}
+	return problems
+}
 
 // ---- test helpers ----
 
