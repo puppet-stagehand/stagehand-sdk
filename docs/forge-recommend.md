@@ -96,8 +96,9 @@ only `forge:rw` that calls Recommend is refused with `PermissionDenied`
 ("facet not declared: forge:recommend"), and a pack with only
 `forge:recommend` cannot call Search or Resolve.
 
-You also need `secrets:rw` (to keep the provider's API key) and
-`documents:rw` (for the provider's index entry, step 2). A copyable manifest
+You also need `secrets:rw` (to keep the provider's API key). The provider
+list itself is changed by an operator, not by your pack (section 2), so
+`documents:rw` does not help with it. A copyable manifest
 with all four is `manifest/testdata/forge-recommend.json`. Check any manifest
 with the loop from `CLAUDE.md`:
 
@@ -109,8 +110,11 @@ When it prints `"ok": true`, the manifest is valid.
 
 ## 2. Configure a provider
 
-A provider is set up with two calls your pack makes itself. There is no
-separate Forge call for it.
+A provider is set up in two parts: a sealed configuration, and a short entry
+in the provider list that points at it. There is no separate Forge call for
+either. Your pack seals the configuration itself, but it does **not** write
+the provider list: an operator does, and on `host.Local` (tests and examples)
+you stand in for the operator with `local.SeedDocument`.
 
 **First, seal the whole configuration** with `Secrets.Store`. The value is one
 JSON object:
@@ -130,9 +134,10 @@ For `openai_compatible`, give the URL up to but not including
 `/chat/completions`, for example `https://api.openai.com/v1` or
 `http://localhost:11434/v1`.
 
-**Second, write the index entry** with `Documents.Put` into the collection
-`llm-providers`, using the provider's name as the document id. The body is
-exactly three keys:
+**Second, add the index entry** to the collection `llm-providers`, using the
+provider's name as the document id. On the console an operator configures
+providers. On `host.Local`, call `local.SeedDocument`, which is the test and
+operator seam. The body is exactly three keys:
 
 | Key | Meaning |
 |---|---|
@@ -143,8 +148,15 @@ exactly three keys:
 Nothing else belongs in that document. In particular, the API key, the model
 and the base URL do not go there; they are only in the sealed value. Putting a
 key anywhere but the Secrets facet breaks this SDK's hard rule about
-credentials. A `Put` with a version of zero only creates; to change an
-existing entry, `Put` again with its current version.
+credentials.
+
+**Why your pack cannot write this list itself.** The provider list and the
+source list are settings the Forge facet trusts. If any pack could change
+them, a pack could point Recommend at a server it controls and read the text
+you send. So only the operator (or a test standing in for one) may change
+them. A direct `Documents` write from a pack to `llm-providers` or
+`forge-sources` is refused with `PERMISSION_DENIED` and the error detail code
+`collection_reserved`. Reading them is still allowed.
 
 ```go
 plaintext, _ := json.Marshal(map[string]any{
@@ -153,13 +165,9 @@ plaintext, _ := json.Marshal(map[string]any{
 ref, err := h.Secrets.Store(ctx, &hostv1.StoreSecretRequest{
     Name: "llm-mine", Plaintext: plaintext,
 })
-// handle err, then:
-body, _ := structpb.NewStruct(map[string]any{
+// handle err, then, as the operator would (host.Local only):
+err = local.SeedDocument(h, "llm-providers", "mine", map[string]any{
     "name": "mine", "label": "My provider", "secret_ref": ref.Ref,
-})
-_, err = h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-    Collection: "llm-providers", DocId: "mine",
-    Body: &hostv1.Json{Value: body},
 })
 ```
 
@@ -187,7 +195,7 @@ Call `Recommend` with a `RecommendRequest`:
 |---|---|
 | `text` | Your need in plain words. Required. At most 2000 characters. |
 | `llm_provider` | The provider's name from step 2. Required. **There is no default provider:** an empty name is refused, and Recommend never picks "the only one you configured" for you. |
-| `sources` | Which registries to search, as a list of names. **An empty list means the public registry (`puppet-forge`) only.** Recommend never searches a private source you did not name. A private source must itself be configured through `forge-sources` (a sealed `{base_url, auth}` plus an index entry), the same two-call shape as a provider. |
+| `sources` | Which registries to search, as a list of names. **An empty list means the public registry (`puppet-forge`) only.** Recommend never searches a private source you did not name. A private source must itself be configured through `forge-sources` (a sealed `{base_url, auth}` plus an index entry), the same shape as a provider: seal it with `Secrets.Store`, then an operator adds the entry, which on `host.Local` is `local.SeedDocument(h, "forge-sources", name, ...)`. |
 | `max_queries` | Optional. How many search terms to use. |
 | `max_candidates` | Optional. How many real results to show the model. |
 | `max_suggestions` | Optional. How many picks to return. |
@@ -404,7 +412,7 @@ report which step and what you saw.
    ```
 
    Save this as `manualcheck/recommend_test.go`. It builds a host with the
-   four permissions, does the two provider-setup calls from section 2, and
+   four permissions, does the two provider-setup steps from section 2, and
    reads your provider settings from the environment so your key never sits in
    a file:
 
@@ -417,8 +425,6 @@ report which step and what you saw.
        "os"
        "strings"
        "testing"
-
-       "google.golang.org/protobuf/types/known/structpb"
 
        hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
        "github.com/puppet-stagehand/stagehand-sdk/host"
@@ -433,8 +439,9 @@ report which step and what you saw.
        return local.New([]string{"documents:rw", "secrets:rw", "forge:rw", "forge:recommend"}, "manual-check")
    }
 
-   // configure does the two calls a pack makes: seal the whole provider
-   // config, then write the name-only index document that points at it.
+   // configure does the two setup steps: seal the whole provider config, then
+   // seed the name-only index document that points at it. The seed stands in
+   // for the operator; a pack's own Documents write is refused.
    func configure(t *testing.T, h *host.Host, name string, cfg map[string]any) {
        t.Helper()
        plaintext, err := json.Marshal(cfg)
@@ -445,13 +452,7 @@ report which step and what you saw.
        if err != nil {
            t.Fatal(err)
        }
-       body, err := structpb.NewStruct(map[string]any{"name": name, "label": name, "secret_ref": ref.Ref})
-       if err != nil {
-           t.Fatal(err)
-       }
-       if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-           Collection: "llm-providers", DocId: name, Body: &hostv1.Json{Value: body},
-       }); err != nil {
+       if err := local.SeedDocument(h, "llm-providers", name, map[string]any{"name": name, "label": name, "secret_ref": ref.Ref}); err != nil {
            t.Fatal(err)
        }
    }

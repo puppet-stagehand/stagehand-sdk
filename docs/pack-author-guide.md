@@ -97,6 +97,33 @@ environment to the final read-back, and `docs/control-repo-authoring-testing.md`
 is the checklist a human follows by hand. This milestone is author-only: it
 does not deploy and does not write back to a real control repo.
 
+## Names you cannot use for your own documents
+Your pack can keep notes of its own in the Documents facet, in collections you
+name yourself (for example `state` or `locks`). A few names are not yours,
+because a facet already uses them for its own bookkeeping:
+
+- anything that starts with `code-`, `deploy-`, `bolt-` or `inventory-`
+- the exact names `forge-sources` and `llm-providers`
+
+Think of them as labelled drawers in the console's filing cabinet: you may
+look inside, but only the facet that owns a drawer may put things in or take
+things out. If your pack tries to write or delete one, the write is refused
+with `PERMISSION_DENIED`, an error detail code of `collection_reserved`, and a
+fix line that says which facet owns it. Reading, listing and querying those
+collections still works. Upper and lower case do not matter, so `CODE-notes`
+is just as reserved as `code-notes`. The fix is to pick another name for your
+own state. A name that only looks similar, such as `codex-notes`,
+`deployments` or `bolts`, is fine.
+
+Proposals are the one exception that looks like a clash: `approval.ProposeBody`
+and `approval.Propose` still create pending proposals in `code-overwrites` and
+`inventory-proposals`, because that is how asking a person works.
+
+Tests and examples that run on `host.Local` sometimes need to put something in
+one of those drawers, for example a language-model provider for the Forge
+facet. They do it with `local.SeedDocument`, which stands in for the operator.
+Real pack code never calls it. `docs/forge-recommend.md` shows it in use.
+
 ## Two documents you owe
 - `docs/USER-GUIDE.md` — explain your pack to someone who has never used
   Puppet. Short sentences. A glossary.

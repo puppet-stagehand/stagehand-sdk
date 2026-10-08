@@ -24,9 +24,10 @@ import (
 // owns, kept deliberately separate because they have different write
 // cadences, different round-trip risk profiles, and different future
 // approval-gate granularity. Each name is defined exactly once, here; no
-// other production file in this repository may write the literal (test
-// files that seed a fixture document directly through Documents are the
-// sole exception).
+// other production file in this repository may write the literal. Tests and
+// operator setup seed these collections through local.SeedDocument; the
+// pack-facing Documents facet refuses writes to them (FND-03,
+// collection_reserved).
 const (
 	envCollection            = "code-environments"
 	puppetfileCollection     = "code-puppetfiles"
