@@ -1,0 +1,54 @@
+/*
+ * Sandboxed-tier base stylesheet (UI bundle contract, format 1).
+ *
+ * The console sends resolved token values over the bridge (see ThemeTokenName
+ * in schema/ts/sandbox.d.ts). The frame host sets each as a custom property on
+ * :root; this file only CONSUMES them. There are no colour literals here, and a
+ * sandbox bundle must not add any: take every colour, space and radius from a
+ * var() below. Fonts are IBM Plex Sans (400, 600) and IBM Plex Mono (400); the
+ * console serves the font files and the frame host declares the @font-face rules.
+ */
+html, body {
+  margin: 0;
+  background: var(--content-bg);
+  color: var(--text);
+  font-family: var(--font-brand);
+  font-size: var(--fs-body);
+  font-weight: var(--fw-regular);
+  line-height: var(--lh-body);
+}
+h1, h2, h3, h4, h5, h6 {
+  font-weight: var(--fw-semibold);
+  line-height: var(--lh-heading);
+  margin: 0 0 var(--space-2);
+}
+h5 { font-size: var(--fs-h5); }
+small, .muted { color: var(--muted); font-size: var(--fs-body-sm); }
+code, pre, kbd { font-family: var(--font-mono); }
+a { color: var(--primary); }
+:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+button, input, select, textarea {
+  font: inherit;
+  min-height: var(--hit-target);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
+  color: var(--text);
+  padding: 0 var(--space-2);
+}
+button { background: var(--primary); color: var(--primary-fg); border-color: var(--primary); cursor: pointer; }
+button.danger { background: var(--danger); color: var(--danger-fg); border-color: var(--danger); }
+.card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+.surface { background: var(--surface-2); border-radius: var(--radius-sm); padding: var(--space-2); }
+/* Status is always glyph + label; these classes only tint the pair. */
+.status-ok { color: var(--success); }
+.status-warn { color: var(--warn); }
+.status-failed { color: var(--danger); }
+.status-info { color: var(--info); }
+.status-pending { color: var(--pending); }
+.pill { border-radius: var(--radius-pill); padding: 0 var(--space-2); background: var(--surface-2); }

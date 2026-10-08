@@ -1,0 +1,16 @@
+{
+  "format": 1,
+  "entry": "index.js",
+  "slots": {
+    "nodeDetailTab": {
+      "label": "Hello"
+    }
+  },
+  "files": {
+    "index.js": {
+      "sha256": "00f1cf4c53d4c18b141e292ac16b6f0b3abce8cacb0837ba6aaa21079cec12c1",
+      "size": 373,
+      "content_type": "text/javascript"
+    }
+  }
+}

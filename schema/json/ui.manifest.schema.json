@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.puppetstagehand.com/appcenter/ui-manifest/v1.json",
+  "title": "Stagehand pack UI bundle index (format 1)",
+  "description": "/stagehand/ui/ui.manifest.json. manifest.ui_digest = \"sha256:\" + hex(sha256(exact bytes of this file)). The console serves only files listed here. The uibundle package and `pack-check --ui` apply these rules plus the cross-checks a schema cannot express (entry is listed and is text/javascript; the sum of sizes is at most 16 MiB; no path has a . or .. segment; slots agree with manifest.slots; every file's bytes match).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "entry", "slots", "files"],
+  "properties": {
+    "format": { "const": 1 },
+    "entry": { "$ref": "#/$defs/path", "description": "In-process ES module. Default export { contract_version: 1, slots }." },
+    "sandbox_entry": { "$ref": "#/$defs/path", "description": "Optional single self-contained ES module (React bundled, no chunks, no externals) for the sandboxed tier. Default export { contract_version: 1, slots: { <slot>: mount } }." },
+    "slots": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "enum": ["page", "settingsPanel", "nodeDetailTab", "deviceDetailTab", "inventoryKindView", "complianceSourceCard", "dashboardCard"] },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["label"],
+        "properties": { "label": { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[^<>\\u0000-\\u001f\\u007f]+$" } }
+      }
+    },
+    "files": {
+      "type": "object",
+      "minProperties": 1,
+      "maxProperties": 256,
+      "propertyNames": { "$ref": "#/$defs/path" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sha256", "size", "content_type"],
+        "properties": {
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 0, "maximum": 8388608 },
+          "content_type": { "enum": ["text/javascript", "text/css", "application/json", "image/png", "image/webp", "font/woff2"] }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "maxLength": 200,
+      "pattern": "^(?!.*(^|/)\\.{1,2}(/|$))(?!.*//)[A-Za-z0-9._/-]+$"
+    }
+  }
+}

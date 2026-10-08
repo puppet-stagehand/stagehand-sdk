@@ -143,7 +143,7 @@ func Validate(m *Manifest) []Finding {
 		}
 	}
 	if len(m.Slots) > 0 && !reDigest.MatchString(m.UIDigest) {
-		add("ui_digest_missing", "/ui_digest", "packs with slots must carry the sha256 digest of /stagehand/ui", "Run `pack-build` — it computes and writes ui_digest; never hand-edit it.")
+		add("ui_digest_missing", "/ui_digest", "packs with slots must carry the sha256 digest of /stagehand/ui/ui.manifest.json", "Run `expansion-build ui` — it computes and writes ui_digest; never hand-edit it. Contract: docs/ui-bundle-contract.md.")
 	}
 	if len(m.Slots) == 0 && m.UIDigest != "" {
 		add("ui_digest_without_slots", "/ui_digest", "ui_digest set on a headless pack", "Remove ui_digest or declare the slots the bundle provides.")
