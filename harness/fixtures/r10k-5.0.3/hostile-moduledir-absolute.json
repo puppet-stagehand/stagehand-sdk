@@ -1,0 +1,66 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Removing unmanaged path"
+  ],
+  "extra": {
+    "deploy_success_marker": true,
+    "environment_entries": [
+      ".git",
+      ".r10k-deploy.json",
+      "Puppetfile",
+      "environment.conf",
+      "manifests"
+    ],
+    "module_installed_at_env_joined_path": false,
+    "module_installed_outside_env": true,
+    "moduledir": "/srv/work/victims/abs-victim",
+    "unmanaged_file_purged": true,
+    "victim_entries": [
+      "m"
+    ]
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "moduledir written straight into the control repo Puppetfile, bypassing the SDK validator on purpose (FND-02 evidence). Victims live under /srv/work/victims only.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "hostile-moduledir-absolute",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/victims/abs-victim/m\nINFO\t -> Removing unmanaged path /srv/work/victims/abs-victim/keep.txt\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "8c0f56888eb456b8",
+  "tree_hash_excl_markers_after": "c977ad904f5638d4"
+}

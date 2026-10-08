@@ -1,0 +1,102 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "Failed to evaluate"
+  ],
+  "extra": {
+    "broken_environment_dir_present": true,
+    "broken_marker_deploy_success": false,
+    "broken_marker_present": false,
+    "environments_entries": [
+      "broken",
+      "production"
+    ],
+    "marker_changed": true,
+    "marker_changed_fields": [
+      "deploy_success",
+      "finished_at",
+      "started_at"
+    ],
+    "marker_deploy_success": false,
+    "production_environment_intact": true,
+    "production_marker_deploy_success": false,
+    "tree_changed": false,
+    "variant_bad_module_ref": {
+      "exit_code": 1,
+      "failing_marker_deploy_success": false,
+      "failing_marker_present": false,
+      "production_environment_intact": true,
+      "production_marker_changed": true,
+      "production_marker_deploy_success": false
+    },
+    "variant_failing_env_sorts_after_production": {
+      "exit_code": 1,
+      "failing_marker_deploy_success": false,
+      "failing_marker_present": false,
+      "production_environment_intact": true,
+      "production_marker_changed": true,
+      "production_marker_deploy_success": true
+    }
+  },
+  "files_changed": [
+    ".r10k-deploy.json"
+  ],
+  "marker_after": {
+    "deploy_success": false,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Production deployed once, then a second branch named broken was pushed whose Puppetfile is not valid Ruby, and every environment was deployed. marker_* describe production. The variant_* extras repeat the run with the failing environment sorting after production, and with a Puppetfile that parses but names a missing ref.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "deploy-all-partial",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/broken\nINFO\t -> Environment broken is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/broken/Puppetfile'\nERROR\t -> Failed to evaluate /srv/work/r10k/environments/broken/Puppetfile\nOriginal exception:\n/srv/work/r10k/environments/broken/Puppetfile:3: syntax error, unexpected local variable or method, expecting `do' or '{' or '('\n  this is not ruby (((\n       ^~\n\nINFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k/environments/production/modules/m\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "13bc304cc28d3c56",
+  "tree_hash_before": "4577f74558fd2ec3",
+  "tree_hash_excl_markers_after": "05eedc9945944ff3",
+  "tree_hash_excl_markers_before": "05eedc9945944ff3"
+}

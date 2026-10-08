@@ -1,0 +1,83 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Deploying module to"
+  ],
+  "extra": {
+    "deploy_success_marker": true,
+    "environment_entries": [
+      ".git",
+      ".r10k-deploy.json",
+      "Puppetfile",
+      "environment.conf",
+      "keep.txt",
+      "m",
+      "manifests",
+      "modules"
+    ],
+    "module_installed_in_env_root": true,
+    "module_installed_outside_env": false,
+    "moduledir": ".",
+    "tracked_files_survived": true,
+    "unmanaged_file_purged": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "moduledir written straight into the control repo Puppetfile, bypassing the SDK validator on purpose (FND-02 evidence). Victims live under /srv/work/victims only.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "hostile-moduledir-dot",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k/environments/production/m\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "f3b9058c3bbdf5d5",
+  "tree_hash_before": "338b76fd1dad1fdd",
+  "tree_hash_excl_markers_after": "f4ac457c6d91c075",
+  "tree_hash_excl_markers_before": "a2c28db4efecb848"
+}

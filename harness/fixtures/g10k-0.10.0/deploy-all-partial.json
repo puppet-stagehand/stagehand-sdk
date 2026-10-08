@@ -1,0 +1,85 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "Trailing comma or invalid setting"
+  ],
+  "extra": {
+    "broken_environment_dir_present": true,
+    "broken_marker_deploy_success": false,
+    "broken_marker_present": true,
+    "environments_entries": [
+      "broken",
+      "production"
+    ],
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "production_environment_intact": true,
+    "production_marker_deploy_success": true,
+    "tree_changed": false,
+    "variant_bad_module_ref": {
+      "exit_code": 1,
+      "failing_marker_deploy_success": false,
+      "failing_marker_present": true,
+      "production_environment_intact": true,
+      "production_marker_changed": false,
+      "production_marker_deploy_success": true
+    },
+    "variant_failing_env_sorts_after_production": {
+      "exit_code": 1,
+      "failing_marker_deploy_success": false,
+      "failing_marker_present": true,
+      "production_environment_intact": true,
+      "production_marker_changed": false,
+      "production_marker_deploy_success": true
+    }
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "Production deployed once, then a second branch named broken was pushed whose Puppetfile is not valid Ruby, and every environment was deployed. marker_* describe production. The variant_* extras repeat the run with the failing environment sorting after production, and with a Puppetfile that parses but names a missing ref.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "deploy-all-partial",
+  "stderr": "Error: Trailing comma or invalid setting for module found in /srv/work/g10k/environments/broken/Puppetfile for module m line: mod 'm',:git =>\n",
+  "stdout": "Need to sync /srv/work/g10k/environments/broken\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "cbabd622d7881a6c",
+  "tree_hash_before": "cbabd622d7881a6c",
+  "tree_hash_excl_markers_after": "b59cf6bab3515e87",
+  "tree_hash_excl_markers_before": "b59cf6bab3515e87"
+}

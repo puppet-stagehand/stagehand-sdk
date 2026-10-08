@@ -1,0 +1,90 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Removing unmanaged path"
+  ],
+  "extra": {
+    "local_pp_survived": false,
+    "manifests_entries": [
+      "m",
+      "site.pp"
+    ],
+    "marker_changed": true,
+    "marker_changed_fields": [
+      "finished_at",
+      "signature",
+      "started_at"
+    ],
+    "marker_deploy_success": true,
+    "module_installed_in_manifests": true,
+    "moduledir": "manifests",
+    "site_pp_survived": true,
+    "tree_changed": true
+  },
+  "files_changed": [
+    ".r10k-deploy.json",
+    "Puppetfile",
+    "manifests/local.pp",
+    "manifests/m/manifests/init.pp",
+    "manifests/m/metadata.json"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "moduledir 'manifests' names a directory the control repo tracks (site.pp). An untracked local.pp was placed in it before the deploy (research A10).",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "tracked-dir-moduledir",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k/environments/production/manifests/m\nINFO\t -> Removing unmanaged path /srv/work/r10k/environments/production/manifests/local.pp\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "9f68c46139f09901",
+  "tree_hash_before": "05b103616c71adda",
+  "tree_hash_excl_markers_after": "d56f36efe6efd39e",
+  "tree_hash_excl_markers_before": "e99f072869714f95"
+}

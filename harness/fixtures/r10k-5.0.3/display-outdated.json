@@ -1,0 +1,84 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "display",
+    "--modules",
+    "--detail",
+    "--fetch",
+    "--format",
+    "json",
+    "--config",
+    "/srv/work/r10k/r10k.yaml",
+    "production"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "\"status\""
+  ],
+  "extra": {
+    "display_wrote_files": false,
+    "environment_keys": {
+      "production": [
+        "name",
+        "signature",
+        "status"
+      ]
+    },
+    "marker_changed": false,
+    "marker_changed_fields": null,
+    "marker_deploy_success": true,
+    "status": {
+      "production": "outdated"
+    },
+    "tree_changed": false
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "r10k deploy display --fetch after a new commit reached the control repo and was not deployed.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "display-outdated",
+  "stderr": "",
+  "stdout": "{\n  \"sources\": [\n    {\n      \"name\": \"control\",\n      \"basedir\": \"/srv/work/r10k/environments\",\n      \"remote\": \"file:///srv/git/control.git\",\n      \"environments\": [\n        {\n          \"name\": \"production\",\n          \"signature\": \"<SHA>\",\n          \"status\": \"outdated\"\n        }\n      ]\n    }\n  ]\n}\n",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "7b1095f0a7d7e22d",
+  "tree_hash_before": "7b1095f0a7d7e22d",
+  "tree_hash_excl_markers_after": "05eedc9945944ff3",
+  "tree_hash_excl_markers_before": "05eedc9945944ff3"
+}

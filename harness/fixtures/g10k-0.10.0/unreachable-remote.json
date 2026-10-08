@@ -5,28 +5,19 @@
     "/srv/work/g10k/g10k.yaml",
     "-info",
     "-branch",
-    "production",
-    "-dryrun"
+    "production"
   ],
   "exit_code": 0,
   "expect_lines": [
-    "Synced"
+    "Could not resolve git repository in source"
   ],
   "extra": {
-    "live_environment_conf_is_remote": true,
-    "marker_changed": true,
-    "marker_changed_fields": [
-      "finished_at"
-    ],
+    "environment_intact": true,
+    "marker_changed": false,
+    "marker_changed_fields": null,
     "marker_deploy_success": true,
-    "marker_signature_is_remote_head_after": true,
-    "marker_signature_is_remote_head_before": true,
-    "tree_changed": false,
-    "tree_changed_incl_markers": true
+    "tree_changed": false
   },
-  "files_changed": [
-    ".g10k-deploy.json"
-  ],
   "marker_after": {
     "deploy_success": true,
     "finished_at": "<TS>",
@@ -57,16 +48,16 @@
     "signature",
     "started_at"
   ],
-  "notes": "g10k -dryrun against an environment already at the remote HEAD. tree_changed covers the working files, tree_changed_incl_markers adds the deploy marker.",
+  "notes": "The control repo was renamed away after a first successful deploy, then the same deploy was run again.",
   "recorded_on_platform": "linux/amd64",
   "run_as": "deploy",
-  "scenario": "dryrun-in-sync",
+  "scenario": "unreachable-remote",
   "stderr": "",
-  "stdout": "Synced /srv/work/g10k/g10k.yaml with branch production with 2 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "stdout": "WARN: git repository file:///srv/git/control.git does not exist or is unreachable at this moment! Error: exit status 1 fatal: '/srv/git/control.git' does not appear to be a git repository\nfatal: Could not read from remote repository.\n\nPlease make sure you have the correct access rights\nand the repository exists.\n\nWARNING: Could not resolve git repository in source 'control' (file:///srv/git/control.git)\nSynced /srv/work/g10k/g10k.yaml with branch production with 0 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
   "tool": "g10k",
   "tool_version": "0.10.0",
-  "tree_hash_after": "a320c4a0179c8ab8",
-  "tree_hash_before": "6bfadc7e27dcdc05",
+  "tree_hash_after": "bd69520c0d1d2853",
+  "tree_hash_before": "bd69520c0d1d2853",
   "tree_hash_excl_markers_after": "b59cf6bab3515e87",
   "tree_hash_excl_markers_before": "b59cf6bab3515e87"
 }

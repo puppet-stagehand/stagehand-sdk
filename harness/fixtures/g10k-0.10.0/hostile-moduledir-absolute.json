@@ -1,0 +1,61 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "production"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Need to sync"
+  ],
+  "extra": {
+    "deploy_success_marker": true,
+    "environment_entries": [
+      ".g10k-deploy.json",
+      "Puppetfile",
+      "environment.conf",
+      "manifests",
+      "srv"
+    ],
+    "module_installed_at_env_joined_path": true,
+    "module_installed_outside_env": false,
+    "moduledir": "/srv/work/victims/abs-victim",
+    "unmanaged_file_purged": false,
+    "victim_entries": [
+      "keep.txt"
+    ]
+  },
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "d642a02f5560036081848c2a70574e7057eff52c44c19bf6ea9b1375c34d1cf5",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "moduledir written straight into the control repo Puppetfile, bypassing the SDK validator on purpose (FND-02 evidence). Victims live under /srv/work/victims only.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "hostile-moduledir-absolute",
+  "stderr": "",
+  "stdout": "Need to sync /srv/work/g10k/environments/production\nNeed to sync /srv/work/g10k/environments/production/srv/work/victims/abs-victim/m\nSynced /srv/work/g10k/g10k.yaml with branch production with 2 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "228e03f868ea79af",
+  "tree_hash_excl_markers_after": "ca07b367ccb49f5f"
+}

@@ -1,0 +1,77 @@
+{
+  "argv": [
+    "r10k",
+    "deploy",
+    "environment",
+    "production",
+    "--modules",
+    "--config",
+    "/srv/work/r10k-root/r10k.yaml",
+    "-v",
+    "info"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Deploying module to"
+  ],
+  "extra": {
+    "base_dir_owner_uid": "1000",
+    "cache_dir_owner_uid": "0",
+    "deploy_user_uid": "1000",
+    "environment_dir_owner_uid": "0",
+    "existing_tree_environment_conf_owner_uid": "0",
+    "existing_tree_environment_dir_owner_uid": "1000",
+    "existing_tree_exit_code": 0,
+    "existing_tree_marker_owner_uid": "0",
+    "existing_tree_modules_dir_owner_uid": "1000",
+    "marker_deploy_success": true,
+    "marker_owner_uid": "0",
+    "modules_dir_owner_uid": "0",
+    "plain_root_cache_dir_owner_uid": "0",
+    "plain_root_environment_dir_created": false,
+    "plain_root_exit_code": 1,
+    "plain_root_git_refused_dubious_owner": true,
+    "plain_root_marker_written": false,
+    "puppetfile_owner_uid": "0"
+  },
+  "files_changed": [
+    ".r10k-deploy.json",
+    "Puppetfile",
+    "environment.conf",
+    "manifests/site.pp",
+    "modules/m/manifests/init.pp",
+    "modules/m/metadata.json"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "module_deploys": [
+      {
+        "name": "m",
+        "sha": "<SHA>",
+        "version": "main"
+      }
+    ],
+    "name": "production",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "module_deploys",
+    "name",
+    "signature",
+    "started_at"
+  ],
+  "notes": "r10k run as root with git safe.directory allowed in the global git config of root, into a fresh tree under a deploy-owned base directory. plain_root_* describe the same run without safe.directory; existing_tree_* describe a root run over a tree the deploy user created. Uids are numbers: 0 is root, 1000 is deploy.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "root",
+  "scenario": "run-as-root-ownership",
+  "stderr": "INFO\t -> Deploying environment /srv/work/r10k-root/environments/production\nINFO\t -> Environment production is now at <SHA>\nINFO\t -> Using Puppetfile '/srv/work/r10k-root/environments/production/Puppetfile'\nINFO\t -> Deploying module to /srv/work/r10k-root/environments/production/modules/m\n",
+  "stdout": "",
+  "tool": "r10k",
+  "tool_version": "5.0.3",
+  "tree_hash_after": "509cef704dd2b43f",
+  "tree_hash_excl_markers_after": "05eedc9945944ff3"
+}

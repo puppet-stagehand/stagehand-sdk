@@ -5,28 +5,21 @@
     "/srv/work/g10k/g10k.yaml",
     "-info",
     "-branch",
-    "production",
-    "-dryrun"
+    "production"
   ],
-  "exit_code": 0,
+  "exit_code": 1,
   "expect_lines": [
-    "Synced"
+    "is not writable"
   ],
   "extra": {
-    "live_environment_conf_is_remote": true,
-    "marker_changed": true,
-    "marker_changed_fields": [
-      "finished_at"
-    ],
+    "cachedir_writable_by_deploy": false,
+    "chmod_scope": "recursive a-w as deploy, never root",
+    "environment_intact": true,
+    "marker_changed": false,
+    "marker_changed_fields": null,
     "marker_deploy_success": true,
-    "marker_signature_is_remote_head_after": true,
-    "marker_signature_is_remote_head_before": true,
-    "tree_changed": false,
-    "tree_changed_incl_markers": true
+    "tree_changed": false
   },
-  "files_changed": [
-    ".g10k-deploy.json"
-  ],
   "marker_after": {
     "deploy_success": true,
     "finished_at": "<TS>",
@@ -57,16 +50,16 @@
     "signature",
     "started_at"
   ],
-  "notes": "g10k -dryrun against an environment already at the remote HEAD. tree_changed covers the working files, tree_changed_incl_markers adds the deploy marker.",
+  "notes": "After a first successful deploy the whole cache directory was made read-only for the deploy user (root would ignore it, Pitfall 7).",
   "recorded_on_platform": "linux/amd64",
   "run_as": "deploy",
-  "scenario": "dryrun-in-sync",
-  "stderr": "",
-  "stdout": "Synced /srv/work/g10k/g10k.yaml with branch production with 2 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "scenario": "readonly-cachedir",
+  "stderr": "checkDirAndCreate(): Error: /srv/work/g10k/cache exists, but is not writable! Exiting!\n",
+  "stdout": "",
   "tool": "g10k",
   "tool_version": "0.10.0",
-  "tree_hash_after": "a320c4a0179c8ab8",
-  "tree_hash_before": "6bfadc7e27dcdc05",
+  "tree_hash_after": "ab65737e1e8eaed3",
+  "tree_hash_before": "ab65737e1e8eaed3",
   "tree_hash_excl_markers_after": "b59cf6bab3515e87",
   "tree_hash_excl_markers_before": "b59cf6bab3515e87"
 }
