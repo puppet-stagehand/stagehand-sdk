@@ -1,0 +1,35 @@
+# Real-tool harness (FND-06, D-07). Started only by harness/run.sh.
+#
+# No "name:" key: the compose project name comes from COMPOSE_PROJECT_NAME,
+# which run.sh derives from the repo path so two checkouts (for example parallel
+# worktrees) never share containers or volumes. Nothing here publishes a port.
+#
+# The image name carries the registry host and project (D-18) from the
+# gitignored harness/.env. There is no default on purpose.
+services:
+  runner:
+    build:
+      context: runner
+      args:
+        RUBY_IMAGE: ${RUBY_IMAGE:?run the harness through ./harness/run.sh}
+        R10K_VERSION: ${R10K_VERSION:?run the harness through ./harness/run.sh}
+        BOLT_VERSION: ${BOLT_VERSION:?run the harness through ./harness/run.sh}
+        G10K_VERSION: ${G10K_VERSION:?run the harness through ./harness/run.sh}
+        G10K_SHA256_LINUX_AMD64: ${G10K_SHA256_LINUX_AMD64:?run the harness through ./harness/run.sh}
+        G10K_SHA256_LINUX_ARM64: ${G10K_SHA256_LINUX_ARM64:?run the harness through ./harness/run.sh}
+        HTTP_REQUEST_VERSION: ${HTTP_REQUEST_VERSION:?run the harness through ./harness/run.sh}
+    image: ${STAGEHAND_HARBOR_HOST:?set STAGEHAND_HARBOR_HOST in harness/.env}/${STAGEHAND_HARBOR_PROJECT:?set STAGEHAND_HARBOR_PROJECT in harness/.env}/${RUNNER_IMAGE_NAME:?run the harness through ./harness/run.sh}:${RUNNER_TAG:?run the harness through ./harness/run.sh}
+    volumes:
+      - gitfixtures:/srv/git
+      - work:/srv/work
+      - ./scripts:/opt/harness-scripts:ro
+    healthcheck:
+      test: ["CMD-SHELL", "r10k version && g10k -version && bolt --version"]
+      interval: 10s
+      timeout: 60s
+      retries: 6
+      start_period: 5s
+
+volumes:
+  gitfixtures:
+  work:

@@ -1,1 +1,4 @@
 /dist/
+
+# Local harness settings: registry host and project values (D-18). Never committed.
+harness/.env
