@@ -40,6 +40,21 @@ const (
 //
 // ---------------------------------------------------------------- Documents
 // Always granted (own namespace).
+//
+// Reserved collections. A facet owns every collection whose name starts with
+// code-, deploy-, bolt- or inventory- (compared case-insensitively) and the
+// two names forge-sources and llm-providers. A pack's Put or Delete on one is
+// refused with PERMISSION_DENIED and ErrorDetail code collection_reserved;
+// Get, List and Query on them still work.
+//
+// Approval proposals. The host registers each approval proposal collection
+// (code-overwrites, inventory-proposals) and accepts a pending proposal there
+// as an ordinary Put. Changing a proposal's status to approved or rejected
+// needs the approver token in gRPC metadata key stagehand-approver-token,
+// verified against that Kind's approve scope; without it the write is refused
+// with ErrorDetail code approval_transition_requires_token. A decided
+// proposal is immutable: a later write is refused with ErrorDetail code
+// approval_proposal_decided.
 type DocumentsClient interface {
 	Get(ctx context.Context, in *GetDocumentRequest, opts ...grpc.CallOption) (*Document, error)
 	Put(ctx context.Context, in *PutDocumentRequest, opts ...grpc.CallOption) (*PutDocumentResponse, error)
@@ -112,6 +127,21 @@ func (c *documentsClient) Delete(ctx context.Context, in *DeleteDocumentRequest,
 //
 // ---------------------------------------------------------------- Documents
 // Always granted (own namespace).
+//
+// Reserved collections. A facet owns every collection whose name starts with
+// code-, deploy-, bolt- or inventory- (compared case-insensitively) and the
+// two names forge-sources and llm-providers. A pack's Put or Delete on one is
+// refused with PERMISSION_DENIED and ErrorDetail code collection_reserved;
+// Get, List and Query on them still work.
+//
+// Approval proposals. The host registers each approval proposal collection
+// (code-overwrites, inventory-proposals) and accepts a pending proposal there
+// as an ordinary Put. Changing a proposal's status to approved or rejected
+// needs the approver token in gRPC metadata key stagehand-approver-token,
+// verified against that Kind's approve scope; without it the write is refused
+// with ErrorDetail code approval_transition_requires_token. A decided
+// proposal is immutable: a later write is refused with ErrorDetail code
+// approval_proposal_decided.
 type DocumentsServer interface {
 	Get(context.Context, *GetDocumentRequest) (*Document, error)
 	Put(context.Context, *PutDocumentRequest) (*PutDocumentResponse, error)
@@ -1539,9 +1569,11 @@ const (
 // RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
 // putting an item back after removing it is an ungated create, so a replace
 // can be done as a remove followed by a put. ReorderHieraLevels and
-// SetModuledir change effective behaviour and are ungated too. A caller that
-// can also write the Documents facet directly can bypass the gate on
-// host.Local, since Documents has no access control.
+// SetModuledir change effective behaviour and are ungated too. Since Phase 13,
+// Documents refuses pack writes to every code- collection and refuses a forged approval transition,
+// so a caller holding only Documents access cannot bypass the gate. The
+// remove-then-put, ReorderHieraLevels and SetModuledir paths above remain
+// open to a code:rw holder by design (AR-09-07).
 type CodeClient interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
@@ -1610,6 +1642,11 @@ type CodeClient interface {
 	// the target has changed since. Requires code:rw only.
 	ApplyPuppetfileModuleOverwrite(ctx context.Context, in *ApplyPuppetfileModuleOverwriteRequest, opts ...grpc.CallOption) (*PuppetfileModule, error)
 	RemovePuppetfileModule(ctx context.Context, in *RemovePuppetfileModuleRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	// SetModuledir sets the Puppetfile moduledir.
+	// moduledir must be one safe relative path segment: 1 to 64 characters from A-Z a-z 0-9 _ . and -, not starting with . or -.
+	// An absolute path, .., a nested path, or a hidden or option-like name is
+	// refused with INVALID_ARGUMENT and ErrorDetail code moduledir_invalid.
+	// An empty value clears the line.
 	SetModuledir(ctx context.Context, in *SetModuledirRequest, opts ...grpc.CallOption) (*Puppetfile, error)
 	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
 	// module model. Re-parsing that text yields the identical model — the
@@ -2054,9 +2091,11 @@ func (c *codeClient) ApplyImport(ctx context.Context, in *ApplyImportRequest, op
 // RemoveHieraDataKey, DeleteHieraDataFile, DeleteEnvironment) are ungated, and
 // putting an item back after removing it is an ungated create, so a replace
 // can be done as a remove followed by a put. ReorderHieraLevels and
-// SetModuledir change effective behaviour and are ungated too. A caller that
-// can also write the Documents facet directly can bypass the gate on
-// host.Local, since Documents has no access control.
+// SetModuledir change effective behaviour and are ungated too. Since Phase 13,
+// Documents refuses pack writes to every code- collection and refuses a forged approval transition,
+// so a caller holding only Documents access cannot bypass the gate. The
+// remove-then-put, ReorderHieraLevels and SetModuledir paths above remain
+// open to a code:rw holder by design (AR-09-07).
 type CodeServer interface {
 	// ------------------------------------------------------ Environments
 	// An environment's name is its branch/directory identity, 1:1 with the
@@ -2125,6 +2164,11 @@ type CodeServer interface {
 	// the target has changed since. Requires code:rw only.
 	ApplyPuppetfileModuleOverwrite(context.Context, *ApplyPuppetfileModuleOverwriteRequest) (*PuppetfileModule, error)
 	RemovePuppetfileModule(context.Context, *RemovePuppetfileModuleRequest) (*emptypb.Empty, error)
+	// SetModuledir sets the Puppetfile moduledir.
+	// moduledir must be one safe relative path segment: 1 to 64 characters from A-Z a-z 0-9 _ . and -, not starting with . or -.
+	// An absolute path, .., a nested path, or a hidden or option-like name is
+	// refused with INVALID_ARGUMENT and ErrorDetail code moduledir_invalid.
+	// An empty value clears the line.
 	SetModuledir(context.Context, *SetModuledirRequest) (*Puppetfile, error)
 	// RenderPuppetfile emits the canonical Puppetfile DSL text for the stored
 	// module model. Re-parsing that text yields the identical model — the
