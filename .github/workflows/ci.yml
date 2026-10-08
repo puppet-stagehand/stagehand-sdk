@@ -23,3 +23,5 @@ jobs:
         run: buf breaking --against '.git#branch=main'
       - run: go build ./...
       - run: go test ./... -race
+      - name: expansion-build (nested module; ./... skips it)
+        run: go test ./cmd/expansion-build/... -race

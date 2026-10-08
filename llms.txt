@@ -6,6 +6,8 @@
 - manifest/schema.json: the pack manifest
 - schema/proto/stagehand/host/v1/host.proto: facets the worker may call (permission strings in comments)
 - schema/proto/stagehand/host/v1/worker.proto: services the worker implements
-- schema/ts/slots.d.ts: UI slots and props
+- schema/ts/slots.d.ts: UI slots, props and the entry shape (sandbox.d.ts: sandboxed tier)
+- docs/ui-bundle-contract.md: ui.manifest.json, ui_digest rule, runtime shims
+- docs/expansion-build.md: building a pack's UI with `expansion-build ui`
 - examples/hello/manifest.json: a valid headless-plus-tab pack
 - docs/pack-author-guide.md: ELI10 walkthrough

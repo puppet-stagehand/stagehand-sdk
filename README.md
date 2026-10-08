@@ -22,8 +22,14 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `schema/json/settings-ui.schema.json` | Renderable subset of JSON Schema for pack settings |
 | `schema/proto/stagehand/host/v1/host.proto` | Facets the worker calls; permission strings in comments |
 | `schema/proto/stagehand/host/v1/worker.proto` | Services the worker implements; extension points |
-| `schema/ts/slots.d.ts` | UI slot kinds and props |
-| `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json` |
+| `schema/ts/slots.d.ts`, `schema/ts/sandbox.d.ts` | UI slot kinds, entry shape and the sandboxed-tier `mount`/`host` contract |
+| `schema/json/ui.manifest.schema.json` | The UI bundle index (`ui.manifest.json`); `manifest.ui_digest` is its digest |
+| `schema/css/sandbox-tokens.css` | Base styles for the sandboxed tier; consumes theme tokens only |
+| `cmd/expansion-build` | Pack builder; `ui` builds a pack's UI bundle (own Go module, esbuild inside) |
+| `docs/expansion-build.md` | ELI10 guide and reference for `expansion-build ui` |
+| `uibundle/` | Reference implementation of the bundle rules; backs `pack-check --ui` |
+| `docs/ui-bundle-contract.md` | The UI bundle contract |
+| `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json`; `--ui dir` also verifies a built UI bundle |
 | `examples/hello` | A valid pack manifest (node-detail tab + job) |
 | `examples/control-repo-authoring` | Worked proof that the Code facet, the registry search, the suggestion step and the approval gate compose into one workflow; author-only, never deploys |
 | `docs/control-repo-authoring.md` | End-to-end ELI10 authoring guide for that example |

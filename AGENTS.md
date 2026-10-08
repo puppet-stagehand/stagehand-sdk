@@ -26,7 +26,24 @@ go run ./cmd/pack-check --format json path/to/manifest.json
 ```
 Fix every finding using its `fix` line; do not work around a finding. When `ok: true`, the manifest is valid for contract_version 1.
 
-(Preview 0.0.1: only `pack-check` exists. `pack-build`, the Go worker helpers, `host.Local`, the conformance suite, `@stagehand/sdk-ui` and `pack-build mcp` are the next phases — see ROADMAP in docs/.)
+With a UI, also check the built bundle: `go run ./cmd/pack-check --ui path/to/ui path/to/manifest.json`. The bundle contract (index file, digest rule, shims, entry shape) is `docs/ui-bundle-contract.md`.
+
+(Preview 0.0.1: `pack-check` and `expansion-build ui` exist. The rest of `expansion-build` (full image layout, signing, push; formerly called `pack-build`), the Go worker helpers, `host.Local`, the conformance suite, `@stagehand/sdk-ui` runtime helpers (the type contract in `schema/ts` exists) and `expansion-build mcp` are the next phases — see ROADMAP in docs/.)
+
+## expansion-build (UI slice built; image, signing and push are later slices)
+`expansion-build` (renamed from `pack-build` on 2026-09-14) is the SDK's pack builder. Today it has one subcommand, `expansion-build ui`, which turns `ui/src` into the `ui/` bundle the console loads and writes `ui_digest` into `manifest.json`. Never build or edit a UI bundle, `ui.manifest.json` or `ui_digest` by hand. Guide: `docs/expansion-build.md`; contract: `docs/ui-bundle-contract.md`.
+
+Setup:
+- `manifest.json` carries a placeholder `"ui_digest": "sha256:" + 64 zeros`; the build replaces only that value.
+- Sources: `ui/src/index.tsx` (default-exports a `PackEntry`), optional `ui/src/sandbox.tsx` (a `SandboxEntry`), and `ui/src/slots.json` (slot name to label; keys must equal `manifest.slots`). Packages come from the pack's `node_modules`.
+- Run (from the SDK repo root, or with `GOWORK=<sdk>/go.work` and the import path `github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-build` elsewhere):
+```
+go run ./cmd/expansion-build ui --src ui/src --out dist/ui --manifest manifest.json
+go run ./cmd/pack-check --ui dist/ui manifest.json
+```
+- It is its own Go module (`cmd/expansion-build/go.mod`, esbuild pinned inside; a `go.work` joins it to the root). `go test ./...` from the root skips nested modules: test it with `go test ./cmd/expansion-build/...`.
+- Fix every finding with its `fix` line, as with `pack-check`; do not work around one. The lints refuse raw colour literals, emoji, non-IBM-Plex fonts and weight 700, and the words "converged" and "no-op".
+- Not built yet: CSS or binary assets in a bundle (a finding), the full `/stagehand/` layout, image build, cosign signing, push, the conformance suite.
 
 ## Ask the user only about product decisions
 What the pack does, its tier and licence, which permissions it should request, what its settings are. Never ask about contract details — they are in the schemas.
