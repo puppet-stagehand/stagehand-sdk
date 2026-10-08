@@ -62,6 +62,63 @@ func TestDocsClaimsAreCurrent(t *testing.T) {
 			},
 			why: "D-14: generated code must carry the corrected contract text (run buf generate, then go generate ./schema)",
 		},
+		{
+			path: "../docs/code-overwrite-gating.md",
+			mustContain: []string{
+				"A Puppetfile poisoned before 12.1 is not refused when it is read",
+				"collection_reserved",
+			},
+			mustNotContain: []string{
+				"facet has no access control, so a pack that can call",
+			},
+			why: "D-14 retired the Documents-has-no-ACL claim; D-13 requires the pre-12.1 read caveat to be stated, not implied away",
+		},
+		{
+			path: "../docs/approval-pattern.md",
+			mustContain: []string{
+				"approval_transition_requires_token",
+				"stagehand-approver-token",
+			},
+			mustNotContain: []string{
+				"Documents store has no ACL, so anything that can reach the host",
+				"A store with no ACL can still be",
+				"No field-level enforcement on the proposals collection",
+			},
+			why: "D-14: FND-03 closed INT-4; the transition guard and its token key are the corrected description",
+		},
+		{
+			path: "../docs/code-import.md",
+			mustContain: []string{
+				"collection_reserved",
+			},
+			mustNotContain: []string{
+				"the Documents facet has no access",
+			},
+			why: "D-14: Documents refuses a pack's writes to code- collections since Phase 13",
+		},
+		{
+			path: "../docs/control-repo-authoring-testing.md",
+			mustContain: []string{
+				"A Puppetfile poisoned before 12.1 is not refused when it is read",
+				"### Step 20",
+				"### Step 23",
+			},
+			mustNotContain: []string{
+				"Two kinds of value are deliberately still allowed",
+				"the reference copy was not regenerated from the live one",
+			},
+			why: "D-13 caveat in Step 17; D-14 and D-01 resolved SD-4 and SD-6; Steps 20-23 are the manual proofs of the Phase 13 controls",
+		},
+		{
+			path:           "../README.md",
+			mustNotContain: []string{"has no access control", "has no ACL"},
+			why:            "D-14: README.md and llms.txt carry no Documents-ACL claim",
+		},
+		{
+			path:           "../llms.txt",
+			mustNotContain: []string{"has no access control", "has no ACL"},
+			why:            "D-14: README.md and llms.txt carry no Documents-ACL claim",
+		},
 	}
 
 	for _, row := range rows {

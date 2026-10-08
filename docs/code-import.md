@@ -361,14 +361,20 @@ The overwrite gate guards against accidental replacement through the Code
 facet's own calls, and it is not a control against someone who means to get
 around it. The limitation that
 [`docs/code-overwrite-gating.md`](code-overwrite-gating.md) records in section 6
-applies to import too. On `host.Local` the Documents facet has no access
-control, so a pack that can also call `Documents.Put` directly can write a
-complete approval record into the `code-overwrites` collection, or write the
-Code collections themselves, and get around the gate. The same holds for the
-marker that makes an approval single-use. `code:import` does not make this
-better or worse; it is the sixth gated path, not an exemption and not a
-stronger one. If you need protection against a pack that acts maliciously, do
-not give that pack direct Documents access in the host that embeds this SDK.
+applies to import too, with one change since Phase 13. On `host.Local` the
+Documents facet no longer lets a pack that holds only Documents get around the
+gate. It refuses that pack's write to the `code-` collections, including the
+`code-overwrite-applied` marker that makes an approval single-use, with the
+error detail code `collection_reserved`, and it refuses a forged status change
+on a proposal in `code-overwrites` unless the approver token is presented
+(`approval_transition_requires_token`). Reading those collections still works.
+
+What stays open is a holder of `code:rw`, who can remove an item and put it
+back, or change the Hiera order or the module directory, with no proposal at
+all. `code:import` does not make this better or worse; it is the sixth gated
+path, not an exemption and not a stronger one. If you need protection against a
+pack that acts maliciously, do not give that pack `code:rw` in the host that
+embeds this SDK.
 
 ## Manual verification
 

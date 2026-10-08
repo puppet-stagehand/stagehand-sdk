@@ -173,14 +173,18 @@ pack's `permissions` list.
   show its proposing persona cannot choose the `Kind` it is decided
   under. A `Kind` built from request input or a proposal body defeats the
   gate, and nothing at runtime would notice.
-- **No field-level enforcement on the proposals collection.** The
-  Documents facet is a generic namespaced JSON document store; it has no
-  concept of collections, field names, or state machines. Any code
-  holding the host can write a proposal document directly, with no
-  token presented at all. This package's integrity guarantee is that it
-  is the only sanctioned writer past creation — a discipline, not an
-  enforcement — and a real durable host would need to defend this
-  boundary differently.
+- **The proposals collection is guarded by the host, not by this package.**
+  The Documents facet is a generic namespaced JSON document store, so
+  `host.Local` registers each approval `Kind` (its collection and its
+  `ApproveScope`) and enforces two rules on any pack that writes there: a
+  status transition needs the approver token (see "How the host refuses a
+  forged approval" below), and a decided proposal is immutable. A real durable
+  host (the console) must enforce the same two rules; this SDK defines the
+  contract and `host.Local` is the reference behaviour. What remains open is
+  narrower: a *pending* proposal stays editable by whoever proposed it until it
+  is decided (accepted risk AR-13-02), so a reviewer should approve the payload
+  as it is at decision time, and the digest freeze Phase 17 adds closes this
+  for deploys.
 - **No transaction spanning the decision and the act.** The decision is
   recorded in the Documents facet; the governed action is carried out by
   the caller, in a different facet entirely. A caller that dies between
@@ -235,15 +239,15 @@ only when the document body records all three facts `Approve` writes:
 2. `approved_scope` equals the `Kind`'s `ApproveScope`, and
 3. `decided_by` is not empty.
 
-A caller holding only a status string is not holding an approval. The
-Documents store has no ACL, so anything that can reach the host can write a
-body saying `status: approved`; the scope and the decider are the provenance
-only `Approve` records. This check is why a reader cannot be fooled by a
-hand-written document in a store with no ACL. It also compares the recorded
-scope against the caller's code-defined `Kind`, so a proposal approved under
-one scope never authorizes an action governed by another, even when both
-Kinds share a collection. That is the read-side half of "two Kinds that share
-a collection but differ in scope never merge".
+A caller holding only a status string is not holding an approval. A status
+string alone proves nothing: the scope and the decider are the provenance only
+`Approve` records. `RequireApproved` stays the single read-side definition of
+approved, and it still demands that provenance, so a record that reaches the
+store by any path other than `Approve` is judged the same way. It also compares
+the recorded scope against the caller's code-defined `Kind`, so a proposal
+approved under one scope never authorizes an action governed by another, even
+when both Kinds share a collection. That is the read-side half of "two Kinds
+that share a collection but differ in scope never merge".
 
 `RequireApproved` is read-only by construction. It takes a document and a
 `Kind` and nothing else: it holds no host, writes no document, verifies no
@@ -261,6 +265,35 @@ Both the Code overwrite gate (`host/local/code_approval.go`, with its
 `overwriteApprovalKind`) and Inventory's `OnboardNode` (`host/local/inventory.go`,
 with its `inventoryApprovalKind`) call it, so the two gates cannot disagree
 about what approved means.
+
+### How the host refuses a forged approval
+
+Since Phase 13 (FND-03) the write side is defended as well, so a pack that
+holds only the Documents facet cannot write `status: approved` into a proposal.
+`host.Local` registers each approval `Kind` (collection to `ApproveScope`) in
+one list, `approvalKinds` in `host/local/documents_guard.go`, and for those
+collections it enforces:
+
+- **A transition needs the approver token.** `approval.decide` carries the
+  approver token in gRPC metadata under the key `stagehand-approver-token`, on
+  the one compare-and-set write that records the decision. The host verifies it
+  against that Kind's `ApproveScope` through the same Auth path. A write that
+  changes a proposal's status to approved or rejected without a valid token is
+  refused with `PERMISSION_DENIED` and the ErrorDetail code
+  `approval_transition_requires_token`. The token is a secret: no refusal
+  echoes it.
+- **A decided proposal is immutable.** Once a proposal is approved or
+  rejected, any later write is refused with `approval_proposal_decided`, even
+  with a valid token, and deleting it needs a valid approver token for the
+  Kind.
+- **Creating a pending proposal stays an ordinary write.** `Propose`,
+  `ProposeBody` and the Code facet's `ProposeImport` do not need a token.
+
+Registering a new Kind is one line in `host/local/documents_guard.go`; Phase 17
+adds `deploy-proposals` that way. `TestApprovalForgery_DirectPutIsRefused` and
+the `TestDocumentsGuard_*` tests prove the refusals, including over a real gRPC
+connection. The real console's Documents interceptor must read
+`stagehand-approver-token` from incoming metadata and apply the same rules.
 
 ### What changed, and the GOV-03 audit
 
@@ -282,7 +315,12 @@ the Code overwrite gate also required the recorded scope and decider. Both now
 call `approval.RequireApproved`. The only records newly refused are forged or
 hand-written ones, because `approval.Approve` has always written both
 provenance fields; a proposal approved through `approval.Approve` with the
-inventory `Kind` onboards exactly as before. A store with no ACL can still be
-written with a body that forges all three fields (the accepted INT-4
-residual); `RequireApproved` raises the bar for a forgery, it does not remove
-the need for the console to defend the Documents boundary.
+inventory `Kind` onboards exactly as before.
+
+Phase 13 then closed INT-4, which v0.3.0 had accepted as a residual: a body
+that forged all three fields could be written straight into the store.
+`host.Local`'s Documents facet now refuses that write (FND-03, see "How the
+host refuses a forged approval" above). INT-4 is no longer an accepted
+residual. `RequireApproved` and the host guard are two layers of the same
+defence: the guard stops the forgery being written, and the reader still
+refuses any record without the provenance.

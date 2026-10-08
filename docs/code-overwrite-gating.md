@@ -246,26 +246,40 @@ permission.
   be a standing permission to copy whatever the source later became.
 - **The Code RPCs cannot be told to skip the gate.** There is no option,
   permission or environment variable that lets a Put through without an
-  approved proposal. The trust boundary is the Code facet, not the Documents
-  facet: an approval is only honoured when the proposal records that it was
-  decided under the `code:approve` scope (`approved_scope`) by a named
-  principal (`decided_by`), and `approval.Approve` writes both. The Documents
-  facet has no access control, so a pack that can call `Documents.Put`
-  directly can write a complete approval record into `code-overwrites` (or
-  write the Code collections themselves) and bypass the gate on `host.Local`.
+  approved proposal. An approval is only honoured when the proposal records
+  that it was decided under the `code:approve` scope (`approved_scope`) by a
+  named principal (`decided_by`), and `approval.Approve` writes both.
+- **Since Phase 13 the Documents facet defends that boundary too (AR-09-06 is
+  closed).** On `host.Local` the Documents facet refuses a pack's direct write
+  to the `code-overwrites` collection when it would change a proposal's
+  `status` to approved or rejected without the approver token (ErrorDetail
+  `approval_transition_requires_token`), and it treats a decided proposal as
+  immutable (`approval_proposal_decided`). It refuses a pack's write to every
+  other `code-` collection, including the `code-overwrite-applied` single-use
+  marker and the Code collections themselves (`collection_reserved`), and it
+  now refuses Documents-level deletes of them as well. Reads are still
+  allowed. A pack that holds only `Documents` therefore can no longer forge
+  an approval record, delete a marker to allow a replay or write one to make
+  an Apply refuse. `TestDocumentsGuard_ReservedCollections` pins the reserved
+  collections, and the renamed `TestCodeOverwriteApprovalProvenance` subtests
+  "a pack cannot write a forged approval record" and "a record written through
+  the operator seeding path is judged by its provenance" pin the provenance
+  rule. The risk-acceptance verdicts are in
+  [`13-SECURITY.md`](../.planning/phases/13-foundation-safety-floor-real-tool-evidence/13-SECURITY.md).
   This holds for all six gated paths, import included: `code:import` is not a
   stronger lock, and the import proposal sits in the same `code-overwrites`
-  collection as the others.
-  `TestCodeOverwriteApprovalProvenance` pins that. The same goes for the
-  `code-overwrite-applied` marker collection that makes an approval
-  single-use: a caller with `Documents` access can delete a marker to allow a
-  replay, or write one to make an Apply refuse.
+  collection as the others. Be precise about what this does not cover: it
+  stops a caller holding only `Documents`, not a `code:rw` holder (see the
+  next bullet).
 - **Creating and deleting are not gated, so the gate can be walked around by
   a caller who means to.** Only an in-place replace is refused. Removing a
   module, level or data key is ungated (D-01), and putting it back afterwards
   is then an ungated create, so any holder of `code:rw` can replace an item
   without approval by calling the remove and then the put. `ReorderHieraLevels`
-  and `SetModuledir` also change behaviour with no gate. The gate protects
+  and `SetModuledir` also change behaviour with no gate (`SetModuledir` now
+  accepts only one plain folder name, but it is still ungated). Phase 13 did
+  not change this: the Code RPCs are still ungated for creates and deletes, and
+  this is the accepted risk AR-09-07. The gate protects
   against accidental in-place replacement and gives a reviewable path for
   deliberate ones; it is not a control against a `code:rw` holder acting
   maliciously. If you need that, gate the removes as well in the pack or the
@@ -290,25 +304,30 @@ permission.
   real RPCs, and `FuzzRenderParseRoundTrip` searches for any value that makes the rendered
   text break its shape (an extra `mod` line, or text outside a quoted value)
   or read back differently.
-- **An environment whose Puppetfile already holds injected text must be re-authored.** This is the one operator action Phase 12.1 requires. The
-  facet reads the stored Puppetfile on every call, and nothing repairs a
-  file written before this change automatically. Do not wait for an error to
-  tell you a file is affected, because a read does not always refuse it. An
-  injected line that is not valid Puppetfile syntax, or a Forge version that
-  carries one, is refused when it is read (`FailedPrecondition`). An injected
-  line that is itself a well-formed `mod` statement is not: a Git module name
-  such as `zz'` followed by a new line and `mod 'puppetlabs-stdlib', '99.0.0'`
-  was written as three ordinary-looking entries, and a read lists all three,
+- **An environment whose Puppetfile already holds injected text must be
+  re-authored.** This is the one operator action Phase 12.1 requires.
+  A Puppetfile poisoned before 12.1 is not refused when it is read.
+  Phase 12.1 stops new injection at write and at the render sink, and no check
+  was added to the read path (D-13). The facet reads the stored Puppetfile on
+  every call, and nothing repairs a file written before 12.1 automatically.
+  Some malformed injected lines do fail a read with `FailedPrecondition`: a
+  line that is not valid Puppetfile syntax, or a Forge version that carries
+  one. A well-formed injected `mod` line does not: a Git module name such as
+  `zz'` followed by a new line and `mod 'puppetlabs-stdlib', '99.0.0'` was
+  written as three ordinary-looking entries, and a read lists all three,
   possibly including a second `puppetlabs-stdlib`. Only the next write fails
   (`InvalidArgument`), because the forged entries do not pass module
-  validation. So inspect the module list of every environment created before
-  Phase 12.1 and look for modules you did not add. There is
-  deliberately no migration: this is a 0.x preview with no released data, and
-  a file in that state is exactly the problem that was fixed, so quietly
-  rewriting it would be guessing at what its author meant. The remedy is to
-  delete the environment (`DeleteEnvironment` removes its Puppetfile without
-  reading it, so it works even on a poisoned one) and then create it again, or
-  re-import the branch it came from.
+  validation. `DuplicateEnvironment` can also copy such a Puppetfile into a
+  new environment, which is the accepted risk AR-13-01. So inspect the module
+  list of every environment created before Phase 12.1 and look for modules you
+  did not add. Vetting the stored Puppetfile bytes themselves is carried to the
+  deploy dry run of Phases 15 and 17. There is deliberately no migration: this
+  is a 0.x preview with no released data, and a file in that state is exactly
+  the problem that was fixed, so quietly rewriting it would be guessing at what
+  its author meant. The remedy is to delete the environment
+  (`DeleteEnvironment` removes its Puppetfile without reading it, so it works
+  even on a poisoned one) and then create it again, or re-import the branch it
+  came from.
 - **A pack that can reach both proposing and approving code has no gate.**
   Keep the two apart as described in
   [`docs/approval-pattern.md`](approval-pattern.md).
