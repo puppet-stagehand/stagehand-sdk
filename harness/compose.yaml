@@ -22,6 +22,7 @@ services:
         HTTP_REQUEST_VERSION: ${HTTP_REQUEST_VERSION:?run the harness through ./harness/run.sh}
     image: ${RUNNER_IMAGE_REF:?run harness/run.sh}
     volumes:
+      - certs:/certs:ro
       - gitfixtures:/srv/git
       - work:/srv/work
       - ./scripts:/opt/harness-scripts:ro
@@ -33,6 +34,27 @@ services:
       retries: 6
       start_period: 5s
 
+  # Puppet Server 9 (D-18). It runs only in the compose profile "server", which
+  # harness/run.sh turns on when the image can be resolved. There is deliberately
+  # no build section: the image needs a Puppet Core credential, so only
+  # harness/images.sh (run by a human) builds it and compose never tries.
+  # An empty SERVER_PLATFORM means the image's native platform.
+  puppetserver:
+    profiles: ["server"]
+    image: ${SERVER_IMAGE_REF:?run harness/run.sh}
+    platform: ${SERVER_PLATFORM:-}
+    hostname: puppet
+    volumes:
+      - certs:/certs
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsk https://localhost:8140/status/v1/simple | grep -q running"]
+      interval: 10s
+      timeout: 10s
+      retries: 6
+      start_period: 180s
+
 volumes:
+  # Certificates written by the server entrypoint, read-only in the runner.
+  certs:
   gitfixtures:
   work:
