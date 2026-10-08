@@ -1,0 +1,12 @@
+# Written by harness/images.sh. KEY=VALUE, shell-sourceable.
+# An empty value means: not built or not pushed yet.
+# This file never holds the registry host, the project or any credential.
+RUNNER_TAG=r10k5.0.3-g10k0.10.0-bolt4.0.0
+RUNNER_PLATFORMS=linux/amd64
+RUNNER_DIGEST=
+SERVER_TAG=
+SERVER_PLATFORMS=
+SERVER_ARM64_NATIVE=
+SERVER_DIGEST=
+PUPPETSERVER_VERSION=
+UPDATED_AT=2026-10-08T20:08:13Z

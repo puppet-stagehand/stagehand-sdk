@@ -4,8 +4,10 @@
 # which run.sh derives from the repo path so two checkouts (for example parallel
 # worktrees) never share containers or volumes. Nothing here publishes a port.
 #
-# The image name carries the registry host and project (D-18) from the
-# gitignored harness/.env. There is no default on purpose.
+# The image reference comes from harness/run.sh (RUNNER_IMAGE_REF): the digest
+# recorded in harness/images.lock when there is one, else the local tag. The tag
+# carries the registry host and project (D-18) from the gitignored
+# harness/.env. There is no default on purpose.
 services:
   runner:
     build:
@@ -18,7 +20,7 @@ services:
         G10K_SHA256_LINUX_AMD64: ${G10K_SHA256_LINUX_AMD64:?run the harness through ./harness/run.sh}
         G10K_SHA256_LINUX_ARM64: ${G10K_SHA256_LINUX_ARM64:?run the harness through ./harness/run.sh}
         HTTP_REQUEST_VERSION: ${HTTP_REQUEST_VERSION:?run the harness through ./harness/run.sh}
-    image: ${STAGEHAND_HARBOR_HOST:?set STAGEHAND_HARBOR_HOST in harness/.env}/${STAGEHAND_HARBOR_PROJECT:?set STAGEHAND_HARBOR_PROJECT in harness/.env}/${RUNNER_IMAGE_NAME:?run the harness through ./harness/run.sh}:${RUNNER_TAG:?run the harness through ./harness/run.sh}
+    image: ${RUNNER_IMAGE_REF:?run harness/run.sh}
     volumes:
       - gitfixtures:/srv/git
       - work:/srv/work
