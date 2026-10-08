@@ -971,11 +971,7 @@ func TestCodeOverwriteDuplicate(t *testing.T) {
 		h := newHosts(t)
 		proposeDuplicate(t, h, "p1", "production", "staging")
 		approveOverwrite(t, h, "p1")
-		cur, _ := getDoc(t, h, ctx, "code-puppetfiles", "production")
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-			Collection: "code-puppetfiles", DocId: "production", IfVersion: cur.Version,
-			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"text": "mod 'puppetlabs/ntp', '9.0.0'\n"})},
-		}); err != nil {
+		if err := local.SeedDocument(h, "code-puppetfiles", "production", map[string]any{"text": "mod 'puppetlabs/ntp', '9.0.0'\n"}); err != nil {
 			t.Fatalf("updating the source Puppetfile: %v", err)
 		}
 		if _, err := applyDuplicate(h, "p1"); err != nil {
@@ -997,11 +993,7 @@ func TestCodeOverwriteDuplicate(t *testing.T) {
 		afterFirst := snapshot(t, h, "staging")
 
 		// The source is rewritten after the approval was used.
-		cur, _ := getDoc(t, h, ctx, "code-puppetfiles", "production")
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-			Collection: "code-puppetfiles", DocId: "production", IfVersion: cur.Version,
-			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"text": "mod 'evil/module', '6.6.6'\n"})},
-		}); err != nil {
+		if err := local.SeedDocument(h, "code-puppetfiles", "production", map[string]any{"text": "mod 'evil/module', '6.6.6'\n"}); err != nil {
 			t.Fatalf("rewriting the source Puppetfile: %v", err)
 		}
 
@@ -1325,11 +1317,7 @@ func TestCodeOverwriteHieraLevel(t *testing.T) {
 
 	t.Run("Apply mirrors lookup_options for display", func(t *testing.T) {
 		h := newHieraHost(t)
-		cur, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/common.yaml")
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-			Collection: "code-hiera-data", DocId: "prod/common.yaml", IfVersion: cur.Version,
-			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"path": "common.yaml", "yaml": "lookup_options:\n  port:\n    merge: deep\nport: 1\n"})},
-		}); err != nil {
+		if err := local.SeedDocument(h, "code-hiera-data", "prod/common.yaml", map[string]any{"path": "common.yaml", "yaml": "lookup_options:\n  port:\n    merge: deep\nport: 1\n"}); err != nil {
 			t.Fatal(err)
 		}
 		resp := putHieraLevelViaApproval(t, h, "prod", replacement, 0, false)
@@ -1619,11 +1607,7 @@ func TestCodeOverwriteHieraDataKeyKeepsCommentOnlyHeader(t *testing.T) {
 			t.Fatalf("a refused Apply wrote:\n%q", got)
 		}
 		// Fix the file; the same proposal still applies, so the refusal did not spend it.
-		cur, _ := getDoc(t, h, ctx, "code-hiera-data", "prod/placeholder.yaml")
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-			Collection: "code-hiera-data", DocId: "prod/placeholder.yaml", IfVersion: cur.Version,
-			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{"path": "placeholder.yaml", "yaml": header})},
-		}); err != nil {
+		if err := local.SeedDocument(h, "code-hiera-data", "prod/placeholder.yaml", map[string]any{"path": "placeholder.yaml", "yaml": header}); err != nil {
 			t.Fatalf("fixing the file: %v", err)
 		}
 		if _, err := applyHieraDataKey(h, "p1"); err != nil {
@@ -2007,12 +1991,8 @@ func TestCodeOverwriteGateDoesNotParseWholeFiles(t *testing.T) {
 
 	t.Run("a new level beside an unparseable level stays ungated", func(t *testing.T) {
 		h := newHieraHost(t)
-		cur, _ := getDoc(t, h, ctx, "code-hiera-hierarchy", "prod")
-		if _, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-			Collection: "code-hiera-hierarchy", DocId: "prod", IfVersion: cur.Version,
-			Body: &hostv1.Json{Value: mustStruct(t, map[string]any{
-				"yaml": "version: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml\n  - just-a-string\n",
-			})},
+		if err := local.SeedDocument(h, "code-hiera-hierarchy", "prod", map[string]any{
+			"yaml": "version: 5\nhierarchy:\n  - name: role\n    path: roles/x.yaml\n  - just-a-string\n",
 		}); err != nil {
 			t.Fatalf("seeding hierarchy: %v", err)
 		}

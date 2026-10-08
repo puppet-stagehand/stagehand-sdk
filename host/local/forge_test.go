@@ -306,14 +306,7 @@ func mustCreateEnvironmentWithPuppetfileText(t *testing.T, h *host.Host, env, te
 	if _, err := h.Code.CreateEnvironment(context.Background(), &hostv1.CreateEnvironmentRequest{Name: env}); err != nil {
 		t.Fatal(err)
 	}
-	body, err := structpb.NewStruct(map[string]any{"text": text})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
-		Collection: puppetfileCollection, DocId: env,
-		Body: &hostv1.Json{Value: body},
-	}); err != nil {
+	if err := SeedDocument(h, puppetfileCollection, env, map[string]any{"text": text}); err != nil {
 		t.Fatalf("seeding puppetfile text for %q: %v", env, err)
 	}
 }

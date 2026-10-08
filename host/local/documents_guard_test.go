@@ -704,3 +704,158 @@ func TestSeedDocumentIsTestAndOperatorOnly(t *testing.T) {
 		t.Fatalf("the walk parsed %d production files and saw seed.go=%v; the confinement check did not run", parsed, sawSeed)
 	}
 }
+
+// ---- Reserved collections (FND-03, D-05, D-06) ----------------------------
+//
+// The expected names below are written out by hand on purpose: deriving them
+// from the production list would let a dropped entry go unnoticed.
+
+// reservedPut and reservedDelete write through the pack-facing Documents facet.
+func reservedPut(h *host.Host, collection, docID string, ifVersion int64) error {
+	body, _ := structpb.NewStruct(map[string]any{"pack": "wrote this"})
+	_, err := h.Documents.Put(context.Background(), &hostv1.PutDocumentRequest{
+		Collection: collection, DocId: docID, Body: &hostv1.Json{Value: body}, IfVersion: ifVersion,
+	})
+	return err
+}
+
+func reservedDelete(h *host.Host, collection, docID string) error {
+	_, err := h.Documents.Delete(context.Background(), &hostv1.DeleteDocumentRequest{Collection: collection, DocId: docID})
+	return err
+}
+
+// requireReserved fails unless err is a collection_reserved refusal that names
+// the collection and carries a non-empty fix line.
+func requireReserved(t *testing.T, err error, collection, op string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("%s on %s: want a collection_reserved refusal, got success", op, collection)
+	}
+	if !local.IsCollectionReserved(err) {
+		t.Fatalf("%s on %s: want IsCollectionReserved, got %v", op, collection, err)
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("%s on %s: code = %v, want PermissionDenied", op, collection, status.Code(err))
+	}
+	if !strings.Contains(err.Error(), collection) {
+		t.Fatalf("%s on %s: refusal %q does not name the collection", op, collection, err)
+	}
+	var ed *hostv1.ErrorDetail
+	for _, d := range status.Convert(err).Details() {
+		if x, ok := d.(*hostv1.ErrorDetail); ok {
+			ed = x
+		}
+	}
+	if ed == nil || ed.Code != "collection_reserved" || ed.Fix == "" {
+		t.Fatalf("%s on %s: ErrorDetail = %+v, want code collection_reserved and a non-empty fix", op, collection, ed)
+	}
+	if !strings.Contains(ed.Fix, "forge-sources") || !strings.Contains(ed.Fix, "llm-providers") {
+		t.Fatalf("%s on %s: fix %q does not say which names pack collections must avoid", op, collection, ed.Fix)
+	}
+}
+
+func TestDocumentsGuard_ReservedCollections(t *testing.T) {
+	for _, collection := range []string{
+		"code-environments", "code-puppetfiles", "code-hiera-hierarchy", "code-hiera-data",
+		"code-overwrite-applied", "code-anything",
+		"deploy-runs", "deploy-proposals",
+		"bolt-runs",
+		"inventory-nodes",
+	} {
+		t.Run(collection, func(t *testing.T) {
+			h := newGuardHost()
+			if err := local.SeedDocument(h, collection, "doc", map[string]any{"seeded": "yes"}); err != nil {
+				t.Fatalf("SeedDocument: %v", err)
+			}
+			before, err := h.Documents.Get(context.Background(), &hostv1.GetDocumentRequest{Collection: collection, DocId: "doc"})
+			if err != nil {
+				t.Fatalf("Get seeded doc: %v", err)
+			}
+
+			requireReserved(t, reservedPut(h, collection, "fresh", 0), collection, "create Put")
+			requireReserved(t, reservedPut(h, collection, "doc", before.Version), collection, "update Put")
+			requireReserved(t, reservedDelete(h, collection, "doc"), collection, "Delete")
+			// A refused write must not even create the collection's new doc.
+			if _, err := h.Documents.Get(context.Background(), &hostv1.GetDocumentRequest{Collection: collection, DocId: "fresh"}); status.Code(err) != codes.NotFound {
+				t.Fatalf("refused create left a document behind: %v", err)
+			}
+			after, err := h.Documents.Get(context.Background(), &hostv1.GetDocumentRequest{Collection: collection, DocId: "doc"})
+			if err != nil {
+				t.Fatalf("seeded doc gone after refused Delete: %v", err)
+			}
+			if after.Version != before.Version || !proto.Equal(after.Body, before.Body) {
+				t.Fatalf("seeded doc changed after refused writes: version %d -> %d", before.Version, after.Version)
+			}
+		})
+	}
+}
+
+func TestDocumentsGuard_ReservedReadsAllowed(t *testing.T) {
+	h := newGuardHost()
+	ctx := context.Background()
+	for _, collection := range []string{"code-puppetfiles", "deploy-runs", "bolt-runs", "inventory-nodes"} {
+		if err := local.SeedDocument(h, collection, "doc", map[string]any{"k": "v"}); err != nil {
+			t.Fatalf("SeedDocument(%s): %v", collection, err)
+		}
+		if _, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: collection, DocId: "doc"}); err != nil {
+			t.Errorf("Get on %s: %v", collection, err)
+		}
+		list, err := h.Documents.List(ctx, &hostv1.ListDocumentsRequest{Collection: collection})
+		if err != nil || len(list.Documents) != 1 {
+			t.Errorf("List on %s: %v, %d documents, want 1", collection, err, len(list.GetDocuments()))
+		}
+		val, _ := structpb.NewValue("v")
+		q, err := h.Documents.Query(ctx, &hostv1.QueryDocumentsRequest{
+			Collection: collection, Field: "k", Op: hostv1.QueryDocumentsRequest_EQ, Value: &hostv1.Json{Value: &structpb.Struct{Fields: map[string]*structpb.Value{"v": val}}},
+		})
+		if err != nil {
+			t.Errorf("Query on %s: %v", collection, err)
+			_ = q
+		}
+	}
+}
+
+func TestDocumentsGuard_FacetsUnaffected(t *testing.T) {
+	h := newGuardHost()
+	ctx := context.Background()
+
+	if _, err := h.Code.CreateEnvironment(ctx, &hostv1.CreateEnvironmentRequest{Name: "prod"}); err != nil {
+		t.Fatalf("CreateEnvironment with the guard on: %v", err)
+	}
+	if _, err := h.Code.PutPuppetfileModule(ctx, &hostv1.PutPuppetfileModuleRequest{
+		Environment: "prod", Module: forgeModule("puppetlabs/apache", "5.0.0"),
+	}); err != nil {
+		t.Fatalf("PutPuppetfileModule with the guard on: %v", err)
+	}
+
+	// Propose, approve, apply an overwrite: the proposal write is a registered
+	// Kind write and the code-overwrite-applied marker is a facet write.
+	overwriteViaApproval(t, h, "apache-6", "prod", forgeModule("puppetlabs/apache", "6.1.0"))
+	if _, err := h.Documents.Get(ctx, &hostv1.GetDocumentRequest{Collection: "code-overwrite-applied", DocId: "apache-6"}); err != nil {
+		t.Fatalf("the facet did not write its code-overwrite-applied marker: %v", err)
+	}
+
+	node := &hostv1.Node{Id: "web01.example.test", DisplayName: "web01", Status: hostv1.Node_DISCOVERED}
+	if _, err := approval.Propose(ctx, h, node, approval.Kind{Collection: "inventory-proposals", ApproveScope: "inventory:approve"}); err != nil {
+		t.Fatalf("approval.Propose into inventory-proposals with the guard on: %v", err)
+	}
+}
+
+func TestDocumentsGuard_ReservedNameAdjacency(t *testing.T) {
+	h := newGuardHost()
+	for _, name := range []string{"CODE-ENVIRONMENTS", "Code-x", "code-", "deploy-", "Bolt-runs"} {
+		requireReserved(t, reservedPut(h, name, "doc", 0), name, "Put")
+		if err := reservedDelete(h, name, "doc"); !local.IsCollectionReserved(err) {
+			t.Errorf("Delete on %s: want collection_reserved, got %v", name, err)
+		}
+	}
+	for _, name := range []string{"code", "codex-notes", "my-code-notes", "deployments", "bolts", "state", "locks", "state-versions", "pack-private-state"} {
+		if err := reservedPut(h, name, "doc", 0); err != nil {
+			t.Errorf("Put on %s must stay writable: %v", name, err)
+			continue
+		}
+		if err := reservedDelete(h, name, "doc"); err != nil {
+			t.Errorf("Delete on %s must stay possible: %v", name, err)
+		}
+	}
+}

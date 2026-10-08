@@ -53,6 +53,10 @@ func (s *documentsServer) Put(ctx context.Context, req *hostv1.PutDocumentReques
 	var principal *hostv1.Principal
 	if guarded {
 		principal = s.transitionPrincipal(ctx, kind)
+	} else if err := checkReservedWrite(req.Collection); err != nil {
+		// A facet-owned collection: refuse before any CAS check or store
+		// mutation (D-05). Registered Kinds took the branch above.
+		return nil, err
 	}
 
 	s.mu.Lock()
@@ -105,6 +109,10 @@ func (s *documentsServer) Delete(ctx context.Context, req *hostv1.DeleteDocument
 	var principal *hostv1.Principal
 	if guarded {
 		principal = s.transitionPrincipal(ctx, kind)
+	} else if err := checkReservedWrite(req.Collection); err != nil {
+		// A facet-owned collection: refuse before any CAS check or store
+		// mutation (D-05). Registered Kinds took the branch above.
+		return nil, err
 	}
 
 	s.mu.Lock()

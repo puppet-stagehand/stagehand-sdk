@@ -17,16 +17,14 @@ import (
 func strPtr(s string) *string { return &s }
 func boolPtr(b bool) *bool    { return &b }
 
-// seedDoc writes a document directly through the Documents facet — labelled
-// test scaffolding for collections (code-puppetfiles, code-hiera-hierarchy,
-// code-hiera-data) whose own Code RPCs land in later plans in this phase.
+// seedDoc writes a document through local.SeedDocument, the operator/test
+// seeding path. The pack-facing Documents facet refuses writes to the Code
+// facet's collections (code-puppetfiles, code-hiera-hierarchy, code-hiera-data;
+// FND-03, collection_reserved), so a fixture that needs one has to be written
+// where the console would write it, not where a pack can.
 func seedDoc(t *testing.T, h *host.Host, ctx context.Context, collection, docID string, body map[string]any) {
 	t.Helper()
-	_, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: collection, DocId: docID,
-		Body: &hostv1.Json{Value: mustStruct(t, body)},
-	})
-	if err != nil {
+	if err := local.SeedDocument(h, collection, docID, body); err != nil {
 		t.Fatalf("seeding %s/%s: %v", collection, docID, err)
 	}
 }
@@ -63,21 +61,13 @@ func seedFullEnvironment(t *testing.T, h *host.Host, ctx context.Context, env st
 	seedDoc(t, h, ctx, "code-hiera-data", env+"/common.yaml", map[string]any{"path": "common.yaml", "yaml": "foo: bar\n"})
 	seedDoc(t, h, ctx, "code-hiera-data", env+"/nodes/web01.yaml", map[string]any{"path": "nodes/web01.yaml", "yaml": "bar: baz\n"})
 
-	// CreateEnvironment already created the identity document, so
-	// embedding settings into it is an update (IfVersion = its current
-	// version), not a create-only write.
-	identity, ok := getDoc(t, h, ctx, "code-environments", env)
-	if !ok {
+	// CreateEnvironment already created the identity document; embedding
+	// settings into it replaces that document, written through SeedDocument
+	// because the pack-facing Documents facet refuses code-environments.
+	if _, ok := getDoc(t, h, ctx, "code-environments", env); !ok {
 		t.Fatalf("identity document for %q missing right after CreateEnvironment", env)
 	}
-	_, err := h.Documents.Put(ctx, &hostv1.PutDocumentRequest{
-		Collection: "code-environments", DocId: env,
-		Body:      &hostv1.Json{Value: mustStruct(t, map[string]any{"name": env, "settings": map[string]any{"modulepath": testSettingsModulepath}})},
-		IfVersion: identity.Version,
-	})
-	if err != nil {
-		t.Fatalf("seeding settings on %q's identity document: %v", env, err)
-	}
+	seedDoc(t, h, ctx, "code-environments", env, map[string]any{"name": env, "settings": map[string]any{"modulepath": testSettingsModulepath}})
 }
 
 // testSettingsModulepath is the fixture modulepath value seedFullEnvironment

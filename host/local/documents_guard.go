@@ -18,6 +18,10 @@ package local
 // Creating a pending proposal (approval.Propose, approval.ProposeBody, the Code
 // facet's ProposeImport) stays an ordinary Put.
 //
+// The same two entry points also refuse a pack's Put or Delete on any other
+// facet-owned collection (reservedCollections, D-05). Get, List and Query are
+// untouched.
+//
 // The in-process *Locked helpers the facets use are deliberately unguarded:
 // they model the console writing on its own behalf. SeedDocument (seed.go) is
 // the sanctioned operator/test entry to that same path.
@@ -28,6 +32,7 @@ package local
 
 import (
 	"context"
+	"strings"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -43,7 +48,71 @@ import (
 const (
 	detailCodeApprovalTransitionRequiresToken = "approval_transition_requires_token"
 	detailCodeApprovalProposalDecided         = "approval_proposal_decided"
+	detailCodeCollectionReserved              = "collection_reserved"
 )
+
+// reservedCollection names a Documents collection, or a family of them, that a
+// facet owns. A pack may read it but never write it (D-05).
+type reservedCollection struct {
+	prefix string // reserved when the lower-cased collection starts with it; "" for an exact entry
+	exact  string // reserved when the lower-cased collection equals it; "" for a prefix entry
+	owner  string // the facet or flow that owns the collection, named in the refusal
+	fix    string // the fix line (D-06)
+}
+
+// reservedNamesSentence closes every fix line so a pack author sees the whole
+// reserved set from any one refusal.
+const reservedNamesSentence = "pack collections must not start with code-, deploy-, bolt- or inventory- and must not be named forge-sources or llm-providers"
+
+// reservedCollections is the one list of facet-owned collections: one line per
+// facet. A future facet adds its prefix here (D-05). Registered approval Kinds
+// are checked first (registeredKind), so a Kind's collection such as
+// code-overwrites keeps accepting pending proposals even though it starts with
+// a reserved prefix.
+var reservedCollections = []reservedCollection{
+	{prefix: "code-", owner: "the Code facet", fix: "write Code state through the Code facet RPCs; overwrite proposals go through approval.ProposeBody into code-overwrites; " + reservedNamesSentence},
+	{prefix: "deploy-", owner: "the Deploy facet", fix: "write deploy state through the Deploy facet RPCs; " + reservedNamesSentence},
+	{prefix: "bolt-", owner: "the Bolt facet", fix: "write Bolt state through the Bolt facet RPCs; " + reservedNamesSentence},
+	{prefix: "inventory-", owner: "the Inventory facet", fix: "write Inventory state through the Inventory facet RPCs; onboarding proposals go through approval.Propose; " + reservedNamesSentence},
+}
+
+// reservedFor returns the reserved entry that covers collection. The match
+// ignores letter case, so CODE-ENVIRONMENTS is as reserved as code-environments
+// (a console store that folds case would otherwise alias them).
+func reservedFor(collection string) (reservedCollection, bool) {
+	lower := strings.ToLower(collection)
+	for _, rc := range reservedCollections {
+		if rc.prefix != "" && strings.HasPrefix(lower, rc.prefix) {
+			return rc, true
+		}
+		if rc.exact != "" && lower == rc.exact {
+			return rc, true
+		}
+	}
+	return reservedCollection{}, false
+}
+
+// ErrCollectionReserved builds the refusal a Documents Put or Delete returns
+// when a pack writes a collection a facet owns.
+func ErrCollectionReserved(collection string, rc reservedCollection) error {
+	return guardRefusal(detailCodeCollectionReserved, "collection "+collection+" is reserved for "+rc.owner, rc.fix)
+}
+
+// IsCollectionReserved reports whether err is (or wraps) an
+// ErrCollectionReserved error.
+func IsCollectionReserved(err error) bool {
+	return overwriteDetailCode(err) == detailCodeCollectionReserved
+}
+
+// checkReservedWrite refuses a pack write to a facet-owned collection. It runs
+// for collections that are not a registered approval Kind, before any CAS check
+// or store mutation.
+func checkReservedWrite(collection string) error {
+	if rc, ok := reservedFor(collection); ok {
+		return ErrCollectionReserved(collection, rc)
+	}
+	return nil
+}
 
 // approvalKinds is the one registry of approval Kinds host.Local guards. Each
 // is the code-defined value the facet that reads the proposals already pins.
