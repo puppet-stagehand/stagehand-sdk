@@ -1,0 +1,51 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::exit3",
+    "--targets",
+    "localhost",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "\"status\":\"failure\"",
+    "\"kind\":\"puppetlabs.tasks/task-error\""
+  ],
+  "extra": {
+    "debug_log_written": true,
+    "items": [
+      {
+        "action": "task",
+        "error_kind": "puppetlabs.tasks/task-error",
+        "exit_code": 3,
+        "object": "harness_fixtures::exit3",
+        "status": "failure",
+        "target": "localhost",
+        "value_keys": [
+          "_error",
+          "note"
+        ]
+      }
+    ],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "Real Bolt 4.0.0 running harness_fixtures::exit3 (the task exits 3) against localhost. Bolt's own exit code and the task's exit code are different numbers: see extra.items.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "task-failure-exit3",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"harness_fixtures::exit3\",\"status\":\"failure\",\"value\":{\"note\":\"about to fail\",\"_error\":{\"kind\":\"puppetlabs.tasks/task-error\",\"issue_code\":\"TASK_ERROR\",\"msg\":\"The task failed with exit code 3\",\"details\":{\"exit_code\":3}}}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}
