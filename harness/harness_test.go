@@ -415,3 +415,16 @@ func TestHarnessR10kDeploySuccess(t *testing.T) {
 			"Code Manager coexistence was not run (D-10).", deployUser),
 	})
 }
+
+// TestHarnessFixtureModuleIsMounted proves the harness_fixtures Bolt module is
+// visible to the real Bolt on the project's module path, so later plans can run
+// harness_fixtures::echo. It only lists the task; running it is a later plan.
+func TestHarnessFixtureModuleIsMounted(t *testing.T) {
+	requireRunner(t)
+	res := composeExec(context.Background(), t, deployUser,
+		"bolt", "task", "show", "harness_fixtures::echo", "--project", "/opt/stagehand-bolt")
+	if res.ExitCode != 0 {
+		t.Fatalf("bolt cannot see harness_fixtures::echo: exit %d: %s", res.ExitCode, res.Stderr)
+	}
+	assertNoCanary(t, res.Stdout, res.Stderr)
+}

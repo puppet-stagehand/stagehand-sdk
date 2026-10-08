@@ -1,0 +1,10 @@
+{
+  "description": "Echoes the message parameter back as JSON. Harness fixture only.",
+  "input_method": "environment",
+  "parameters": {
+    "message": {
+      "description": "Text to echo back.",
+      "type": "String"
+    }
+  }
+}

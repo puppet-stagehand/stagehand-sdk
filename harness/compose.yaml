@@ -23,6 +23,7 @@ services:
       - gitfixtures:/srv/git
       - work:/srv/work
       - ./scripts:/opt/harness-scripts:ro
+      - ./fixture-modules:/opt/fixture-modules:ro
     healthcheck:
       test: ["CMD-SHELL", "r10k version && g10k -version && bolt --version"]
       interval: 10s
