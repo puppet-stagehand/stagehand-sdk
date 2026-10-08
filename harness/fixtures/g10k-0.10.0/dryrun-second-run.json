@@ -1,0 +1,72 @@
+{
+  "argv": [
+    "g10k",
+    "-config",
+    "/srv/work/g10k/g10k.yaml",
+    "-info",
+    "-branch",
+    "production",
+    "-dryrun"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "Synced"
+  ],
+  "extra": {
+    "live_environment_conf_is_remote": true,
+    "marker_changed": true,
+    "marker_changed_fields": [
+      "finished_at"
+    ],
+    "marker_deploy_success": true,
+    "marker_signature_is_remote_head_after": true,
+    "marker_signature_is_remote_head_before": true,
+    "tree_changed": false,
+    "tree_changed_incl_markers": true
+  },
+  "files_changed": [
+    ".g10k-deploy.json"
+  ],
+  "marker_after": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_before": {
+    "deploy_success": true,
+    "finished_at": "<TS>",
+    "git_dir": "/srv/work/g10k/cache/environments/control.git",
+    "git_url": "file:///srv/git/control.git",
+    "name": "production",
+    "puppetfile_checksum": "351aa322a6bd7fcc0acceef977985b2138ffd90dc625425ff0443b9966176960",
+    "signature": "<SHA>",
+    "started_at": "<TS>"
+  },
+  "marker_keys": [
+    "deploy_success",
+    "finished_at",
+    "git_dir",
+    "git_url",
+    "name",
+    "puppetfile_checksum",
+    "signature",
+    "started_at"
+  ],
+  "notes": "g10k -dryrun run a second time, immediately after dryrun-out-of-sync, with no new commit.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "dryrun-second-run",
+  "stderr": "",
+  "stdout": "Synced /srv/work/g10k/g10k.yaml with branch production with 2 git repositories and 0 Forge modules in <DUR> with git (<DUR> sync, I/O <DUR>) and Forge (<DUR> query+download, I/O <DUR>) using 50 resolve and 20 extract workers\n",
+  "tool": "g10k",
+  "tool_version": "0.10.0",
+  "tree_hash_after": "ce1ed29c09573d11",
+  "tree_hash_before": "8c13bbee9cf7ff79",
+  "tree_hash_excl_markers_after": "96b6ab474dbf43c9",
+  "tree_hash_excl_markers_before": "96b6ab474dbf43c9"
+}
