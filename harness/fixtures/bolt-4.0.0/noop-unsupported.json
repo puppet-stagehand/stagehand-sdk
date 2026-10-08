@@ -1,0 +1,39 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::no_noop",
+    "--targets",
+    "localhost",
+    "--noop",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "_error",
+      "items"
+    ],
+    "task_ran": false,
+    "top_level_error": {
+      "kind": "bolt/pal-error",
+      "msg": "Task does not support noop"
+    }
+  },
+  "notes": "--noop against a task that does not declare supports_noop. task_ran is true if the task's own output appears in Bolt's stdout, which would mean the gate did not stop it.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "noop-unsupported",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n],\n\"_error\": \n{\"kind\":\"bolt/pal-error\",\"msg\":\"Task does not support noop\",\"details\":{}}\n}\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

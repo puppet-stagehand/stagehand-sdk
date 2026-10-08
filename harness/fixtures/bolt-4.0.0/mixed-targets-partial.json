@@ -1,0 +1,66 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::echo",
+    "--targets",
+    "localhost,ssh://unreachable.invalid",
+    "--connect-timeout",
+    "2",
+    "--no-host-key-check",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "\"status\":\"success\"",
+    "\"status\":\"failure\""
+  ],
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "has_success_and_failure": true,
+    "items": [
+      {
+        "action": "task",
+        "object": "harness_fixtures::echo",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "message"
+        ]
+      },
+      {
+        "action": "task",
+        "error_kind": "puppetlabs.tasks/connect-error",
+        "object": null,
+        "status": "failure",
+        "target": "ssh://unreachable.invalid",
+        "value_keys": [
+          "_error"
+        ]
+      }
+    ],
+    "partial_only_in_items": true,
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 2
+  },
+  "notes": "One reachable target (localhost) and one unreachable (.invalid) in a single run. partial_only_in_items is true when Bolt's exit code is the same as when every target fails, so only the per-target status can tell a partial failure from a total one.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "mixed-targets-partial",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"ssh://unreachable.invalid\",\"action\":\"task\",\"object\":null,\"status\":\"failure\",\"value\":{\"_error\":{\"details\":{},\"kind\":\"puppetlabs.tasks/connect-error\",\"msg\":\"Failed to connect to ssh://unreachable.invalid: getaddrinfo: Name or service not known\",\"issue_code\":\"CONNECT_ERROR\"}}}\n,\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"harness_fixtures::echo\",\"status\":\"success\",\"value\":{\"message\":\"hello\"}}\n],\n\"target_count\": 2, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

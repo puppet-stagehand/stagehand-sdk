@@ -1,0 +1,42 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::secret_param_typed",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "bolt/pal-error"
+  ],
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "_error",
+      "items"
+    ],
+    "top_level_error": {
+      "kind": "bolt/pal-error",
+      "msg": "Task harness_fixtures::secret_param_typed:\n parameter 'token' expects a Sensitive[String] value, got String"
+    }
+  },
+  "notes": "A task whose token parameter is typed Sensitive[String], given a plain JSON string on stdin. Bolt refuses before running the task, so a CLI or JSON caller cannot supply a Sensitive-typed value. The task metadata must declare the parameter as String with sensitive: true instead (see sensitive-param-canary). The error text is checked for the canary like every other output.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "sensitive-typed-param-rejected",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n],\n\"_error\": \n{\"kind\":\"bolt/pal-error\",\"msg\":\"Task harness_fixtures::secret_param_typed:\\n parameter 'token' expects a Sensitive[String] value, got String\",\"details\":{}}\n}\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

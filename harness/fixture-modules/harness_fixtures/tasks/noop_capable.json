@@ -1,0 +1,6 @@
+{
+  "description": "Declares supports_noop and reports the PT__noop value it saw. Harness fixture only.",
+  "input_method": "environment",
+  "supports_noop": true,
+  "parameters": {}
+}

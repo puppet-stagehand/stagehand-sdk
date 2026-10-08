@@ -1,0 +1,52 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::echo",
+    "--targets",
+    "nothere.invalid",
+    "--connect-timeout",
+    "2",
+    "--no-host-key-check",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [
+      {
+        "action": "task",
+        "error_kind": "puppetlabs.tasks/connect-error",
+        "object": null,
+        "status": "failure",
+        "target": "nothere.invalid",
+        "value_keys": [
+          "_error"
+        ]
+      }
+    ],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1,
+    "treated_as_hostname": true
+  },
+  "notes": "A bare string that is not in any inventory. treated_as_hostname is true when Bolt made a per-target result whose target is that string, meaning Bolt accepts arbitrary strings as hosts.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unknown-target",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"nothere.invalid\",\"action\":\"task\",\"object\":null,\"status\":\"failure\",\"value\":{\"_error\":{\"details\":{},\"kind\":\"puppetlabs.tasks/connect-error\",\"msg\":\"Failed to connect to nothere.invalid: getaddrinfo: Name or service not known\",\"issue_code\":\"CONNECT_ERROR\"}}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

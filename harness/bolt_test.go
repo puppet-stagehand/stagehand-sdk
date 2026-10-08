@@ -184,6 +184,11 @@ func summariseItems(m map[string]any) []any {
 		}
 		out = append(out, s)
 	}
+	// Bolt runs targets in parallel and the order of items is not fixed, so sort
+	// by target to keep a recording comparable.
+	sort.SliceStable(out, func(i, j int) bool {
+		return asString(out[i].(map[string]any)["target"]) < asString(out[j].(map[string]any)["target"])
+	})
 	return out
 }
 
@@ -354,4 +359,199 @@ func TestHarnessBoltTaskOutcomes(t *testing.T) {
 				"Bolt's own exit code and the task's exit code are different numbers: see extra.items.",
 		})
 	})
+}
+
+// firstItemValue returns the value of the first per-target result, or nil.
+func firstItemValue(m map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	items, _ := m["items"].([]any)
+	if len(items) == 0 {
+		return nil
+	}
+	item, _ := items[0].(map[string]any)
+	v, _ := item["value"].(map[string]any)
+	return v
+}
+
+// statuses returns the status of every per-target result.
+func statuses(m map[string]any) []string {
+	var out []string
+	items, _ := m["items"].([]any)
+	for _, it := range items {
+		item, _ := it.(map[string]any)
+		out = append(out, asString(item["status"]))
+	}
+	return out
+}
+
+// unreachableArgs are the options that keep a connection attempt to a .invalid
+// name short and free of interactive prompts.
+var unreachableArgs = []string{"--connect-timeout", "2", "--no-host-key-check"}
+
+var cachedUnreachableExit = -1
+
+// unreachableExit is the Bolt exit code when every target is unreachable, asked
+// once per test binary, so the mixed-targets scenario can say whether its exit
+// code differs from total failure.
+func unreachableExit(t *testing.T) int {
+	t.Helper()
+	if cachedUnreachableExit < 0 {
+		args := append([]string{"task", "run", "harness_fixtures::echo", "--targets", unreachableTarget}, unreachableArgs...)
+		_, res := boltRun(t, boltRunOpts{params: `{"message": "hello"}`}, args...)
+		cachedUnreachableExit = res.ExitCode
+	}
+	return cachedUnreachableExit
+}
+
+// edgeCase is one Bolt invocation and what to record about it.
+type edgeCase struct {
+	scenario string
+	opts     boltRunOpts
+	args     []string
+	expect   []string
+	notes    string
+	// annotate adds scenario-specific evidence to Extra.
+	annotate func(t *testing.T, m map[string]any, res execResult, extra map[string]any)
+}
+
+// TestHarnessBoltEdgeCases records Bolt 4.0.0's behaviour for an unreachable
+// target, a mix of reachable and unreachable targets, the --noop gate, an
+// unknown task, an unknown target string, and a sensitive parameter plus an
+// approver-token-shaped value in the environment. Every target is localhost or
+// a .invalid name.
+func TestHarnessBoltEdgeCases(t *testing.T) {
+	requireRunner(t)
+	echo := boltRunOpts{params: `{"message": "hello"}`}
+
+	cases := []edgeCase{
+		{
+			scenario: "unreachable-target",
+			opts:     echo,
+			args:     append([]string{"task", "run", "harness_fixtures::echo", "--targets", unreachableTarget}, unreachableArgs...),
+			expect:   []string{`"status":"failure"`},
+			notes: "Real Bolt 4.0.0 against ssh://unreachable.invalid (a name that can never resolve) with a 2 second connect timeout. " +
+				"No real host can answer.",
+		},
+		{
+			scenario: "mixed-targets-partial",
+			opts:     echo,
+			args:     append([]string{"task", "run", "harness_fixtures::echo", "--targets", "localhost," + unreachableTarget}, unreachableArgs...),
+			expect:   []string{`"status":"success"`, `"status":"failure"`},
+			notes: "One reachable target (localhost) and one unreachable (.invalid) in a single run. " +
+				"partial_only_in_items is true when Bolt's exit code is the same as when every target fails, " +
+				"so only the per-target status can tell a partial failure from a total one.",
+			annotate: func(t *testing.T, m map[string]any, res execResult, extra map[string]any) {
+				sts := statuses(m)
+				hasOK, hasFail := false, false
+				for _, s := range sts {
+					hasOK = hasOK || s == "success"
+					hasFail = hasFail || s == "failure"
+				}
+				extra["has_success_and_failure"] = hasOK && hasFail
+				extra["partial_only_in_items"] = hasOK && hasFail && res.ExitCode == unreachableExit(t)
+			},
+		},
+		{
+			scenario: "noop-unsupported",
+			args:     []string{"task", "run", "harness_fixtures::no_noop", "--targets", "localhost", "--noop"},
+			expect:   nil,
+			notes: "--noop against a task that does not declare supports_noop. task_ran is true if the task's own output " +
+				"appears in Bolt's stdout, which would mean the gate did not stop it.",
+			annotate: func(t *testing.T, m map[string]any, res execResult, extra map[string]any) {
+				extra["task_ran"] = strings.Contains(res.Stdout, `"ran":true`) || strings.Contains(res.Stdout, `"ran": true`)
+			},
+		},
+		{
+			scenario: "noop-supported",
+			args:     []string{"task", "run", "harness_fixtures::noop_capable", "--targets", "localhost", "--noop"},
+			expect:   []string{`"status":"success"`},
+			notes:    "--noop against a task that declares supports_noop. task_saw_noop is the PT__noop value the task received.",
+			annotate: func(t *testing.T, m map[string]any, res execResult, extra map[string]any) {
+				if v := firstItemValue(m); v != nil {
+					extra["task_saw_noop"] = v["noop"]
+				}
+			},
+		},
+		{
+			scenario: "unknown-task",
+			args:     []string{"task", "run", "harness_fixtures::does_not_exist", "--targets", "localhost"},
+			notes:    "A task name that does not exist on the module path. Records whether any per-target items exist.",
+		},
+		{
+			scenario: "unknown-target",
+			opts:     echo,
+			args:     append([]string{"task", "run", "harness_fixtures::echo", "--targets", unknownTarget}, unreachableArgs...),
+			notes: "A bare string that is not in any inventory. treated_as_hostname is true when Bolt made a per-target " +
+				"result whose target is that string, meaning Bolt accepts arbitrary strings as hosts.",
+			annotate: func(t *testing.T, m map[string]any, res execResult, extra map[string]any) {
+				found := false
+				items, _ := m["items"].([]any)
+				for _, it := range items {
+					if item, ok := it.(map[string]any); ok && strings.Contains(asString(item["target"]), unknownTarget) {
+						found = true
+					}
+				}
+				extra["treated_as_hostname"] = found
+			},
+		},
+		{
+			scenario: "sensitive-typed-param-rejected",
+			opts:     boltRunOpts{params: `{"token": "` + canary + `"}`},
+			args:     []string{"task", "run", "harness_fixtures::secret_param_typed", "--targets", "localhost"},
+			expect:   []string{`bolt/pal-error`},
+			notes: "A task whose token parameter is typed Sensitive[String], given a plain JSON string on stdin. Bolt refuses " +
+				"before running the task, so a CLI or JSON caller cannot supply a Sensitive-typed value. The task metadata must " +
+				"declare the parameter as String with sensitive: true instead (see sensitive-param-canary). The error text is " +
+				"checked for the canary like every other output.",
+		},
+		{
+			scenario: "sensitive-param-canary",
+			opts: boltRunOpts{
+				params:   `{"token": "` + canary + `"}`,
+				extraEnv: []string{"STAGEHAND_APPROVER_TOKEN_CANARY=" + approverCanary},
+			},
+			args:   []string{"task", "run", "harness_fixtures::secret_param", "--targets", "localhost"},
+			expect: []string{`"token_length"`},
+			notes: "A Sensitive[String] parameter carrying a canary on stdin, plus an approver-token-shaped canary in the exec " +
+				"environment. canary_found_in lists where either canary appeared (stdout, stderr or bolt-debug.log); an empty " +
+				"list means neither leaked. Neither value is stored here.",
+			annotate: func(t *testing.T, m map[string]any, res execResult, extra map[string]any) {
+				if v := firstItemValue(m); v != nil {
+					extra["task_saw_token_length_matches"] = v["token_length"] == float64(len(canary))
+				}
+			},
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.scenario, func(t *testing.T) {
+			argv, res := boltRun(t, c.opts, c.args...)
+			places := canaryPlaces(t, res)
+			m := parseBolt(t, res.Stdout)
+			extra := boltBase(t, res)
+			if c.annotate != nil && m != nil {
+				c.annotate(t, m, res, extra)
+			}
+			extra["canary_found_in"] = anySlice(places)
+			if len(places) > 0 {
+				// A leak is a finding for Phase 14's BOLT-07, not something to
+				// normalise away: the fixture is not written with the value, only
+				// the place, and the run fails so the leak is named.
+				t.Errorf("a canary leaked in scenario %s: %v", c.scenario, places)
+			}
+			recordBolt(t, Fixture{
+				Scenario:    c.scenario,
+				Argv:        argv,
+				ExitCode:    res.ExitCode,
+				Stdout:      res.Stdout,
+				Stderr:      res.Stderr,
+				ExpectLines: c.expect,
+				Extra:       extra,
+				Notes:       c.notes,
+			})
+		})
+	}
 }

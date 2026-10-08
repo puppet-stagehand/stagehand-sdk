@@ -1,0 +1,37 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::does_not_exist",
+    "--targets",
+    "localhost",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "_error",
+      "items"
+    ],
+    "top_level_error": {
+      "kind": "bolt/unknown-task",
+      "msg": "Could not find a task named 'harness_fixtures::does_not_exist'. For a list of available tasks, run 'bolt task show'."
+    }
+  },
+  "notes": "A task name that does not exist on the module path. Records whether any per-target items exist.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unknown-task",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n],\n\"_error\": \n{\"kind\":\"bolt/unknown-task\",\"msg\":\"Could not find a task named 'harness_fixtures::does_not_exist'. For a list of available tasks, run 'bolt task show'.\",\"details\":{}}\n}\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

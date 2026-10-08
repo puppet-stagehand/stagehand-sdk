@@ -1,0 +1,50 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::noop_capable",
+    "--targets",
+    "localhost",
+    "--noop",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "\"status\":\"success\""
+  ],
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [
+      {
+        "action": "task",
+        "object": "harness_fixtures::noop_capable",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "noop"
+        ]
+      }
+    ],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1,
+    "task_saw_noop": "true"
+  },
+  "notes": "--noop against a task that declares supports_noop. task_saw_noop is the PT__noop value the task received.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "noop-supported",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"harness_fixtures::noop_capable\",\"status\":\"success\",\"value\":{\"noop\":\"true\"}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

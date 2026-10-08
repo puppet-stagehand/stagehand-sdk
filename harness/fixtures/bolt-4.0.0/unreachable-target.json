@@ -1,0 +1,54 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::echo",
+    "--targets",
+    "ssh://unreachable.invalid",
+    "--connect-timeout",
+    "2",
+    "--no-host-key-check",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "expect_lines": [
+    "\"status\":\"failure\""
+  ],
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [
+      {
+        "action": "task",
+        "error_kind": "puppetlabs.tasks/connect-error",
+        "object": null,
+        "status": "failure",
+        "target": "ssh://unreachable.invalid",
+        "value_keys": [
+          "_error"
+        ]
+      }
+    ],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "Real Bolt 4.0.0 against ssh://unreachable.invalid (a name that can never resolve) with a 2 second connect timeout. No real host can answer.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "unreachable-target",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"ssh://unreachable.invalid\",\"action\":\"task\",\"object\":null,\"status\":\"failure\",\"value\":{\"_error\":{\"details\":{},\"kind\":\"puppetlabs.tasks/connect-error\",\"msg\":\"Failed to connect to ssh://unreachable.invalid: getaddrinfo: Name or service not known\",\"issue_code\":\"CONNECT_ERROR\"}}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}

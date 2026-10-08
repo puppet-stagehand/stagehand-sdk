@@ -1,0 +1,51 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "harness_fixtures::secret_param",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "\"token_length\""
+  ],
+  "extra": {
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "items": [
+      {
+        "action": "task",
+        "object": "harness_fixtures::secret_param",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "token_length"
+        ]
+      }
+    ],
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1,
+    "task_saw_token_length_matches": true
+  },
+  "notes": "A Sensitive[String] parameter carrying a canary on stdin, plus an approver-token-shaped canary in the exec environment. canary_found_in lists where either canary appeared (stdout, stderr or bolt-debug.log); an empty list means neither leaked. Neither value is stored here.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "sensitive-param-canary",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"harness_fixtures::secret_param\",\"status\":\"success\",\"value\":{\"token_length\":33}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "bolt",
+  "tool_version": "4.0.0"
+}
