@@ -5,6 +5,7 @@
 //	expansion-index push    --index index.json --ref oci://<index repo> [--tag YYYYMMDDTHHMMSSZ]
 //	expansion-index promote --ref oci://<index repo> --digest sha256:<hex> --key cosign.pub [--tag latest]
 //	expansion-index verify  --ref oci://<repo>[:tag|@digest] --key cosign.pub [--expect-digest sha256:...] [--images]
+//	expansion-index listing --index-ref oci://<index repo>@sha256:<hex> --key cosign.pub --catalog catalog.yaml --feed <name> --out marquee.json
 //
 // Signing is not in this tool: the catalog workflow runs the pinned cosign CLI
 // between push and promote. Exit 0 ok, 1 findings, 2 usage or environment
@@ -26,9 +27,10 @@ import (
 
 	"github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-index/internal/catalogfile"
 	"github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-index/internal/index"
+	"github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-index/internal/listing"
 )
 
-const usage = `usage: expansion-index <build|push|promote|verify> [flags]
+const usage = `usage: expansion-index <build|push|promote|verify|listing> [flags]
   build   --catalog catalog.yaml --feed NAME --out index.json [--previous oci://REPO] [--allow-missing-previous]
           [--now RFC3339] [--key cosign.pub] [--candidate-username-env N --candidate-password-env N]
           [--previous-username-env N --previous-password-env N] [--check] [--format json]
@@ -36,6 +38,8 @@ const usage = `usage: expansion-index <build|push|promote|verify> [flags]
   promote --ref oci://REPO --digest sha256:HEX --key cosign.pub [--tag latest] [--format json]
   verify  --ref oci://REPO[:TAG|@DIGEST] --key cosign.pub [--expect-digest sha256:HEX] [--images]
           [--username-env N --password-env N] [--format json]
+  listing --index-ref oci://REPO@sha256:HEX --key cosign.pub --catalog catalog.yaml --feed NAME --out marquee.json
+          [--format json]
 `
 
 func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
@@ -57,6 +61,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPromote(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "listing":
+		return runListing(args[1:], stdout, stderr)
 	}
 	fmt.Fprintf(stderr, "unknown subcommand %q\n%s", args[0], usage)
 	return 2
@@ -282,4 +288,51 @@ func runVerify(args []string, stdout, stderr io.Writer) int {
 		okText = fmt.Sprintf("ok: %s generated_at %s, %d image(s) listed", res.Digest, res.GeneratedAt, len(res.Images))
 	}
 	return finish(stdout, *format, findings, doc, okText)
+}
+
+// runListing verifies the published index and only then writes the Marquee
+// page data. Nothing is written when verification or any check fails.
+func runListing(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("listing", stderr)
+	indexRef := fs.String("index-ref", "", "oci://<registry>/<index repository>@sha256:<hex>: the published, signed index")
+	keyPath := fs.String("key", "", "PEM P-256 public key the index must be signed by")
+	catalog := fs.String("catalog", "catalog.yaml", "the reviewed catalog.yaml (paid listings come from its listing blocks)")
+	feed := fs.String("feed", "", "the public feed (a key under feeds: in catalog.yaml) whose index --index-ref is")
+	out := fs.String("out", "", "where to write marquee.json")
+	format := fs.String("format", "text", "text | json")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || *indexRef == "" || *keyPath == "" || *feed == "" || *out == "" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	keyPEM, err := os.ReadFile(*keyPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	cat, findings, err := catalogfile.Load(*catalog)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	if len(findings) > 0 {
+		return finish(stdout, *format, findings, map[string]any{}, "")
+	}
+	doc, findings := listing.Build(context.Background(), listing.Options{IndexRef: *indexRef, KeyPEM: keyPEM, Catalog: cat, Feed: *feed})
+	if len(findings) > 0 {
+		return finish(stdout, *format, findings, map[string]any{}, "")
+	}
+	raw, err := listing.Marshal(doc)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	if err := os.WriteFile(*out, raw, 0o644); err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	res := map[string]any{"index_digest": doc.IndexDigest, "packs": len(doc.Packs), "paid_listings": len(doc.PaidListings), "out": *out}
+	return finish(stdout, *format, nil, res, fmt.Sprintf("ok: wrote %s (%d pack(s), %d paid listing(s)) from the index %s", *out, len(doc.Packs), len(doc.PaidListings), doc.IndexDigest))
 }

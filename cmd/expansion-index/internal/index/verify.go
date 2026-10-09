@@ -143,6 +143,9 @@ type VerifyResult struct {
 	Digest      string          `json:"digest"`
 	GeneratedAt string          `json:"generated_at"`
 	Images      []VerifiedImage `json:"images"`
+	// Index is the strictly decoded document whose signature was verified, for
+	// callers (listing) that must publish exactly what was signed.
+	Index *Index `json:"-"`
 }
 
 // Verify resolves ref, checks the index's signature exactly as a console will,
@@ -179,7 +182,7 @@ func Verify(ctx context.Context, opts VerifyOptions) (*VerifyResult, []Finding) 
 	if len(fs) > 0 {
 		return nil, fs
 	}
-	res := &VerifyResult{Digest: digest, GeneratedAt: idx.GeneratedAt, Images: []VerifiedImage{}}
+	res := &VerifyResult{Digest: digest, GeneratedAt: idx.GeneratedAt, Images: []VerifiedImage{}, Index: idx}
 	var findings []Finding
 	for _, p := range idx.Packs {
 		for _, v := range p.Versions {

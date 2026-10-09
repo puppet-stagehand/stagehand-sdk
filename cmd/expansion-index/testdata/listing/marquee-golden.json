@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "generated_at": "2026-10-09T14:30:12Z",
+  "feed": "oci://ghcr.io/puppet-stagehand/catalog",
+  "index_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+  "publisher_key": {
+    "fingerprint": "sha256:48ba24e6f91da7ced7540b1512d0eac37b7fa070d474d28b9f8a89a0c5955242",
+    "pem": "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERzD9kZTJx2uOrQdybFiHNxagf+Ie\nW1NVUaOwcNILUpQmRMKbLVtmPrqAgvJygWS5KCnuaiSiiaoTWlNI1KP9vw==\n-----END PUBLIC KEY-----\n"
+  },
+  "packs": [
+    {
+      "id": "hello",
+      "name": "Hello",
+      "summary": "Shows a greeting and each node's uptime on a node-detail tab. The SDK's example pack.",
+      "publisher": "Example Org",
+      "tier": "core",
+      "entitlement": "none",
+      "licence": "Apache-2.0",
+      "versions": [
+        {
+          "version": "0.1.0",
+          "released_at": "2026-10-09",
+          "image": "ghcr.io/puppet-stagehand/packs/hello@sha256:2222222222222222222222222222222222222222222222222222222222222222",
+          "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        }
+      ]
+    }
+  ],
+  "paid_listings": [
+    {
+      "id": "puppet_paid",
+      "name": "Puppet Paid Add-on",
+      "summary": "A paid add-on used only by tests.",
+      "tier": "ent",
+      "label": "Perforce add-on, licence required",
+      "versions": [
+        {
+          "version": "2.1.0",
+          "released_at": "2026-09-15"
+        },
+        {
+          "version": "2.0.0",
+          "released_at": "2026-08-01"
+        }
+      ]
+    }
+  ]
+}
