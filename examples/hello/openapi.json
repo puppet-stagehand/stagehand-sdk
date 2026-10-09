@@ -1,0 +1,35 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Hello pack",
+    "version": "0.1.0",
+    "description": "The routes of the SDK's example pack. The console mounts every path below under /api/v1/x/hello/."
+  },
+  "paths": {
+    "/greeting": {
+      "get": {
+        "operationId": "getGreeting",
+        "summary": "Read the greeting and the name of the caller",
+        "responses": {
+          "200": {
+            "description": "The greeting document's text and the caller's label.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["greeting", "caller"],
+                  "properties": {
+                    "greeting": { "type": "string" },
+                    "caller": { "type": "string", "description": "The label of the console user or token making the request, or \"unknown\"." }
+                  }
+                }
+              }
+            }
+          },
+          "502": { "description": "The greeting document could not be read." },
+          "503": { "description": "The worker is not connected to the console yet." }
+        }
+      }
+    }
+  }
+}

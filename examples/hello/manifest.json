@@ -22,6 +22,10 @@
   },
   "permissions": ["documents:rw", "puppetdb:read"],
   "jobs": [ { "name": "refresh_uptime", "every": "15m", "singleton": true } ],
+  "routes": [
+    { "method": "GET", "path": "greeting", "access": { "role": "viewer" }, "operation_id": "getGreeting" }
+  ],
   "content": null,
-  "resources": { "cpu": "100m", "memory": "64Mi" }
+  "resources": { "cpu": "100m", "memory": "64Mi" },
+  "openapi_path": "/stagehand/openapi.json"
 }
