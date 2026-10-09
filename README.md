@@ -49,6 +49,9 @@ CI fails on `gen/` drift and on `schema/proto/` drift
 (`TestSchemaProtoMatchesProto` in `go test ./... -race`). Pack authors keep
 reading `schema/proto/`.
 
+Real-tool harness (r10k, g10k, Bolt, Puppet Server 9 in containers, never part of
+`go test ./...`): run `./harness/run.sh`; see `docs/harness.md`.
+
 Design record: `puppet-console/docs/adr/0010-capability-packs.md`,
 `docs/design/capability-packs.md`, `docs/design/stagehand-sdk-ai-friendly.md`.
 
