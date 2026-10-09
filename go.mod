@@ -4,6 +4,7 @@ go 1.25.0
 
 require (
 	github.com/Masterminds/semver/v3 v3.5.0
+	github.com/hashicorp/yamux v0.1.2
 	go.yaml.in/yaml/v3 v3.0.5
 	google.golang.org/grpc v1.83.2
 	google.golang.org/protobuf v1.36.12
