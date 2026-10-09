@@ -366,7 +366,10 @@ func TestHarnessR10kDeploySuccess(t *testing.T) {
 		t.Fatalf("make-git-fixture.sh did not end with a commit SHA: %q", head)
 	}
 
-	if res := composeExec(ctx, t, deployUser, "rm", "-rf", "/srv/work/r10k"); res.ExitCode != 0 {
+	// Reset as root: an earlier scenario (TestHarnessR10kRootOwnership) leaves
+	// root-owned files under /srv/work/r10k that the deploy user cannot remove,
+	// and a full ./harness/run.sh runs that scenario first.
+	if res := composeExec(ctx, t, "root", "sh", "-c", `chmod -R u+w /srv/work/r10k 2>/dev/null; rm -rf /srv/work/r10k`); res.ExitCode != 0 {
 		t.Fatalf("cannot reset /srv/work/r10k: exit %d", res.ExitCode)
 	}
 	cfg := "---\ncachedir: /srv/work/r10k/cache\nsources:\n  control:\n" +
