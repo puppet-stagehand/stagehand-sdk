@@ -10,4 +10,7 @@
 - docs/ui-bundle-contract.md: ui.manifest.json, ui_digest rule, runtime shims
 - docs/expansion-build.md: building a pack's UI with `expansion-build ui`
 - examples/hello/manifest.json: a valid headless-plus-tab pack
+- docs/worker.md: writing a Go pack worker (worker.Run, principal rule, workertest)
+- docs/image-layout.md: the pack image layout contract
+- examples/hello: a working Go pack (manifest, worker, OpenAPI fragment, Dockerfile)
 - docs/pack-author-guide.md: ELI10 walkthrough

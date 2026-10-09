@@ -30,7 +30,9 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `uibundle/` | Reference implementation of the bundle rules; backs `pack-check --ui` |
 | `docs/ui-bundle-contract.md` | The UI bundle contract |
 | `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json`; `--ui dir` also verifies a built UI bundle |
-| `examples/hello` | A valid pack manifest (node-detail tab + job) |
+| `examples/hello` | The example pack: a valid manifest (node-detail tab + job + one route), a Go worker on `worker.Run`, an OpenAPI fragment and a layout-correct Dockerfile |
+| `docs/worker.md` | Guide to writing a Go pack worker with the `worker` package and testing it with `workertest` |
+| `docs/image-layout.md` | The pack image layout contract (manifest in the topmost layer, UI, OpenAPI, entrypoint, linux/amd64) |
 | `examples/control-repo-authoring` | Worked proof that the Code facet, the registry search, the suggestion step and the approval gate compose into one workflow; author-only, never deploys |
 | `docs/control-repo-authoring.md` | End-to-end ELI10 authoring guide for that example |
 | `docs/pack-author-guide.md` | ELI10 guide |
