@@ -423,3 +423,57 @@ func TestListingPaidListingNeedsASummary(t *testing.T) {
 		t.Fatalf("doc=%v findings=%s", doc, codes(fs))
 	}
 }
+
+// fakePrivateBlock is a PEM block with a private-key header and made-up bytes:
+// it stands for anything a key file may carry besides the public key.
+const fakePrivateBlock = "-----BEGIN EC " + "PRIVATE KEY-----\nc2VjcmV0LXNlY3JldC1zZWNyZXQtc2VjcmV0LXNlY3JldC1zZWNyZXQ=\n-----END EC " + "PRIVATE KEY-----\n"
+
+// The --key file is published on a public page. Whatever the PEM parser skips
+// must never reach it (a parser differential would publish the rest verbatim).
+func TestListingKeyFileWithExtraContentIsRefused(t *testing.T) {
+	e := newEnv(t, false, true)
+	for name, extra := range map[string]string{
+		"trailing private key block": e.signer.PublicPEM + fakePrivateBlock,
+		"leading private key block":  fakePrivateBlock + e.signer.PublicPEM,
+		"trailing comment":           e.signer.PublicPEM + "# internal note: staging token abc123\n",
+		"leading comment":            "# internal note: staging token abc123\n" + e.signer.PublicPEM,
+		"second public key block":    e.signer.PublicPEM + e.signer.PublicPEM,
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := e.options()
+			o.KeyPEM = []byte(extra)
+			doc, fs := Build(context.Background(), o)
+			if doc != nil || !strings.Contains(codes(fs), "key_invalid") {
+				t.Fatalf("doc=%v findings=%s, want key_invalid and no document", doc, codes(fs))
+			}
+			for _, f := range fs {
+				if f.Fix == "" || strings.Contains(f.Message+f.Fix, "PRIVATE") && strings.Contains(f.Message+f.Fix, "c2VjcmV0") {
+					t.Fatalf("finding must carry a fix line and never echo the file's content: %v", f)
+				}
+			}
+		})
+	}
+}
+
+func TestListingPublishesTheCanonicalKeyEncoding(t *testing.T) {
+	e := newEnv(t, false, true)
+	for name, file := range map[string]string{
+		"trailing blank lines": e.signer.PublicPEM + "\n\n  \n",
+		"leading blank lines":  "\n\n" + e.signer.PublicPEM,
+		"crlf line endings":    strings.ReplaceAll(e.signer.PublicPEM, "\n", "\r\n"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			o := e.options()
+			o.KeyPEM = []byte(file)
+			doc, fs := Build(context.Background(), o)
+			if len(fs) > 0 {
+				t.Fatalf("a public key with only whitespace around it must be accepted: %v", fs)
+			}
+			raw, _ := Marshal(doc)
+			pem := asMap(t, raw)["publisher_key"].(map[string]any)["pem"]
+			if pem != e.signer.PublicPEM {
+				t.Fatalf("published pem %q, want the canonical encoding %q", pem, e.signer.PublicPEM)
+			}
+		})
+	}
+}
