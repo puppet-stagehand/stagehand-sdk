@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/url"
 	"regexp"
 	"time"
 
@@ -146,7 +145,7 @@ func DecodeStrict(raw []byte) (*Index, error) {
 		default:
 			return nil, fmt.Errorf("pack %q has unknown entitlement %q", p.ID, p.Entitlement)
 		}
-		if err := checkWebURL(p.DocsURL); err != nil {
+		if err := catalogfile.CheckWebURL(p.DocsURL); err != nil {
 			return nil, fmt.Errorf("pack %q docs_url: %v", p.ID, err)
 		}
 		if len(p.Versions) == 0 {
@@ -173,31 +172,10 @@ func DecodeStrict(raw []byte) (*Index, error) {
 			if _, err := time.Parse("2006-01-02", v.ReleasedAt); err != nil {
 				return nil, fmt.Errorf("pack %q version %q released_at is not a date", p.ID, v.Version)
 			}
-			if err := checkWebURL(v.NotesURL); err != nil {
+			if err := catalogfile.CheckWebURL(v.NotesURL); err != nil {
 				return nil, fmt.Errorf("pack %q version %q notes_url: %v", p.ID, v.Version, err)
 			}
 		}
 	}
 	return &idx, nil
-}
-
-// checkWebURL accepts an empty string or an http(s) URL with a host, no
-// userinfo and no control characters or spaces (the console's checkWebURL).
-func checkWebURL(raw string) error {
-	if raw == "" {
-		return nil
-	}
-	for _, r := range raw {
-		if r <= 0x20 || r == 0x7f || (r >= 0x80 && r <= 0x9f) {
-			return errors.New("must not contain control characters or spaces")
-		}
-	}
-	u, err := url.Parse(raw)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.Hostname() == "" {
-		return errors.New("must be an http(s) URL")
-	}
-	if u.User != nil {
-		return errors.New("must not contain credentials")
-	}
-	return nil
 }

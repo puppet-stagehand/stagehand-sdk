@@ -22,7 +22,7 @@ func TagFor(t time.Time) string { return t.UTC().Format("20060102T150405Z") }
 // ParseRepository parses oci://host/repo, host/repo, with an optional :tag or
 // @digest, into a reference.
 func ParseReference(ref string) (name.Reference, error) {
-	return name.ParseReference(strings.TrimPrefix(ref, "oci://"), name.StrictValidation)
+	return name.ParseReference(strings.TrimPrefix(ref, "oci://"))
 }
 
 // PushOptions are the inputs of Push.
@@ -57,7 +57,7 @@ func Push(ctx context.Context, opts PushOptions) (string, []Finding) {
 		return "", []Finding{{Code: "tag_mismatch", Path: "--tag", Message: fmt.Sprintf("tag %q does not match the index's generated_at (%s)", tag, want),
 			Fix: "Use the tag `expansion-index build` printed, or omit --tag."}}
 	}
-	repo, err := name.NewRepository(strings.TrimPrefix(opts.Repo, "oci://"), name.StrictValidation)
+	repo, err := name.NewRepository(strings.TrimPrefix(opts.Repo, "oci://"))
 	if err != nil {
 		return "", []Finding{{Code: "ref_invalid", Path: "--ref", Message: err.Error(), Fix: "Pass --ref as oci://<registry>/<repository> with no tag."}}
 	}

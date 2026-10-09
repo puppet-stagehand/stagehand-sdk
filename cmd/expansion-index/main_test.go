@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
@@ -72,7 +73,7 @@ packs:
 	keyPath := testreg.WriteKey(t, dir, "cosign.pub", signer.PublicPEM)
 	outPath := filepath.Join(dir, "index.json")
 
-	code, out, errs := runCmd(t, "build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T14:30:12Z", "--key", keyPath, "--out", outPath, "--format", "json")
+	code, out, errs := runCmd(t, "build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T14:30:12Z", "--key", keyPath, "--previous", "oci://"+reg.Host+"/catalog", "--allow-missing-previous", "--out", outPath, "--format", "json")
 	if code != 0 {
 		t.Fatalf("build exit %d\n%s\n%s", code, out, errs)
 	}
@@ -150,7 +151,7 @@ packs:
 
 	// A second index nobody signed.
 	out2 := filepath.Join(dir, "index2.json")
-	if code, o, e := runCmd(t, "build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T15:00:00Z", "--out", out2); code != 0 {
+	if code, o, e := runCmd(t, "build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T15:00:00Z", "--previous", "oci://"+reg.Host+"/catalog", "--allow-missing-previous", "--out", out2); code != 0 {
 		t.Fatalf("second build exit %d\n%s\n%s", code, o, e)
 	}
 	if code, o, e := runCmd(t, "push", "--index", out2, "--ref", repo); code != 0 {
@@ -208,5 +209,168 @@ func TestDecodeStrict(t *testing.T) {
 	}
 	if _, err := index.DecodeStrict(append(encode(func(map[string]any) {}), []byte(` {}`)...)); err == nil {
 		t.Fatal("trailing data must be refused")
+	}
+}
+
+func catalogYAML(indexRepo, imagesRepo, candidate string) string {
+	return `format: 1
+feeds:
+  official:
+    index: ` + indexRepo + `
+    images: ` + imagesRepo + `
+    visibility: public
+packs:
+  - id: hello
+    feed: official
+    versions:
+      - version: 0.1.0
+        candidate: ` + candidate + `
+        released_at: 2026-10-09
+`
+}
+
+func TestBuildCandidateCredentialsFromEnv(t *testing.T) {
+	isolateDocker(t)
+	staging := testreg.NewBasicAuth(t, "ci", "pw-1234")
+	basic := remote.WithAuth(&authn.Basic{Username: "ci", Password: "pw-1234"})
+	candidate := testreg.PushCandidate(t, staging.Host+"/staging/hello", helloManifest(t), basic)
+	out := testreg.New(t)
+
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "catalog.yaml")
+	writeFile(t, catalog, catalogYAML(out.Host+"/catalog", out.Host+"/packs", candidate))
+	idx := filepath.Join(dir, "index.json")
+	args := []string{"build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T14:30:12Z", "--previous", "oci://" + out.Host + "/catalog",
+		"--allow-missing-previous", "--out", idx, "--format", "json"}
+
+	// No credentials: the private staging repository refuses the read.
+	code, o, _ := runCmd(t, args...)
+	if code != 1 || !strings.Contains(o, "candidate_denied") || !strings.Contains(o, "--candidate-username-env") {
+		t.Fatalf("anonymous candidate read: exit %d\n%s", code, o)
+	}
+	// Wrong credentials.
+	t.Setenv("EI_TEST_USER", "ci")
+	t.Setenv("EI_TEST_PASS", "wrong")
+	code, o, _ = runCmd(t, append(args, "--candidate-username-env", "EI_TEST_USER", "--candidate-password-env", "EI_TEST_PASS")...)
+	if code != 1 || !strings.Contains(o, "candidate_denied") {
+		t.Fatalf("wrong candidate credentials: exit %d\n%s", code, o)
+	}
+	if strings.Contains(o, "wrong") || strings.Contains(o, "pw-1234") {
+		t.Fatalf("credentials must never be printed:\n%s", o)
+	}
+	// Right credentials.
+	t.Setenv("EI_TEST_PASS", "pw-1234")
+	code, o, errs := runCmd(t, append(args, "--candidate-username-env", "EI_TEST_USER", "--candidate-password-env", "EI_TEST_PASS")...)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, o, errs)
+	}
+	if strings.Contains(o+errs, "pw-1234") {
+		t.Fatalf("credentials must never be printed:\n%s\n%s", o, errs)
+	}
+	var got struct {
+		OK       bool   `json:"ok"`
+		Previous string `json:"previous"`
+		Images   []struct {
+			Pack          string `json:"pack"`
+			Version       string `json:"version"`
+			Candidate     string `json:"candidate"`
+			Destination   string `json:"destination"`
+			AlreadyListed bool   `json:"already_listed"`
+		} `json:"images"`
+	}
+	if err := json.Unmarshal([]byte(o), &got); err != nil || !got.OK || got.Previous != "not_found" || len(got.Images) != 1 {
+		t.Fatalf("json %q: %v", o, err)
+	}
+	im := got.Images[0]
+	if im.Pack != "hello" || im.Version != "0.1.0" || im.Candidate != candidate ||
+		im.Destination != out.Host+"/packs/hello@"+candidate[strings.Index(candidate, "@")+1:] || im.AlreadyListed {
+		t.Fatalf("image entry %+v", im)
+	}
+}
+
+func TestBuildEnvironmentErrors(t *testing.T) {
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "catalog.yaml")
+	writeFile(t, catalog, catalogYAML("r.example/catalog", "r.example/packs", "r.example/s/h@sha256:"+strings.Repeat("0", 64)))
+	base := []string{"build", "--catalog", catalog, "--feed", "official", "--previous", "oci://r.example/catalog", "--out", filepath.Join(dir, "i.json")}
+	t.Setenv("EI_SET", "x")
+	for name, extra := range map[string][]string{
+		"only one of the pair":    {"--candidate-username-env", "EI_SET"},
+		"variable not set":        {"--candidate-username-env", "EI_SET", "--candidate-password-env", "EI_NOT_SET"},
+		"previous pair half":      {"--previous-password-env", "EI_SET"},
+		"bad --now":               {"--now", "yesterday"},
+		"unreadable key":          {"--key", filepath.Join(dir, "missing.pub")},
+		"no previous flag at all": nil,
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := append([]string(nil), base...)
+			if name == "no previous flag at all" {
+				args = []string{"build", "--catalog", catalog, "--feed", "official", "--out", filepath.Join(dir, "i.json")}
+			}
+			if code, _, errs := runCmd(t, append(args, extra...)...); code != 2 {
+				t.Fatalf("exit %d, want 2 (stderr %q)", code, errs)
+			}
+		})
+	}
+	if code, _, _ := runCmd(t, "build", "--catalog", filepath.Join(dir, "nope.yaml"), "--feed", "official", "--previous", "oci://r/x", "--out", "x"); code != 2 {
+		t.Fatalf("a missing catalog file is an environment error: exit %d", code)
+	}
+}
+
+func TestBuildCheckIsOffline(t *testing.T) {
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "catalog.yaml")
+	// Nothing listens at r.example and no registry is contacted.
+	writeFile(t, catalog, catalogYAML("r.example/catalog", "r.example/packs", "r.example/s/h@sha256:"+strings.Repeat("0", 64)))
+	out := filepath.Join(dir, "index.json")
+	code, o, errs := runCmd(t, "build", "--check", "--catalog", catalog, "--feed", "official", "--out", out)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s\n%s", code, o, errs)
+	}
+	if _, err := os.Stat(out); err == nil {
+		t.Fatal("--check must write nothing")
+	}
+	if code, _, _ := runCmd(t, "build", "--check", "--catalog", catalog); code != 0 {
+		t.Fatalf("--check needs neither --feed nor --previous: exit %d", code)
+	}
+	if code, o, _ := runCmd(t, "build", "--check", "--catalog", catalog, "--feed", "nope"); code != 1 || !strings.Contains(o, "unknown_feed") {
+		t.Fatalf("exit %d\n%s", code, o)
+	}
+	writeFile(t, catalog, strings.Replace(catalogYAML("r.example/catalog", "r.example/packs", "r.example/s/h@sha256:"+strings.Repeat("0", 64)), "format: 1", "format: 7", 1))
+	if code, o, _ := runCmd(t, "build", "--check", "--catalog", catalog, "--format", "json"); code != 1 || !strings.Contains(o, "catalog_format") {
+		t.Fatalf("exit %d\n%s", code, o)
+	}
+}
+
+// No flag or environment variable relaxes a 401 or 403 on the previous read.
+func TestBuildPreviousDeniedThroughTheCLI(t *testing.T) {
+	isolateDocker(t)
+	g := testreg.NewGHCRLike(t, "robot", "tok-9876")
+	staging := testreg.New(t)
+	candidate := testreg.PushCandidate(t, staging.Host+"/staging/hello", helloManifest(t))
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "catalog.yaml")
+	writeFile(t, catalog, catalogYAML(g.Host+"/catalog", g.Host+"/packs", candidate))
+	base := []string{"build", "--catalog", catalog, "--feed", "official", "--previous", "oci://" + g.Host + "/catalog", "--out", filepath.Join(dir, "i.json"), "--format", "json"}
+
+	for _, allow := range [][]string{nil, {"--allow-missing-previous"}} {
+		code, o, _ := runCmd(t, append(append([]string(nil), base...), allow...)...)
+		if code != 1 || !strings.Contains(o, "previous_denied") || !strings.Contains(o, "--previous-username-env") {
+			t.Fatalf("anonymous previous read of a never-created package: exit %d\n%s", code, o)
+		}
+	}
+	t.Setenv("EI_PU", "robot")
+	t.Setenv("EI_PP", "tok-9876")
+	creds := []string{"--previous-username-env", "EI_PU", "--previous-password-env", "EI_PP"}
+	code, o, _ := runCmd(t, append(append([]string(nil), base...), creds...)...)
+	if code != 1 || !strings.Contains(o, "previous_missing") {
+		t.Fatalf("authenticated, no flag: exit %d\n%s", code, o)
+	}
+	code, o, errs := runCmd(t, append(append(append([]string(nil), base...), creds...), "--allow-missing-previous")...)
+	if code != 0 || !strings.Contains(o, `"previous": "not_found"`) {
+		t.Fatalf("authenticated with the flag: exit %d\n%s\n%s", code, o, errs)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "i.json")); err != nil {
+		t.Fatal("a successful build writes the index")
 	}
 }

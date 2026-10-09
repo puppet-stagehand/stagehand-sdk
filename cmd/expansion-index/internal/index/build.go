@@ -19,6 +19,7 @@ import (
 	"time"
 
 	semver "github.com/Masterminds/semver/v3"
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
@@ -52,6 +53,9 @@ type BuildOptions struct {
 	// CandidateRemote carries the registry options (credentials) used to read
 	// the unsigned candidate images in private staging.
 	CandidateRemote []remote.Option
+	// Previous says how the currently published index is read; nil skips the
+	// read (and with it the freshness check and already_listed).
+	Previous *PreviousOptions
 }
 
 // ImageResult is one candidate and where it will be published.
@@ -116,6 +120,14 @@ func Build(ctx context.Context, opts BuildOptions) (*BuildResult, []Finding) {
 
 	res := &BuildResult{}
 	var prev *Index
+	if opts.Previous != nil {
+		var fs []Finding
+		prev, res.Previous, fs = ReadPrevious(ctx, *opts.Previous)
+		findings = append(findings, fs...)
+	}
+	if prev != nil {
+		findings = append(findings, checkFreshness(prev, now)...)
+	}
 	if len(findings) > 0 {
 		return nil, findings
 	}
@@ -436,4 +448,105 @@ func emptyBody(terr *transport.Error) bool {
 	msg := terr.Error()
 	status := fmt.Sprintf("unexpected status code %d %s", terr.StatusCode, http.StatusText(terr.StatusCode))
 	return strings.HasSuffix(msg, status) || strings.HasSuffix(msg, status+" (HEAD responses have no body, use GET for details)")
+}
+
+// Values of BuildResult.Previous and the build JSON's "previous".
+const (
+	PreviousFound    = "found"
+	PreviousNotFound = "not_found"
+)
+
+// PreviousOptions says how the currently published index is read.
+type PreviousOptions struct {
+	// Repo is oci://host/repo[:tag] (the tag defaults to latest).
+	Repo string
+	// AllowMissing tolerates NotFound, and only NotFound.
+	AllowMissing bool
+	// Auth, when set, reads the repository with the pull,push scope (the
+	// authority the later push uses); nil reads anonymously with pull scope.
+	Auth authn.Authenticator
+}
+
+// pushScopedTransport returns a registry transport that has already obtained a
+// token for repo's push,pull scope. A registry that would accept the later push
+// must grant that scope even for a repository nobody has created yet, and then
+// answers a read of it with 404 instead of denying it. It is built on
+// go-containerregistry's own handshake; the credentials never leave auth.
+func pushScopedTransport(ctx context.Context, repo name.Repository, auth authn.Authenticator, base http.RoundTripper) (http.RoundTripper, error) {
+	if base == nil {
+		base = remote.DefaultTransport
+	}
+	return transport.NewWithContext(ctx, repo.Registry, auth, base, []string{repo.Scope(transport.PushScope)})
+}
+
+// ReadPrevious reads the currently published index. It has exactly three
+// outcomes: found (the index, strictly decoded), not found (tolerated only
+// with AllowMissing), and denied (a 401 or 403, never tolerated). Anything
+// else is a finding too.
+func ReadPrevious(ctx context.Context, o PreviousOptions) (*Index, string, []Finding) {
+	fail := func(code, msg, fix string) (*Index, string, []Finding) {
+		return nil, "", []Finding{{Code: code, Path: "--previous", Message: msg, Fix: fix}}
+	}
+	target := strings.TrimPrefix(o.Repo, "oci://")
+	ref, err := name.ParseReference(target)
+	if err != nil {
+		return fail("previous_ref_invalid", fmt.Sprintf("--previous %q: %v", o.Repo, err), "Pass --previous as oci://<registry>/<index repository>.")
+	}
+	ropts := []remote.Option{remote.WithContext(ctx)}
+	var desc *remote.Descriptor
+	var gerr error
+	if o.Auth != nil {
+		var rt http.RoundTripper
+		if rt, gerr = pushScopedTransport(ctx, ref.Context(), o.Auth, remote.DefaultTransport); gerr == nil {
+			desc, gerr = remote.Get(ref, append(ropts, remote.WithTransport(rt))...)
+		}
+	} else {
+		desc, gerr = remote.Get(ref, ropts...)
+	}
+	if gerr != nil {
+		switch classifyRegistryError(gerr) {
+		case NotFound:
+			if o.AllowMissing {
+				return nil, PreviousNotFound, nil
+			}
+			return fail("previous_missing", fmt.Sprintf("no index is published at %s yet", ref.String()),
+				"If this is the feed's first publish, pass --allow-missing-previous (with the --previous-username-env/--previous-password-env credentials that will push it); otherwise check --previous.")
+		case Denied:
+			fix := "The credentials cannot read this repository: check the token has package write access, and that --previous names the right repository."
+			if o.Auth == nil {
+				fix = "A registry answers a never-created package exactly like a private one, so an anonymous read cannot tell. Read the previous index with the credentials that will push it (--previous-username-env/--previous-password-env); this stop is never relaxed."
+			}
+			return fail("previous_denied", fmt.Sprintf("the registry denied reading the published index at %s (%s)", ref.String(), briefErr(gerr)), fix)
+		}
+		return fail("previous_unreadable", fmt.Sprintf("reading the published index at %s failed: %s", ref.String(), briefErr(gerr)),
+			"Check the registry is reachable and retry; a build never proceeds on a guess about the published index.")
+	}
+	img, err := desc.Image()
+	if err != nil {
+		return fail("previous_unreadable", fmt.Sprintf("reading the published index at %s failed: %s", ref.String(), briefErr(err)), "Retry; if it persists the published artifact is damaged.")
+	}
+	idx, err := readIndexArtifact(img)
+	if err != nil {
+		return fail("previous_invalid", fmt.Sprintf("the published index at %s is not readable: %s", ref.String(), briefErr(err)),
+			"The published index does not decode under the console's rules; republish a valid one before building on top of it.")
+	}
+	return idx, PreviousFound, nil
+}
+
+func checkFreshness(prev *Index, now time.Time) []Finding {
+	if prev.GeneratedAt == "" {
+		return []Finding{{Code: "previous_unstamped", Path: "--previous", Message: "the published index carries no generated_at, so a newer one cannot be proven",
+			Fix: "A rollback cannot be ruled out without it: have the feed owner republish a stamped index first; a build never guesses."}}
+	}
+	pt, err := time.Parse(time.RFC3339, prev.GeneratedAt)
+	if err != nil {
+		return []Finding{{Code: "previous_unstamped", Path: "--previous", Message: "the published index's generated_at is not RFC 3339",
+			Fix: "Publish a valid index first."}}
+	}
+	if !now.After(pt) {
+		return []Finding{{Code: "generated_at_not_increasing", Path: "--now",
+			Message: fmt.Sprintf("generated_at %s is not later than the published index's %s", now.Format(time.RFC3339), pt.UTC().Format(time.RFC3339)),
+			Fix:     "generated_at must strictly increase (consoles refuse a rollback). Wait at least a second, or fix the clock / --now, and rebuild."}}
+	}
+	return nil
 }

@@ -126,12 +126,17 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	keyPath := fs.String("key", "", "PEM P-256 public key listed (informationally) in publisher_keys")
 	candUser := fs.String("candidate-username-env", "", "environment variable holding the candidate registry username")
 	candPass := fs.String("candidate-password-env", "", "environment variable holding the candidate registry password")
+	previous := fs.String("previous", "", "oci://<index repository>: the currently published index (read for the generated_at rollback guard)")
+	allowMissing := fs.Bool("allow-missing-previous", false, "tolerate a previous index that does not exist yet (the first publish); a 401 or 403 is never tolerated")
+	prevUser := fs.String("previous-username-env", "", "environment variable holding the username that reads the previous index (with its password: read with the push scope)")
+	prevPass := fs.String("previous-password-env", "", "environment variable holding the password that reads the previous index")
+	check := fs.Bool("check", false, "validate catalog.yaml offline; read no registry and write nothing")
 	out := fs.String("out", "", "where to write index.json")
 	format := fs.String("format", "text", "text | json")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 || *feed == "" || *out == "" {
+	if fs.NArg() != 0 || (!*check && (*feed == "" || *out == "" || *previous == "")) {
 		fmt.Fprint(stderr, usage)
 		return 2
 	}
@@ -140,8 +145,14 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "expansion-index:", err)
 		return 2
 	}
-	if len(findings) > 0 {
-		return finish(stdout, *format, findings, map[string]any{}, "")
+	if *check && len(findings) == 0 && *feed != "" {
+		if _, ok := cat.Feeds[*feed]; !ok {
+			findings = append(findings, index.Finding{Code: "unknown_feed", Path: "feed", Message: fmt.Sprintf("catalog.yaml declares no feed %q", *feed),
+				Fix: "Pass --feed with one of the names under `feeds:` in catalog.yaml."})
+		}
+	}
+	if len(findings) > 0 || *check {
+		return finish(stdout, *format, findings, map[string]any{}, "ok: "+*catalog+" is valid")
 	}
 	stamp := time.Now().UTC()
 	if *now != "" {
@@ -164,8 +175,14 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "expansion-index:", err)
 		return 2
 	}
+	pauth, err := authFromEnv(*prevUser, *prevPass)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
 	res, bfs := index.Build(context.Background(), index.BuildOptions{
 		Catalog: cat, Feed: *feed, Now: stamp, KeyPEM: keyPEM, CandidateRemote: remoteAuth(cauth),
+		Previous: &index.PreviousOptions{Repo: *previous, AllowMissing: *allowMissing, Auth: pauth},
 	})
 	if len(bfs) > 0 {
 		return finish(stdout, *format, bfs, map[string]any{"images": []index.ImageResult{}}, "")
