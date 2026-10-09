@@ -7,11 +7,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/fstest"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -238,5 +241,156 @@ func TestRunReturnsWhenHostDropsTheWorker(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("Run did not return after the host dropped the worker")
+	}
+}
+
+func TestReadyHookControlsHealth(t *testing.T) {
+	var ready atomic.Bool
+	host := workertest.NewFakeHost(t)
+	start(t, host, worker.Options{
+		Ready: func(context.Context) (bool, string) {
+			if ready.Load() {
+				return true, ""
+			}
+			return false, "waiting for PDCTNG settings"
+		},
+	})
+
+	st, err := host.Health().Check(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !st.GetLive() || st.GetReady() || st.GetDetail() != "waiting for PDCTNG settings" {
+		t.Fatalf("health = %+v, want live, not ready, with the detail", st)
+	}
+	ready.Store(true)
+	st, err = host.Health().Check(context.Background(), &emptypb.Empty{})
+	if err != nil || !st.GetReady() {
+		t.Fatalf("after ready: %+v, %v", st, err)
+	}
+}
+
+func TestPanickingReadyHookIsNotReadyNotACrash(t *testing.T) {
+	host := workertest.NewFakeHost(t)
+	start(t, host, worker.Options{
+		Ready: func(context.Context) (bool, string) { panic("ready hook exploded") },
+	})
+
+	st, err := host.Health().Check(context.Background(), &emptypb.Empty{})
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !st.GetLive() || st.GetReady() {
+		t.Fatalf("health = %+v, want live and not ready", st)
+	}
+	if strings.Contains(st.GetDetail(), "exploded") {
+		t.Fatalf("detail leaks the panic value: %q", st.GetDetail())
+	}
+}
+
+func TestPurgeHook(t *testing.T) {
+	t.Run("no hook succeeds", func(t *testing.T) {
+		host := workertest.NewFakeHost(t)
+		start(t, host, worker.Options{})
+		if _, err := host.Lifecycle().Purge(context.Background(), &emptypb.Empty{}); err != nil {
+			t.Fatalf("Purge without a hook: %v", err)
+		}
+	})
+	t.Run("hook runs and its error is Internal", func(t *testing.T) {
+		var calls atomic.Int32
+		host := workertest.NewFakeHost(t)
+		start(t, host, worker.Options{OnPurge: func(context.Context) error {
+			calls.Add(1)
+			return errors.New("cannot clean up")
+		}})
+		_, err := host.Lifecycle().Purge(context.Background(), &emptypb.Empty{})
+		if status.Code(err) != codes.Internal || calls.Load() != 1 {
+			t.Fatalf("Purge = %v after %d hook calls, want Internal after 1", err, calls.Load())
+		}
+	})
+	t.Run("hook success", func(t *testing.T) {
+		var calls atomic.Int32
+		host := workertest.NewFakeHost(t)
+		start(t, host, worker.Options{OnPurge: func(context.Context) error { calls.Add(1); return nil }})
+		if _, err := host.Lifecycle().Purge(context.Background(), &emptypb.Empty{}); err != nil || calls.Load() != 1 {
+			t.Fatalf("Purge = %v after %d hook calls, want nil after 1", err, calls.Load())
+		}
+	})
+}
+
+func TestShutdownRunsTheHookThenStopsRun(t *testing.T) {
+	var hookDone atomic.Bool
+	host := workertest.NewFakeHost(t)
+	_, done := start(t, host, worker.Options{OnShutdown: func(context.Context) error {
+		time.Sleep(50 * time.Millisecond)
+		hookDone.Store(true)
+		return nil
+	}})
+
+	if _, err := host.Lifecycle().Shutdown(context.Background(), &emptypb.Empty{}); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	if !hookDone.Load() {
+		t.Fatal("Shutdown returned before OnShutdown finished")
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run = %v, want nil", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after Shutdown")
+	}
+}
+
+func TestShutdownHookErrorStillStopsRun(t *testing.T) {
+	host := workertest.NewFakeHost(t)
+	_, done := start(t, host, worker.Options{OnShutdown: func(context.Context) error { return errors.New("flush failed") }})
+
+	_, err := host.Lifecycle().Shutdown(context.Background(), &emptypb.Empty{})
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("Shutdown = %v, want Internal", err)
+	}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("a failing OnShutdown must not keep the worker running")
+	}
+}
+
+func TestOnConnectedErrorStopsRun(t *testing.T) {
+	host := workertest.NewFakeHost(t)
+	for k, v := range host.Env() {
+		t.Setenv(k, v)
+	}
+	errc := make(chan error, 1)
+	go func() {
+		errc <- worker.Run(context.Background(), worker.Options{
+			OnConnected: func(context.Context, *worker.Clients) error { return errors.New("pack setup failed") },
+		})
+	}()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "pack setup failed") {
+			t.Fatalf("Run = %v, want the OnConnected error", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Run did not return after an OnConnected error")
+	}
+}
+
+func TestClientsExposeEveryFacet(t *testing.T) {
+	host := workertest.NewFakeHost(t)
+	got := make(chan *worker.Clients, 1)
+	start(t, host, worker.Options{OnConnected: func(_ context.Context, c *worker.Clients) error { got <- c; return nil }})
+
+	select {
+	case c := <-got:
+		if c.Documents == nil || c.Settings == nil || c.Secrets == nil || c.Auth == nil ||
+			c.Inventory == nil || c.Code == nil || c.Forge == nil {
+			t.Fatalf("a facet client is nil: %+v", c)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("OnConnected was not called")
 	}
 }
