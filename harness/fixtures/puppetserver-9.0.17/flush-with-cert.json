@@ -1,0 +1,64 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "http_request",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "expect_lines": [
+    "\"status\":\"success\"",
+    "\"status_code\":204"
+  ],
+  "extra": {
+    "body": null,
+    "bolt_version": "4.0.0",
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "http_request_version": "0.3.1",
+    "item_status": "success",
+    "items": [
+      {
+        "action": "task",
+        "object": "http_request",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "body",
+          "status_code"
+        ]
+      }
+    ],
+    "request": {
+      "cacert": "/certs/ca.pem",
+      "cert": "/certs/runner.test.pem",
+      "key": "/certs/runner.test.key",
+      "method": "delete",
+      "url": "https://puppet:8140/puppet-admin-api/v1/environment-cache?environment=production"
+    },
+    "status_code": 204,
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "Real Puppet Server 9 admin API. DELETE /puppet-admin-api/v1/environment-cache?environment=production sent by bolt task run http_request on the runner with the runner.test client certificate (read from the shared certs volume; only the paths are recorded). The harness auth rule allows runner.test only. Parameters travelled on stdin. extra.status_code is the HTTP status the server answered; extra.item_status is Bolt's own per-target status.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "flush-with-cert",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"http_request\",\"status\":\"success\",\"value\":{\"body\":null,\"status_code\":204}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "puppetserver",
+  "tool_version": "9.0.17"
+}
