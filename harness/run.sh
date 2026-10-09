@@ -55,6 +55,13 @@ fi
 export HARNESS_PROJECT
 export COMPOSE_PROJECT_NAME="$HARNESS_PROJECT"
 
+# Compose interpolates every service, including the ones in an inactive profile,
+# so the server reference must exist before the first compose command (the
+# runner pull below). It is refined to a digest reference further down.
+SERVER_TAG_REF="${REG}/${SERVER_IMAGE_NAME:-stagehand-harness-server}:${SERVER_TAG:-unset}"
+SERVER_IMAGE_REF="$SERVER_TAG_REF"
+export SERVER_IMAGE_REF
+
 # --- Runner image: by digest when the lock has one, else the local tag ---
 if [ -n "${RUNNER_DIGEST:-}" ]; then
   RUNNER_IMAGE_REF="${REG}/${RUNNER_IMAGE_NAME}@${RUNNER_DIGEST}"
@@ -79,10 +86,7 @@ fi
 # The reference is always exported because compose interpolates every service,
 # including the ones in an inactive profile. The profile and HARNESS_SERVER are
 # set only when the image really is there.
-SERVER_TAG_REF="${REG}/${SERVER_IMAGE_NAME:-stagehand-harness-server}:${SERVER_TAG:-unset}"
-SERVER_IMAGE_REF="$SERVER_TAG_REF"
 SERVER_AVAILABLE=0
-export SERVER_IMAGE_REF
 if [ -n "${SERVER_DIGEST:-}" ]; then
   SERVER_IMAGE_REF="${REG}/${SERVER_IMAGE_NAME:-stagehand-harness-server}@${SERVER_DIGEST}"
   export SERVER_IMAGE_REF

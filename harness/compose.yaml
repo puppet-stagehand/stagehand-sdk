@@ -46,6 +46,9 @@ services:
     hostname: puppet
     volumes:
       - certs:/certs
+      # The entrypoint is harness logic, not Puppet Core content: mounting it
+      # lets it change without rebuilding and re-pushing the credentialed image.
+      - ./server/entrypoint.sh:/usr/local/bin/harness-server-entrypoint:ro
     healthcheck:
       test: ["CMD-SHELL", "curl -fsk https://localhost:8140/status/v1/simple | grep -q running"]
       interval: 10s
