@@ -1,0 +1,60 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "http_request",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "extra": {
+    "body": "Forbidden request: /puppet-admin-api/v1/environment-cache (method :delete). Please see the server logs for details.",
+    "bolt_version": "4.0.0",
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "http_request_version": "0.3.1",
+    "item_status": "success",
+    "items": [
+      {
+        "action": "task",
+        "object": "http_request",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "body",
+          "status_code"
+        ]
+      }
+    ],
+    "request": {
+      "cacert": "/certs/ca.pem",
+      "cert": "/certs/other.test.pem",
+      "key": "/certs/other.test.key",
+      "method": "delete",
+      "url": "https://puppet:8140/puppet-admin-api/v1/environment-cache?environment=production"
+    },
+    "status_code": 403,
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "A valid client certificate (other.test, signed by the same CA) that the harness auth rule does not list. This is the operator allow-list precondition made visible: authenticated is not the same as allowed.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "flush-other-cert",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"http_request\",\"status\":\"success\",\"value\":{\"body\":\"Forbidden request: /puppet-admin-api/v1/environment-cache (method :delete). Please see the server logs for details.\",\"status_code\":403}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "puppetserver",
+  "tool_version": "9.0.17"
+}

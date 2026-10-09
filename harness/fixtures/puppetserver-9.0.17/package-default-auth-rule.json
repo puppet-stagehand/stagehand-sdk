@@ -1,0 +1,38 @@
+{
+  "argv": [
+    "docker",
+    "compose",
+    "exec",
+    "-u",
+    "root",
+    "puppetserver",
+    "grep",
+    "-c",
+    "environment-cache",
+    "/etc/stagehand-harness/auth.conf.package-default"
+  ],
+  "exit_code": 1,
+  "extra": {
+    "harness_rule_is_the_only_flush_allowance": true,
+    "live_auth_conf_env_cache_rule_count": 1,
+    "live_auth_conf_has_harness_rule": true,
+    "live_auth_conf_path": "/etc/puppetlabs/puppetserver/conf.d/auth.conf",
+    "package_default_auth_conf_path": "/etc/stagehand-harness/auth.conf.package-default",
+    "package_default_env_cache_rule_count": 0,
+    "package_default_has_admin_api_rule": false,
+    "package_default_has_env_cache_rule": false,
+    "package_default_has_harness_rule": false,
+    "server_version_file": [
+      "9.0.17-1noble",
+      "puppetserver version: 9.0.17"
+    ]
+  },
+  "notes": "Read from the running Puppet Server 9 container, not from the runner. /etc/stagehand-harness/auth.conf.package-default is the auth.conf exactly as the Puppet Server package ships it; the image build copies it aside before inserting the harness rule. exit_code is grep's: 1 means no match. package_default_has_env_cache_rule false means Puppet Server 9 grants nobody the environment-cache DELETE by default, so a real deployment needs an operator-added allow rule (Phase 18 documents this precondition).",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "root@puppetserver",
+  "scenario": "package-default-auth-rule",
+  "stderr": "",
+  "stdout": "0\n",
+  "tool": "puppetserver",
+  "tool_version": "9.0.17"
+}

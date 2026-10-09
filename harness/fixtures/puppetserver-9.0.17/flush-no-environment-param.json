@@ -1,0 +1,60 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "http_request",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 0,
+  "extra": {
+    "body": null,
+    "bolt_version": "4.0.0",
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "http_request_version": "0.3.1",
+    "item_status": "success",
+    "items": [
+      {
+        "action": "task",
+        "object": "http_request",
+        "status": "success",
+        "target": "localhost",
+        "value_keys": [
+          "body",
+          "status_code"
+        ]
+      }
+    ],
+    "request": {
+      "cacert": "/certs/ca.pem",
+      "cert": "/certs/runner.test.pem",
+      "key": "/certs/runner.test.key",
+      "method": "delete",
+      "url": "https://puppet:8140/puppet-admin-api/v1/environment-cache"
+    },
+    "status_code": 204,
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "The runner certificate and no environment query parameter. NOTE: this flushes the cache of EVERY environment on the server. Phase 18 must always send an environment name.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "flush-no-environment-param",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"http_request\",\"status\":\"success\",\"value\":{\"body\":null,\"status_code\":204}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "puppetserver",
+  "tool_version": "9.0.17"
+}

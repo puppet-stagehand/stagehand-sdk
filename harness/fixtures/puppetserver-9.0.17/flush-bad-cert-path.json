@@ -1,0 +1,62 @@
+{
+  "argv": [
+    "bolt",
+    "task",
+    "run",
+    "http_request",
+    "--targets",
+    "localhost",
+    "--params",
+    "-",
+    "--project",
+    "/opt/stagehand-bolt",
+    "--format",
+    "json"
+  ],
+  "exit_code": 1,
+  "extra": {
+    "body": null,
+    "bolt_version": "4.0.0",
+    "canary_found_in": [],
+    "debug_log_written": true,
+    "error_kind": "http_request/connect-error",
+    "error_msg": "Failed to connect to https://puppet:8140/puppet-admin-api/v1/environment-cache?environment=production: No such file or directory @ rb_sysopen - /certs/missing.pem",
+    "http_request_version": "0.3.1",
+    "item_status": "failure",
+    "items": [
+      {
+        "action": "task",
+        "error_kind": "http_request/connect-error",
+        "object": "http_request",
+        "status": "failure",
+        "target": "localhost",
+        "value_keys": [
+          "_error"
+        ]
+      }
+    ],
+    "request": {
+      "cacert": "/certs/ca.pem",
+      "cert": "/certs/missing.pem",
+      "key": "/certs/runner.test.key",
+      "method": "delete",
+      "url": "https://puppet:8140/puppet-admin-api/v1/environment-cache?environment=production"
+    },
+    "status_code": null,
+    "stdout_is_json": true,
+    "stdout_top_level_keys": [
+      "elapsed_time",
+      "items",
+      "target_count"
+    ],
+    "target_count": 1
+  },
+  "notes": "The certificate path does not exist inside the runner. The task cannot build the request, so the question is whether Bolt reports a failure (and with which error kind) rather than a status code.",
+  "recorded_on_platform": "linux/amd64",
+  "run_as": "deploy",
+  "scenario": "flush-bad-cert-path",
+  "stderr": "",
+  "stdout": "{ \"items\": [\n{\"target\":\"localhost\",\"action\":\"task\",\"object\":\"http_request\",\"status\":\"failure\",\"value\":{\"_error\":{\"kind\":\"http_request/connect-error\",\"msg\":\"Failed to connect to https://puppet:8140/puppet-admin-api/v1/environment-cache?environment=production: No such file or directory @ rb_sysopen - /certs/missing.pem\",\"details\":{}}}}\n],\n\"target_count\": 1, \"elapsed_time\": \"<DUR>\" }\n",
+  "tool": "puppetserver",
+  "tool_version": "9.0.17"
+}

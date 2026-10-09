@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -326,4 +328,176 @@ func TestHarnessFlushWithRunnerCert(t *testing.T) {
 			"only the paths are recorded). The harness auth rule allows runner.test only. Parameters travelled on stdin. " +
 			"extra.status_code is the HTTP status the server answered; extra.item_status is Bolt's own per-target status.",
 	})
+}
+
+// TestHarnessFlushFailureShapes records every way the flush call can go wrong
+// that Phase 18 has to type: no certificate, a valid certificate that is not on
+// the allow list, a certificate path that does not exist, an environment name
+// the server does not know, and no environment parameter at all.
+func TestHarnessFlushFailureShapes(t *testing.T) {
+	requireServer(t)
+
+	cases := []flushCase{
+		{
+			scenario: "flush-no-cert",
+			params: map[string]any{
+				"path": flushPath + "?environment=production",
+			},
+			notes: "The same call with no client certificate and no key (only the CA certificate to trust the server). " +
+				"The research baseline on Puppet Server 8.7.0 was a Bolt success carrying HTTP 403; read extra.item_status, " +
+				"extra.status_code and exit_code for what Puppet Server 9 does.",
+		},
+		{
+			scenario: "flush-other-cert",
+			params: map[string]any{
+				"path": flushPath + "?environment=production",
+				"cert": certsDir + "/other.test.pem",
+				"key":  certsDir + "/other.test.key",
+			},
+			notes: "A valid client certificate (other.test, signed by the same CA) that the harness auth rule does not list. " +
+				"This is the operator allow-list precondition made visible: authenticated is not the same as allowed.",
+		},
+		{
+			scenario: "flush-bad-cert-path",
+			params: map[string]any{
+				"path": flushPath + "?environment=production",
+				"cert": certsDir + "/missing.pem",
+				"key":  certsDir + "/runner.test.key",
+			},
+			notes: "The certificate path does not exist inside the runner. The task cannot build the request, so the question is " +
+				"whether Bolt reports a failure (and with which error kind) rather than a status code.",
+		},
+		{
+			scenario: "flush-unknown-environment",
+			params:   runnerCert(flushPath + "?environment=does_not_exist"),
+			notes: "The runner certificate flushing an environment name the server does not have. The research baseline was that " +
+				"the server does not validate the name (204), so the SDK has to validate environment names itself.",
+		},
+		{
+			scenario: "flush-no-environment-param",
+			params:   runnerCert(flushPath),
+			notes: "The runner certificate and no environment query parameter. NOTE: this flushes the cache of EVERY environment on " +
+				"the server. Phase 18 must always send an environment name.",
+		},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.scenario, func(t *testing.T) { runFlush(t, c) })
+	}
+
+	t.Run("package-default-auth-rule", recordPackageDefaultAuthRule)
+}
+
+const (
+	packageDefaultAuth = "/etc/stagehand-harness/auth.conf.package-default"
+	liveAuth           = "/etc/puppetlabs/puppetserver/conf.d/auth.conf"
+	serverVersionFile  = "/etc/stagehand-harness/puppetserver-version"
+)
+
+var reAllow = regexp.MustCompile(`^\s*allow(?:-unauthenticated)?\s*:\s*(.+?)\s*,?\s*$`)
+
+// grepCount runs `grep -c needle path` in the server container as root and
+// returns the count. grep exits 1 when nothing matched, which is a zero count
+// rather than an error; any other failure ends the test.
+func grepCount(t *testing.T, needle, path string) (int, execResult, []string) {
+	t.Helper()
+	argv := []string{"grep", "-c", needle, path}
+	res := composeExecService(context.Background(), t, serverService, "root", argv...)
+	if res.ExitCode != 0 && res.ExitCode != 1 {
+		t.Fatalf("grep in the server container failed (exit %d): %s", res.ExitCode, strings.TrimSpace(res.Stderr))
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(res.Stdout))
+	if err != nil {
+		t.Fatalf("grep -c printed %q, not a count", res.Stdout)
+	}
+	return n, res, argv
+}
+
+// recordPackageDefaultAuthRule records whether Puppet Server 9's own auth.conf,
+// as the package ships it, already lets any certificate delete the environment
+// cache. The image keeps that file untouched next to the harness copy, so this
+// is evidence about the package and not about the harness rule.
+func recordPackageDefaultAuthRule(t *testing.T) {
+	ctx := context.Background()
+
+	count, res, argv := grepCount(t, "environment-cache", packageDefaultAuth)
+	adminCount, _, _ := grepCount(t, "puppet-admin-api", packageDefaultAuth)
+	liveCount, _, _ := grepCount(t, "environment-cache", liveAuth)
+	harnessRule, _, _ := grepCount(t, "stagehand-harness env-cache flush", liveAuth)
+	packageHarnessRule, _, _ := grepCount(t, "stagehand-harness env-cache flush", packageDefaultAuth)
+
+	extra := map[string]any{
+		"package_default_has_env_cache_rule":       count > 0,
+		"package_default_env_cache_rule_count":     count,
+		"package_default_has_admin_api_rule":       adminCount > 0,
+		"live_auth_conf_env_cache_rule_count":      liveCount,
+		"live_auth_conf_has_harness_rule":          harnessRule > 0,
+		"package_default_has_harness_rule":         packageHarnessRule > 0,
+		"package_default_auth_conf_path":           packageDefaultAuth,
+		"live_auth_conf_path":                      liveAuth,
+		"harness_rule_is_the_only_flush_allowance": count == 0 && liveCount > 0 && harnessRule > 0,
+	}
+	if count > 0 {
+		// The rule exists in the package: record the allow lines near it.
+		ctxRes := composeExecService(ctx, t, serverService, "root", "grep", "-A", "12", "environment-cache", packageDefaultAuth)
+		allows := []any{}
+		for _, line := range strings.Split(ctxRes.Stdout, "\n") {
+			if m := reAllow.FindStringSubmatch(line); m != nil {
+				allows = append(allows, m[1])
+			}
+		}
+		extra["package_default_env_cache_allow"] = allows
+	}
+
+	versionRes := composeExecService(ctx, t, serverService, "root", "cat", serverVersionFile)
+	if versionRes.ExitCode != 0 {
+		t.Fatalf("cannot read %s in the server container (exit %d)", serverVersionFile, versionRes.ExitCode)
+	}
+	versionLines := []any{}
+	for _, l := range strings.Split(strings.TrimSpace(versionRes.Stdout), "\n") {
+		versionLines = append(versionLines, strings.TrimSpace(l))
+	}
+	want := serverVersion(t)
+	found := false
+	for _, l := range versionLines {
+		if strings.Contains(l.(string), want) {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the running server image reports %v, not the %s pinned in images.lock", versionLines, want)
+	}
+	extra["server_version_file"] = versionLines
+
+	archRes := composeExecService(ctx, t, serverService, "root", "uname", "-m")
+	serverPlatform := "linux/amd64"
+	if m := strings.TrimSpace(archRes.Stdout); m == "aarch64" || m == "arm64" {
+		serverPlatform = "linux/arm64"
+	}
+
+	if strings.Contains(res.Stdout+res.Stderr, "PRIVATE KEY") {
+		t.Fatalf("the grep output carries private key material")
+	}
+
+	fx := Fixture{
+		Tool:               "puppetserver",
+		ToolVersion:        want,
+		Scenario:           "package-default-auth-rule",
+		RecordedOnPlatform: serverPlatform,
+		Argv:               append([]string{"docker", "compose", "exec", "-u", "root", serverService}, argv...),
+		RunAs:              "root@" + serverService,
+		ExitCode:           res.ExitCode,
+		Stdout:             res.Stdout,
+		Stderr:             res.Stderr,
+		Extra:              extra,
+		Notes: "Read from the running Puppet Server 9 container, not from the runner. " + packageDefaultAuth +
+			" is the auth.conf exactly as the Puppet Server package ships it; the image build copies it aside before inserting the " +
+			"harness rule. exit_code is grep's: 1 means no match. package_default_has_env_cache_rule false means Puppet Server 9 " +
+			"grants nobody the environment-cache DELETE by default, so a real deployment needs an operator-added allow rule " +
+			"(Phase 18 documents this precondition).",
+	}
+	recordOrCompare(t, fx)
+	if os.Getenv("HARNESS_RECORD") != "1" {
+		compareExtra(t, fixturePath(fx.Tool, fx.ToolVersion, fx.Scenario), fx.Extra)
+	}
 }
