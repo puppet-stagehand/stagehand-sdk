@@ -36,6 +36,30 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `docs/pack-author-guide.md` | ELI10 guide |
 | `docs/AGENT-WALKTHROUGH-uptime.md` | What a good assistant run looks like today |
 
+## Where this SDK lives
+
+This SDK is published, open source, at
+<https://github.com/puppet-stagehand/stagehand-sdk>. The Go module path is
+`github.com/puppet-stagehand/stagehand-sdk`; it resolves for anyone through the
+public module proxy, with no credential and no `GOPRIVATE`.
+
+Build the tools from a checkout of this repository:
+
+```
+git clone https://github.com/puppet-stagehand/stagehand-sdk.git
+cd stagehand-sdk
+go run ./cmd/expansion-build ui --help
+go run ./cmd/pack-check examples/hello/manifest.json
+```
+
+`cmd/expansion-build` is a nested Go module whose `go.mod` carries a `replace`
+back to the repository root, so it cannot be installed by version with
+`go install`; always run it from a checkout (or the pinned commit of one).
+
+GitHub Actions is turned off on this public repository. The CI workflow in
+`.github/workflows/` targets self-hosted runners, and a public repository must
+never run fork pull-request code on them.
+
 ## Changing the contract (maintainers)
 
 `schema/proto/` is a generated, verbatim copy of `proto/`. Never edit it by
