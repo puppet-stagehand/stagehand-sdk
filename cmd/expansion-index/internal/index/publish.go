@@ -114,7 +114,9 @@ func pushFinding(repo name.Repository, doing string, err error) Finding {
 }
 
 var (
-	digestPattern       = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	digestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	// DigestPattern matches sha256:<64 lowercase hex>.
+	DigestPattern       = digestPattern
 	immutableTagPattern = regexp.MustCompile(`^[0-9]{8}T[0-9]{6}Z$`)
 )
 

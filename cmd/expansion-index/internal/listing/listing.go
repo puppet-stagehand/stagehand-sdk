@@ -143,6 +143,13 @@ func Build(ctx context.Context, opts Options) (*Document, []Finding) {
 		return nil, []Finding{{Code: "key_invalid", Path: "--key", Message: err.Error(), Fix: "Pass --key as a PEM file holding an ECDSA P-256 public key (cosign.pub)."}}
 	}
 	sum := sha256.Sum256(der)
+	// The page shows this text, so it is re-encoded from the parsed key and
+	// never copied from the file: the fingerprint and the PEM derive from the
+	// same bytes.
+	canonicalPEM, err := index.CanonicalPEM(pub)
+	if err != nil {
+		return nil, []Finding{{Code: "key_invalid", Path: "--key", Message: err.Error(), Fix: "Pass --key as a PEM file holding an ECDSA P-256 public key (cosign.pub)."}}
+	}
 
 	ref, err := index.ParseReference(opts.IndexRef)
 	if err != nil {
@@ -172,7 +179,7 @@ func Build(ctx context.Context, opts Options) (*Document, []Finding) {
 		SchemaVersion: SchemaVersion,
 		Feed:          "oci://" + feedRepo.Name(),
 		IndexDigest:   res.Digest,
-		PublisherKey:  PublisherKey{Fingerprint: "sha256:" + hex.EncodeToString(sum[:]), PEM: string(opts.KeyPEM)},
+		PublisherKey:  PublisherKey{Fingerprint: "sha256:" + hex.EncodeToString(sum[:]), PEM: canonicalPEM},
 		Packs:         []Pack{},
 		PaidListings:  []PaidListing{},
 	}
@@ -193,7 +200,16 @@ func Build(ctx context.Context, opts Options) (*Document, []Finding) {
 		}
 		pk := Pack{ID: p.ID, Name: p.Name, Summary: p.Summary, Publisher: p.Publisher, Tier: p.Tier, Entitlement: p.Entitlement, Licence: p.Licence}
 		for _, v := range p.Versions {
-			digest := v.Image[strings.LastIndex(v.Image, "@")+1:]
+			// The strict index decode guarantees a digest-pinned image
+			// (<repository>@sha256:<hex>); the split is still checked, so a
+			// reference without "@" can never yield a made-up digest.
+			_, digest, pinned := strings.Cut(v.Image, "@")
+			if !pinned || !index.DigestPattern.MatchString(digest) {
+				findings = append(findings, Finding{Code: "image_not_pinned", Path: "packs[" + p.ID + "].versions[" + v.Version + "]",
+					Message: fmt.Sprintf("pack %s version %s lists an image that is not digest-pinned", p.ID, v.Version),
+					Fix:     "Republish the index with `expansion-index build`; a console refuses this index too."})
+				continue
+			}
 			pk.Versions = append(pk.Versions, PackVersion{Version: v.Version, ReleasedAt: v.ReleasedAt, Image: v.Image, Digest: digest})
 		}
 		doc.Packs = append(doc.Packs, pk)

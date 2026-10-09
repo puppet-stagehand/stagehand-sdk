@@ -2,6 +2,7 @@ package index
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/sha256"
@@ -235,15 +236,34 @@ func publisherKey(pemBytes []byte, feedName string) (IndexPublisherKey, error) {
 		return IndexPublisherKey{}, err
 	}
 	sum := sha256.Sum256(der)
-	return IndexPublisherKey{ID: "sha256:" + hex.EncodeToString(sum[:]), Name: feedName, PublicKey: string(pemBytes)}, nil
+	canon, err := CanonicalPEM(pub)
+	if err != nil {
+		return IndexPublisherKey{}, err
+	}
+	return IndexPublisherKey{ID: "sha256:" + hex.EncodeToString(sum[:]), Name: feedName, PublicKey: canon}, nil
 }
 
 // ParsePublicKey parses a PEM PKIX ECDSA P-256 public key, the form cosign
-// writes as cosign.pub and the console's keyring accepts.
+// writes as cosign.pub and the console's keyring accepts. The file must hold
+// exactly one PUBLIC KEY block with only whitespace around it: callers publish
+// the key (build into the signed index, listing onto a public page), so
+// anything the PEM decoder would silently skip, such as another block or a
+// comment, is refused rather than ignored. Use CanonicalPEM for the text to
+// publish.
 func ParsePublicKey(pemBytes []byte) (*ecdsa.PublicKey, error) {
-	block, _ := pem.Decode(pemBytes)
+	trimmed := bytes.TrimSpace(pemBytes)
+	if !bytes.HasPrefix(trimmed, []byte("-----BEGIN PUBLIC KEY-----")) {
+		return nil, errors.New("not a PEM PUBLIC KEY document (the file must start with -----BEGIN PUBLIC KEY-----)")
+	}
+	block, rest := pem.Decode(trimmed)
 	if block == nil {
 		return nil, errors.New("not a PEM document")
+	}
+	if block.Type != "PUBLIC KEY" {
+		return nil, fmt.Errorf("PEM block is %q, want PUBLIC KEY", block.Type)
+	}
+	if len(bytes.TrimSpace(rest)) != 0 {
+		return nil, errors.New("the key file holds content after the public key block: it must hold exactly one PUBLIC KEY block and nothing else")
 	}
 	k, err := x509.ParsePKIXPublicKey(block.Bytes)
 	if err != nil {
@@ -254,6 +274,18 @@ func ParsePublicKey(pemBytes []byte) (*ecdsa.PublicKey, error) {
 		return nil, errors.New("not an ECDSA P-256 public key")
 	}
 	return pub, nil
+}
+
+// CanonicalPEM is the PEM encoding of pub that this tool publishes: derived
+// from the parsed key alone, so the published text and the fingerprint come
+// from the same bytes and nothing else in the key file can reach a public
+// document.
+func CanonicalPEM(pub *ecdsa.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", err
+	}
+	return string(pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der})), nil
 }
 
 // readCandidate reads one candidate image's manifest and cross-checks it
