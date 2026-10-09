@@ -374,3 +374,76 @@ func TestBuildPreviousDeniedThroughTheCLI(t *testing.T) {
 		t.Fatal("a successful build writes the index")
 	}
 }
+
+func TestPromoteAndVerifyJSONThroughTheCLI(t *testing.T) {
+	isolateDocker(t)
+	reg := testreg.New(t)
+	candidate := testreg.PushCandidate(t, reg.Host+"/packs/hello", helloManifest(t))
+	dir := t.TempDir()
+	catalog := filepath.Join(dir, "catalog.yaml")
+	writeFile(t, catalog, catalogYAML(reg.Host+"/catalog", reg.Host+"/packs", candidate))
+	signer := testreg.NewSigner(t)
+	keyPath := testreg.WriteKey(t, dir, "cosign.pub", signer.PublicPEM)
+	idx := filepath.Join(dir, "index.json")
+	repo := "oci://" + reg.Host + "/catalog"
+
+	if code, o, e := runCmd(t, "build", "--catalog", catalog, "--feed", "official", "--now", "2026-10-09T14:30:12Z", "--previous", repo, "--allow-missing-previous", "--out", idx); code != 0 {
+		t.Fatalf("build %d\n%s\n%s", code, o, e)
+	}
+	code, o, e := runCmd(t, "push", "--index", idx, "--ref", repo)
+	if code != 0 {
+		t.Fatalf("push %d\n%s\n%s", code, o, e)
+	}
+	digest := strings.TrimSpace(o)
+
+	// Unsigned: promote refuses and latest does not exist.
+	if code, o, _ := runCmd(t, "promote", "--ref", repo, "--digest", digest, "--key", keyPath); code != 1 || !strings.Contains(o, "unsigned") {
+		t.Fatalf("promote of an unsigned digest: %d\n%s", code, o)
+	}
+	if _, err := remote.Head(mustRef(t, reg.Host+"/catalog:latest")); err == nil {
+		t.Fatal("latest must not exist after a refused promote")
+	}
+	signer.Sign(t, reg.Host+"/catalog@"+digest)
+	if code, o, e := runCmd(t, "promote", "--ref", repo, "--digest", digest, "--key", keyPath); code != 0 {
+		t.Fatalf("promote %d\n%s\n%s", code, o, e)
+	}
+	// The image is unsigned: plain verify passes, --images does not.
+	code, o, _ = runCmd(t, "verify", "--ref", repo, "--key", keyPath, "--images", "--format", "json")
+	var doc struct {
+		OK          bool   `json:"ok"`
+		Digest      string `json:"digest"`
+		GeneratedAt string `json:"generated_at"`
+		Images      []struct {
+			Pack     string `json:"pack"`
+			Verified *bool  `json:"verified"`
+		} `json:"images"`
+		Findings []struct {
+			Code string `json:"code"`
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal([]byte(o), &doc); err != nil {
+		t.Fatalf("json %q: %v", o, err)
+	}
+	if code != 1 || doc.OK || doc.Digest != digest || doc.GeneratedAt != "2026-10-09T14:30:12Z" || len(doc.Images) != 1 || doc.Images[0].Verified == nil || *doc.Images[0].Verified || len(doc.Findings) != 1 {
+		t.Fatalf("exit %d, doc %+v", code, doc)
+	}
+	signer.Sign(t, reg.Host+"/packs/hello@"+candidate[strings.Index(candidate, "@")+1:])
+	if code, o, _ := runCmd(t, "verify", "--ref", repo, "--key", keyPath, "--images", "--expect-digest", digest); code != 0 {
+		t.Fatalf("verify --images %d\n%s", code, o)
+	}
+	if code, _, _ := runCmd(t, "verify", "--ref", repo, "--key", keyPath, "--expect-digest", "sha256:"+strings.Repeat("3", 64)); code != 1 {
+		t.Fatalf("a different --expect-digest must exit 1, got %d", code)
+	}
+	if code, _, _ := runCmd(t, "promote", "--ref", repo); code != 2 {
+		t.Fatalf("missing flags: %d", code)
+	}
+}
+
+func mustRef(t *testing.T, s string) name.Reference {
+	t.Helper()
+	r, err := name.ParseReference(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return r
+}

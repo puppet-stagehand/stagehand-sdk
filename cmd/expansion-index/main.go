@@ -53,6 +53,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runBuild(args[1:], stdout, stderr)
 	case "push":
 		return runPush(args[1:], stdout, stderr)
+	case "promote":
+		return runPromote(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
 	}
@@ -219,6 +221,29 @@ func runPush(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 	return finish(stdout, *format, findings, map[string]any{"digest": digest}, digest)
+}
+
+func runPromote(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("promote", stderr)
+	ref := fs.String("ref", "", "oci://<registry>/<index repository>")
+	digest := fs.String("digest", "", "the already-pushed, signed index digest (sha256:...)")
+	tag := fs.String("tag", "latest", "the mutable tag to move")
+	keyPath := fs.String("key", "", "PEM P-256 public key the digest must be signed by")
+	format := fs.String("format", "text", "text | json")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || *ref == "" || *digest == "" || *keyPath == "" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	keyPEM, err := os.ReadFile(*keyPath)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	d, findings := index.Promote(context.Background(), index.PromoteOptions{Repo: *ref, Digest: *digest, Tag: *tag, KeyPEM: keyPEM})
+	return finish(stdout, *format, findings, map[string]any{"digest": d, "tag": *tag}, fmt.Sprintf("ok: %s -> %s", *tag, d))
 }
 
 func runVerify(args []string, stdout, stderr io.Writer) int {
