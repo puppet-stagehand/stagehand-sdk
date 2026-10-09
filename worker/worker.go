@@ -11,8 +11,13 @@ package worker
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/http"
+	"os"
+	"time"
+
+	"google.golang.org/grpc"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
 )
@@ -78,14 +83,98 @@ type Clients struct {
 }
 
 // Run connects to the host and serves until the host asks the worker to shut
-// down, ctx is cancelled (both return nil), or the host connection is lost
-// (an error).
+// down or ctx is cancelled (both return nil), or until something fails: a
+// missing or bad environment, the host refusing the worker, an OnConnected
+// error, or the host connection being lost (all return an error).
+//
+// Run never logs, and no error it returns contains certificate, key or CA
+// material or the host address.
 func Run(ctx context.Context, opts Options) error {
-	return errors.New("worker: not implemented")
+	env, err := readEnv()
+	if err != nil {
+		return err
+	}
+	tlsCfg, err := env.tlsConfig()
+	if err != nil {
+		return err
+	}
+	ui := opts.UI
+	if ui == nil {
+		ui = os.DirFS(DefaultUIDir)
+	}
+	assets, err := newAssetsServer(ui)
+	if err != nil {
+		return err
+	}
+	maxBody := opts.MaxBodyBytes
+	if maxBody <= 0 {
+		maxBody = DefaultMaxBodyBytes
+	}
+
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+
+	dialCtx, dialCancel := context.WithTimeout(runCtx, dialTimeout)
+	defer dialCancel()
+	session, err := env.dial(dialCtx, tlsCfg)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+
+	// Reverse side first: the host may open streams the moment it has admitted
+	// this worker, so Routes, Assets, Health and Lifecycle must already serve.
+	srv := grpc.NewServer(grpc.MaxRecvMsgSize(int(maxBody) + recvOverhead))
+	hostv1.RegisterRoutesServer(srv, &routesServer{handler: opts.Routes, maxBody: maxBody})
+	hostv1.RegisterAssetsServer(srv, assets)
+	hostv1.RegisterHealthServer(srv, &healthServer{ready: opts.Ready})
+	hostv1.RegisterLifecycleServer(srv, &lifecycleServer{onShutdown: opts.OnShutdown, onPurge: opts.OnPurge, stop: stop})
+	served := make(chan error, 1)
+	go func() { served <- srv.Serve(&sessionListener{session: session}) }()
+	defer stopServer(srv)
+
+	// Forward side: the first stream the worker opens carries the facet calls
+	// and completes admission on the host.
+	cc, err := openForward(session)
+	if err != nil {
+		return err
+	}
+	defer cc.Close()
+	if err := waitReady(dialCtx, cc); err != nil {
+		return env.redact(err)
+	}
+	dialCancel()
+
+	if opts.OnConnected != nil {
+		if err := opts.OnConnected(runCtx, newClients(cc)); err != nil {
+			return fmt.Errorf("worker: OnConnected: %w", err)
+		}
+	}
+
+	select {
+	case <-runCtx.Done():
+		return nil
+	case <-session.CloseChan():
+		return errors.New("worker: the host closed the connection")
+	case <-served:
+		return errors.New("worker: the reverse server stopped")
+	}
 }
 
-// PrincipalFrom returns the principal the host resolved for the request being
-// handled. It is only ever set from the host's HttpRequest.principal field.
-func PrincipalFrom(ctx context.Context) (*hostv1.Principal, bool) {
-	return nil, false
+// recvOverhead is headroom over MaxBodyBytes for the rest of an HttpRequest
+// message (method, path, query, headers, principal), so an oversized body is
+// answered with 413 by Routes rather than refused by gRPC.
+const recvOverhead = 1 << 20
+
+// stopServer stops the reverse server, giving in-flight calls (including the
+// Shutdown call that is stopping the worker) a moment to finish.
+func stopServer(srv *grpc.Server) {
+	done := make(chan struct{})
+	go func() { srv.GracefulStop(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		srv.Stop()
+		<-done
+	}
 }

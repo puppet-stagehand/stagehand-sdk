@@ -54,11 +54,15 @@ func start(t *testing.T, host *workertest.FakeHost, opts worker.Options) (contex
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- worker.Run(ctx, opts) }()
+	finished := make(chan struct{})
+	go func() {
+		done <- worker.Run(ctx, opts)
+		close(finished)
+	}()
 	t.Cleanup(func() {
 		cancel()
 		select {
-		case <-done:
+		case <-finished:
 		case <-time.After(10 * time.Second):
 			t.Errorf("worker.Run did not return after cancel")
 		}
