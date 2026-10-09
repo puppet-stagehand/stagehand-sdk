@@ -173,3 +173,20 @@ func TestMalformedRequestsAreRefusedWithout500(t *testing.T) {
 		t.Fatalf("handler ran %d times for malformed requests", calls.Load())
 	}
 }
+
+func TestAbsurdlyLargeRequestIsRefusedBeforeTheHandler(t *testing.T) {
+	var calls atomic.Int32
+	h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) })
+	host := workertest.NewFakeHost(t)
+	start(t, host, worker.Options{Routes: h, MaxBodyBytes: 1024})
+
+	// Far past the cap plus message headroom: the gRPC layer refuses it, so the
+	// worker never buffers it for the handler.
+	_, err := host.Routes().Dispatch(context.Background(), &hostv1.HttpRequest{Method: "POST", Path: "x", Body: make([]byte, 3<<20)})
+	if err == nil {
+		t.Fatal("a 3 MiB request against a 1 KiB cap was accepted")
+	}
+	if calls.Load() != 0 {
+		t.Fatalf("handler ran %d times", calls.Load())
+	}
+}

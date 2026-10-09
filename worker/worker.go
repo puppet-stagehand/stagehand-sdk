@@ -56,10 +56,15 @@ type Options struct {
 	// string is shown to operators when not ready.
 	Ready func(context.Context) (bool, string)
 	// OnShutdown runs when the host asks the worker to stop; Run returns once
-	// it has finished.
+	// it has finished. The worker stops even if the hook returns an error.
 	OnShutdown func(context.Context) error
 	// OnPurge runs when the host asks the pack to clean up before it purges
-	// the pack's documents. Without it Purge succeeds.
+	// the pack's documents; an error is reported to the host as gRPC Internal.
+	//
+	// Without it Purge succeeds. A pack that keeps state OUTSIDE host-managed
+	// storage (the Documents facet, which the host purges itself) MUST set
+	// OnPurge: otherwise the host is told the purge succeeded while that state
+	// is still there.
 	OnPurge func(context.Context) error
 	// MaxBodyBytes caps a route request body and response body. Zero means
 	// DefaultMaxBodyBytes.
