@@ -5,6 +5,7 @@
 //	expansion-index push    --index index.json --ref oci://<index repo> [--tag YYYYMMDDTHHMMSSZ]
 //	expansion-index promote --ref oci://<index repo> --digest sha256:<hex> --key cosign.pub [--tag latest]
 //	expansion-index verify  --ref oci://<repo>[:tag|@digest] --key cosign.pub [--expect-digest sha256:...] [--images]
+//	expansion-index copy    --from <repo>@sha256:<hex> --to <repo>:<tag> [--from-username-env N --from-password-env N] [--to-username-env N --to-password-env N]
 //	expansion-index listing --index-ref oci://<index repo>@sha256:<hex> --key cosign.pub --catalog catalog.yaml --feed <name> --out marquee.json
 //
 // Signing is not in this tool: the catalog workflow runs the pinned cosign CLI
@@ -30,7 +31,7 @@ import (
 	"github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-index/internal/listing"
 )
 
-const usage = `usage: expansion-index <build|push|promote|verify|listing> [flags]
+const usage = `usage: expansion-index <build|push|promote|verify|copy|listing> [flags]
   build   --catalog catalog.yaml --feed NAME --out index.json [--previous oci://REPO] [--allow-missing-previous]
           [--now RFC3339] [--key cosign.pub] [--candidate-username-env N --candidate-password-env N]
           [--previous-username-env N --previous-password-env N] [--check] [--format json]
@@ -38,6 +39,8 @@ const usage = `usage: expansion-index <build|push|promote|verify|listing> [flags
   promote --ref oci://REPO --digest sha256:HEX --key cosign.pub [--tag latest] [--format json]
   verify  --ref oci://REPO[:TAG|@DIGEST] --key cosign.pub [--expect-digest sha256:HEX] [--images]
           [--username-env N --password-env N] [--format json]
+  copy    --from REPO@sha256:HEX --to REPO:TAG [--from-username-env N --from-password-env N]
+          [--to-username-env N --to-password-env N] [--format json]
   listing --index-ref oci://REPO@sha256:HEX --key cosign.pub --catalog catalog.yaml --feed NAME --out marquee.json
           [--format json]
 `
@@ -61,6 +64,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runPromote(args[1:], stdout, stderr)
 	case "verify":
 		return runVerify(args[1:], stdout, stderr)
+	case "copy":
+		return runCopy(args[1:], stdout, stderr)
 	case "listing":
 		return runListing(args[1:], stdout, stderr)
 	}
@@ -335,4 +340,50 @@ func runListing(args []string, stdout, stderr io.Writer) int {
 	}
 	res := map[string]any{"index_digest": doc.IndexDigest, "packs": len(doc.Packs), "paid_listings": len(doc.PaidListings), "out": *out}
 	return finish(stdout, *format, nil, res, fmt.Sprintf("ok: wrote %s (%d pack(s), %d paid listing(s)) from the index %s", *out, len(doc.Packs), len(doc.PaidListings), doc.IndexDigest))
+}
+
+// runCopy promotes a reviewed candidate into the feed's image repository by
+// digest. The two sides take separate credentials, each from named
+// environment variables.
+func runCopy(args []string, stdout, stderr io.Writer) int {
+	fs := newFlagSet("copy", stderr)
+	from := fs.String("from", "", "<repository>@sha256:<hex>: the reviewed candidate image")
+	to := fs.String("to", "", "<repository>:<tag>: where to publish it")
+	fromUser := fs.String("from-username-env", "", "environment variable holding the source registry username")
+	fromPass := fs.String("from-password-env", "", "environment variable holding the source registry password")
+	toUser := fs.String("to-username-env", "", "environment variable holding the destination registry username")
+	toPass := fs.String("to-password-env", "", "environment variable holding the destination registry password")
+	format := fs.String("format", "text", "text | json")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 0 || *from == "" || *to == "" {
+		fmt.Fprint(stderr, usage)
+		return 2
+	}
+	fromAuth, err := authFromEnv(*fromUser, *fromPass)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	toAuth, err := authFromEnv(*toUser, *toPass)
+	if err != nil {
+		fmt.Fprintln(stderr, "expansion-index:", err)
+		return 2
+	}
+	res, findings := index.Copy(context.Background(), index.CopyOptions{From: *from, To: *to, FromAuth: fromAuth, ToAuth: toAuth})
+	doc := map[string]any{"digest": "", "already_present": false}
+	okText := ""
+	if res != nil {
+		doc["digest"], doc["already_present"] = res.Digest, res.AlreadyPresent
+		okText = res.Digest
+		if res.AlreadyPresent {
+			okText += " (already present)"
+		}
+	}
+	if *format != "json" && len(findings) == 0 {
+		fmt.Fprintln(stdout, res.Digest)
+		return 0
+	}
+	return finish(stdout, *format, findings, doc, okText)
 }

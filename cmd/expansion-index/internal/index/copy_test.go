@@ -131,13 +131,31 @@ func rewritingRegistry(t *testing.T) (host, badDigest string) {
 	inner := registry.New(registry.Logger(log.New(&strings.Builder{}, "", 0)))
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		i := strings.LastIndex(req.URL.Path, "/manifests/")
-		if i >= 0 && (req.Method == http.MethodHead || req.Method == http.MethodGet) && !strings.HasPrefix(req.URL.Path[i+len("/manifests/"):], "sha256:") {
-			w.Header().Set("Docker-Content-Digest", badDigest)
+		byTag := i >= 0 && (req.Method == http.MethodHead || req.Method == http.MethodGet) && !strings.HasPrefix(req.URL.Path[i+len("/manifests/"):], "sha256:")
+		if byTag {
+			w = &digestRewriter{ResponseWriter: w, digest: badDigest}
 		}
 		inner.ServeHTTP(w, req)
 	}))
 	t.Cleanup(srv.Close)
 	return strings.TrimPrefix(srv.URL, "http://"), badDigest
+}
+
+// digestRewriter replaces the Docker-Content-Digest header just before the
+// response is sent (the inner registry sets its own).
+type digestRewriter struct {
+	http.ResponseWriter
+	digest string
+}
+
+func (d *digestRewriter) WriteHeader(code int) {
+	d.Header().Set("Docker-Content-Digest", d.digest)
+	d.ResponseWriter.WriteHeader(code)
+}
+
+func (d *digestRewriter) Write(b []byte) (int, error) {
+	d.Header().Set("Docker-Content-Digest", d.digest)
+	return d.ResponseWriter.Write(b)
 }
 
 func TestCopyDigestMismatch(t *testing.T) {
