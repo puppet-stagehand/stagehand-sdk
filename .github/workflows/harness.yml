@@ -1,0 +1,67 @@
+# The real-tool harness lane (Phase 13, D-09).
+#
+# This runs the same single entry point a person runs by hand, ./harness/run.sh,
+# against the real r10k, g10k, Bolt and Puppet Server 9 images pulled from the
+# registry. It is deliberately NOT part of the push CI in ci.yml: it needs
+# registry access and it is slow.
+#
+# Triggers are manual and nightly only. Nothing that runs here is reachable
+# from a pull request, so no pull request code ever runs with the registry
+# credentials on the self-hosted machine (T-13-36).
+#
+# Configuration comes only from repository settings, never from this file:
+#   Variables: STAGEHAND_HARBOR_HOST, STAGEHAND_HARBOR_PROJECT
+#   Secrets:   HARBOR_USERNAME, HARBOR_PASSWORD (a robot account that can only pull)
+name: harness
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    - cron: '17 3 * * *'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness
+  cancel-in-progress: false
+
+jobs:
+  harness:
+    runs-on: [self-hosted, Linux, X64, docker]
+    timeout-minutes: 60
+    env:
+      STAGEHAND_HARBOR_HOST: ${{ vars.STAGEHAND_HARBOR_HOST }}
+      STAGEHAND_HARBOR_PROJECT: ${{ vars.STAGEHAND_HARBOR_PROJECT }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+      - name: Write harness/.env from repository variables
+        run: |
+          if [ -z "$STAGEHAND_HARBOR_HOST" ] || [ -z "$STAGEHAND_HARBOR_PROJECT" ]; then
+            echo "Set the repository variables STAGEHAND_HARBOR_HOST and STAGEHAND_HARBOR_PROJECT (Settings, Secrets and variables, Actions, Variables)." >&2
+            exit 1
+          fi
+          {
+            printf 'STAGEHAND_HARBOR_HOST=%s\n' "$STAGEHAND_HARBOR_HOST"
+            printf 'STAGEHAND_HARBOR_PROJECT=%s\n' "$STAGEHAND_HARBOR_PROJECT"
+          } > harness/.env
+      - name: Log in to the registry (pull-only robot account)
+        env:
+          HARBOR_USERNAME: ${{ secrets.HARBOR_USERNAME }}
+          HARBOR_PASSWORD: ${{ secrets.HARBOR_PASSWORD }}
+        run: |
+          if [ -z "$HARBOR_USERNAME" ] || [ -z "$HARBOR_PASSWORD" ]; then
+            echo "Set the Actions secrets HARBOR_USERNAME and HARBOR_PASSWORD." >&2
+            exit 1
+          fi
+          printf '%s' "$HARBOR_PASSWORD" | docker login "$STAGEHAND_HARBOR_HOST" -u "$HARBOR_USERNAME" --password-stdin
+      - name: Run the harness
+        run: ./harness/run.sh
+      - name: Log out and remove harness/.env
+        if: always()
+        run: |
+          docker logout "$STAGEHAND_HARBOR_HOST" || true
+          rm -f harness/.env
