@@ -297,7 +297,10 @@ type GHCRLike struct {
 	Host string
 
 	user, pass string
-	inner      http.Handler
+	// roUser/roPass, when set, are a second credential pair that may pull but
+	// is never granted a push scope (a read-only registry token).
+	roUser, roPass string
+	inner          http.Handler
 
 	mu     sync.Mutex
 	repos  map[string]bool // name -> public
@@ -319,6 +322,22 @@ func NewGHCRLike(t testing.TB, user, pass string) *GHCRLike {
 // Auth returns the registry's valid credentials.
 func (g *GHCRLike) Auth() authn.Authenticator {
 	return &authn.Basic{Username: g.user, Password: g.pass}
+}
+
+// AddReadOnlyUser registers a second credential pair whose tokens are never
+// granted the push scope: a request for it answers 403 DENIED, and pull works
+// only on repositories that exist (as for the main pair).
+func (g *GHCRLike) AddReadOnlyUser(user, pass string) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.roUser, g.roPass = user, pass
+}
+
+// ReadOnlyAuth returns the read-only credentials registered by AddReadOnlyUser.
+func (g *GHCRLike) ReadOnlyAuth() authn.Authenticator {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return &authn.Basic{Username: g.roUser, Password: g.roPass}
 }
 
 // SetPublic makes an existing repository public (or private again).
@@ -425,13 +444,17 @@ func (g *GHCRLike) grantsFor(req *http.Request) map[string]map[string]bool {
 }
 
 func (g *GHCRLike) serveToken(w http.ResponseWriter, req *http.Request) {
-	authed := false
+	authed, readOnly := false, false
 	if u, p, ok := req.BasicAuth(); ok {
-		if u != g.user || p != g.pass {
+		g.mu.Lock()
+		isMain := u == g.user && p == g.pass
+		isRO := g.roUser != "" && u == g.roUser && p == g.roPass
+		g.mu.Unlock()
+		if !isMain && !isRO {
 			writeErrors(w, http.StatusUnauthorized, "UNAUTHORIZED", "authentication required")
 			return
 		}
-		authed = true
+		authed, readOnly = true, isRO && !isMain
 	}
 	grants := map[string]map[string]bool{}
 	g.mu.Lock()
@@ -451,6 +474,8 @@ func (g *GHCRLike) serveToken(w http.ResponseWriter, req *http.Request) {
 		public, exists := g.repos[repo]
 		ok := false
 		switch {
+		case readOnly && want["push"]:
+			ok = false // a read-only token is never granted the push scope
 		case authed && exists:
 			ok = true
 		case authed && !exists:

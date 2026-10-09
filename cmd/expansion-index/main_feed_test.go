@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/authn"
+	"github.com/google/go-containerregistry/pkg/v1/remote"
+
 	"github.com/puppet-stagehand/stagehand-sdk/cmd/expansion-index/internal/testreg"
 )
 
@@ -133,5 +136,55 @@ func TestListingCLIUsageErrors(t *testing.T) {
 	}
 	if code, _, errs := runCmd(t, "listing", "--index-ref", ref, "--key", keyPath, "--catalog", filepath.Join(t.TempDir(), "missing.yaml"), "--feed", "official", "--out", filepath.Join(t.TempDir(), "o.json")); code != 2 {
 		t.Fatalf("unreadable catalog: exit %d, want 2\n%s", code, errs)
+	}
+}
+
+func TestCopyThroughTheCLI(t *testing.T) {
+	isolateDocker(t)
+	src := testreg.NewBasicAuth(t, "srcuser", "src-secret-value")
+	dst := testreg.NewBasicAuth(t, "dstuser", "dst-secret-value")
+	t.Setenv("SRC_USER", "srcuser")
+	t.Setenv("SRC_PASS", "src-secret-value")
+	t.Setenv("DST_USER", "dstuser")
+	t.Setenv("DST_PASS", "dst-secret-value")
+	candidate := testreg.PushCandidate(t, src.Host+"/staging/hello", helloManifest(t), remote.WithAuth(&authn.Basic{Username: "srcuser", Password: "src-secret-value"}))
+	digest := candidate[strings.Index(candidate, "@")+1:]
+	args := []string{"copy", "--from", candidate, "--to", dst.Host + "/packs/hello:0.1.0",
+		"--from-username-env", "SRC_USER", "--from-password-env", "SRC_PASS", "--to-username-env", "DST_USER", "--to-password-env", "DST_PASS", "--format", "json"}
+
+	for i, wantPresent := range []bool{false, true} {
+		code, out, errs := runCmd(t, args...)
+		if code != 0 {
+			t.Fatalf("run %d: exit %d\n%s\n%s", i, code, out, errs)
+		}
+		var res struct {
+			OK             bool   `json:"ok"`
+			Digest         string `json:"digest"`
+			AlreadyPresent bool   `json:"already_present"`
+		}
+		if err := json.Unmarshal([]byte(out), &res); err != nil || !res.OK || res.Digest != digest || res.AlreadyPresent != wantPresent {
+			t.Fatalf("run %d: envelope %q (%v) %+v, want digest %s already_present %v", i, out, err, res, digest, wantPresent)
+		}
+		for _, secret := range []string{"src-secret-value", "dst-secret-value"} {
+			if strings.Contains(out+errs, secret) {
+				t.Fatalf("a credential was printed:\n%s\n%s", out, errs)
+			}
+		}
+	}
+
+	code, out, _ := runCmd(t, "copy", "--from", candidate, "--to", dst.Host+"/packs/hello:0.1.0", "--from-username-env", "SRC_USER", "--from-password-env", "SRC_PASS",
+		"--to-username-env", "DST_USER", "--to-password-env", "SRC_PASS", "--format", "json")
+	if code != 1 || !strings.Contains(out, "destination_denied") {
+		t.Fatalf("wrong destination password: exit %d\n%s", code, out)
+	}
+	if code, _, _ := runCmd(t, "copy", "--from", candidate); code != 2 {
+		t.Fatalf("missing --to: exit %d, want 2", code)
+	}
+	if code, _, errs := runCmd(t, "copy", "--from", candidate, "--to", dst.Host+"/packs/hello:0.1.0", "--to-username-env", "NOT_SET_ANYWHERE", "--to-password-env", "DST_PASS"); code != 2 {
+		t.Fatalf("unset username variable: exit %d, want 2\n%s", code, errs)
+	}
+	code, out, _ = runCmd(t, "copy", "--from", src.Host+"/staging/hello:candidate", "--to", dst.Host+"/packs/hello:0.1.0", "--format", "json")
+	if code != 1 || !strings.Contains(out, "source_not_pinned") {
+		t.Fatalf("tag-pinned source: exit %d\n%s", code, out)
 	}
 }
