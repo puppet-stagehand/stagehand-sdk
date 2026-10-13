@@ -30,6 +30,7 @@ type config struct {
 	forgeClient           ForgeClient
 	llmClient             LLMClient
 	gitClient             GitClient
+	instances             []*hostv1.Instance
 }
 
 // defaultConfig returns a config seeded with a private clone of the
@@ -117,7 +118,8 @@ func WithGitClient(client GitClient) Option {
 // permissions. Documents is always available (scoped to packID's own
 // namespace instead of permission-gated); Settings is always available;
 // Secrets requires "secrets:rw", Auth requires "tokens:issue", Inventory
-// requires "inventory:rw", and Code requires "code:rw" — calling a gated
+// requires "inventory:rw", Code requires "code:rw", and Instances requires
+// "instances:read" (seeded with WithInstances) — calling a gated
 // facet without its permission declared returns the same PERMISSION_DENIED
 // a real Expansion Pack would get from the console's gRPC interceptor.
 //
@@ -148,6 +150,7 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
 		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs, secrets, cfg.gitClient)},
 		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},
+		Instances: &gatedInstances{perms: perms, inner: newInstancesServer(cfg.instances)},
 	}
 }
 

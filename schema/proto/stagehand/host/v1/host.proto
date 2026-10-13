@@ -806,3 +806,54 @@ message ForgeAdvisoryWarning {
   string requirement = 4;
   repeated string origins = 5;
 }
+
+// ---------------------------------------------------------------- Instances
+// Permission: instances:read for every RPC below. Read-only.
+//
+// The Puppet estates (instances) the console is connected to, so a pack can
+// reach an estate's own servers itself. Returns NO credential of any kind: no
+// private key, no client certificate, no token, no password and no file path
+// on the console host. ca_cert_pem is the estate's PUBLIC CA bundle,
+// re-encoded by the host from parsed CERTIFICATE blocks only, so a pack can
+// verify the estate's servers; it never authenticates the pack to them.
+//
+// `active` is for display only (the estate the console's own pages show
+// now). A pack must never use it, or `edition`, to choose a deploy target or
+// to gate a licence: the operator names the target explicitly.
+service Instances {
+  rpc ListInstances(ListInstancesRequest) returns (ListInstancesResponse);
+  // GetInstance answers NOT_FOUND for an id that is not registered, including
+  // an estate the console has since removed. A pack that stored an id must
+  // treat NOT_FOUND as "this estate is gone", not as a transient error.
+  rpc GetInstance(GetInstanceRequest) returns (Instance);
+}
+message Instance {
+  // id is the console's stable estate id (for example "inst-" + 16 hex).
+  string id = 1;
+  // name is the operator-chosen display name.
+  string name = 2;
+  // edition is the console's admin-declared value, today one of core, pe,
+  // pe_advanced, openvox. It is a string, not an enum, so a console that adds
+  // an edition needs no SDK change. It is what an administrator typed, never
+  // an entitlement or licence signal.
+  string edition = 3;
+  // endpoints are the estate's server addresses, one per kind.
+  repeated InstanceEndpoint endpoints = 4;
+  // ca_cert_pem is the estate's PUBLIC CA bundle (PEM CERTIFICATE blocks
+  // only). Empty when the console holds none for this estate.
+  string ca_cert_pem = 5;
+  // active marks the estate the console's own pages show now. Display only;
+  // never a deploy target.
+  bool active = 6;
+}
+message InstanceEndpoint {
+  // kind is a string so a later console can add a kind without an SDK
+  // change. Today the host sends puppetserver, puppetdb and classifier, and
+  // omits every other connection the console holds.
+  string kind = 1;
+  string host = 2;
+  int32 port = 3;
+}
+message ListInstancesRequest { Page page = 1; }  // ordered by id; host caps limit at 500
+message ListInstancesResponse { repeated Instance instances = 1; PageInfo page = 2; }
+message GetInstanceRequest { string id = 1; }
