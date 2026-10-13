@@ -40,7 +40,7 @@
 
     "permissions": {
       "type": "array", "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|code:import|activity:read|legacy:read:[a-z_]+)$" }
+      "items": { "type": "string", "pattern": "^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|code:import|activity:read|instances:read|network:egress|legacy:read:[a-z_]+)$" }
     },
     "extension_points": {
       "type": "array",
@@ -65,6 +65,7 @@
             "properties": {
               "role": { "type": "string", "enum": ["", "global_admin", "deployer", "operator", "viewer"] },
               "scope": { "type": "string", "pattern": "^[a-z][a-z0-9_:-]*$" },
+              "permission": { "type": "string", "enum": ["code-deploy"], "description": "A console permission the calling person must hold. code-deploy: may deploy code. May be set with role; the host then requires both. The host refuses a value it does not know." },
               "public": { "type": "boolean" }
             }
           },

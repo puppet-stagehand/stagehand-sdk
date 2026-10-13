@@ -26,7 +26,7 @@ var (
 	reSemver  = regexp.MustCompile(`^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$`)
 	reRoute   = regexp.MustCompile(`^/x/[a-z][a-z0-9_]{1,31}$`)
 	reDigest  = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
-	rePerm    = regexp.MustCompile(`^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|code:import|activity:read|legacy:read:[a-z_]+)$`)
+	rePerm    = regexp.MustCompile(`^(documents:rw|secrets:rw|bolt:run|inventory:read|inventory:rw|inventory:kind:[a-z][a-z0-9_]{1,31}|compliance:ingest|tokens:issue|forge:rw|forge:recommend|puppetdb:read|classification:read|code:read|code:rw|code:import|activity:read|instances:read|network:egress|legacy:read:[a-z_]+)$`)
 	reMethod  = regexp.MustCompile(`^[A-Z][A-Z-]{0,15}$`)
 	rePath    = regexp.MustCompile(`^[^/][A-Za-z0-9_./{}-]*$`)
 	reOpID    = regexp.MustCompile(`^[a-zA-Z][A-Za-z0-9]*$`)
@@ -186,6 +186,9 @@ func Validate(m *Manifest) []Finding {
 		a := r.Access
 		if a.Role != "" && !contains([]string{"global_admin", "deployer", "operator", "viewer"}, a.Role) {
 			add("route_access_role_unknown", path+"/access/role", "unknown role "+a.Role, "Use global_admin, deployer, operator, viewer, or omit for any session.")
+		}
+		if a.Permission != "" && !contains(RoutePermissions, a.Permission) {
+			add("route_access_permission_unknown", path+"/access/permission", "unknown route permission "+a.Permission, "Use one of: "+strings.Join(RoutePermissions, ", ")+", or omit access.permission.")
 		}
 		if a.Scope != "" && !reScope.MatchString(a.Scope) {
 			add("route_access_scope_invalid", path+"/access/scope", "scope must be lowercase [a-z0-9_:-]", "Use e.g. \"state:rw\"; the host namespaces it as pack:<id>:state:rw.")

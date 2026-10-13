@@ -23,7 +23,14 @@ var ExtensionPoints = []string{"patching.provider", "compliance.source"}
 var Permissions = []string{
 	"documents:rw", "secrets:rw", "bolt:run", "inventory:read", "inventory:rw", "compliance:ingest",
 	"tokens:issue", "forge:rw", "forge:recommend", "puppetdb:read", "classification:read", "code:read", "code:rw", "code:import", "activity:read",
+	"instances:read", "network:egress",
 }
+
+// RoutePermissions are the named console permissions a route may require of
+// the person calling it (routes[].access.permission). The console checks the
+// caller holds it before dispatching; when access.role is also set, the
+// caller must satisfy both.
+var RoutePermissions = []string{"code-deploy"}
 
 type Nav struct {
 	Group string `json:"group"`
@@ -32,9 +39,13 @@ type Nav struct {
 }
 
 type Access struct {
-	Role   string `json:"role,omitempty"`
-	Scope  string `json:"scope,omitempty"`
-	Public bool   `json:"public,omitempty"`
+	Role  string `json:"role,omitempty"`
+	Scope string `json:"scope,omitempty"`
+	// Permission names a console permission the calling person must hold
+	// (one of RoutePermissions). It may be set alongside Role; the host then
+	// requires both.
+	Permission string `json:"permission,omitempty"`
+	Public     bool   `json:"public,omitempty"`
 }
 
 type Route struct {
