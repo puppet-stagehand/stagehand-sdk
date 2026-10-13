@@ -28,13 +28,21 @@ const (
 )
 
 type HttpRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Method        string                 `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`
-	Path          string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"` // path is relative (as in manifest.routes[].path)
-	Query         map[string]string      `protobuf:"bytes,3,rep,name=query,proto3" json:"query,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Headers       map[string]string      `protobuf:"bytes,4,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	Body          []byte                 `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
-	Principal     *Principal             `protobuf:"bytes,6,opt,name=principal,proto3" json:"principal,omitempty"` // session user or verified token
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Method    string                 `protobuf:"bytes,1,opt,name=method,proto3" json:"method,omitempty"`
+	Path      string                 `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"` // path is relative (as in manifest.routes[].path)
+	Query     map[string]string      `protobuf:"bytes,3,rep,name=query,proto3" json:"query,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Headers   map[string]string      `protobuf:"bytes,4,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Body      []byte                 `protobuf:"bytes,5,opt,name=body,proto3" json:"body,omitempty"`
+	Principal *Principal             `protobuf:"bytes,6,opt,name=principal,proto3" json:"principal,omitempty"` // session user or verified token
+	// request_id is set by the host for each proxied request. It is opaque: a
+	// correlation id, never a credential. The worker echoes it as gRPC metadata
+	// stagehand-request-id on the facet calls it makes while handling this
+	// request, so the host can tell which person stands behind them (for
+	// example the requester of an approval proposal). The worker drops a value
+	// longer than 128 bytes or with a character outside [A-Za-z0-9._-]. Field 7
+	// is intentionally left free.
+	RequestId     string `protobuf:"bytes,8,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -109,6 +117,13 @@ func (x *HttpRequest) GetPrincipal() *Principal {
 		return x.Principal
 	}
 	return nil
+}
+
+func (x *HttpRequest) GetRequestId() string {
+	if x != nil {
+		return x.RequestId
+	}
+	return ""
 }
 
 type HttpResponse struct {
@@ -632,14 +647,16 @@ var File_stagehand_host_v1_worker_proto protoreflect.FileDescriptor
 
 const file_stagehand_host_v1_worker_proto_rawDesc = "" +
 	"\n" +
-	"\x1estagehand/host/v1/worker.proto\x12\x11stagehand.host.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1estagehand/host/v1/common.proto\x1a\x1cstagehand/host/v1/host.proto\"\x87\x03\n" +
+	"\x1estagehand/host/v1/worker.proto\x12\x11stagehand.host.v1\x1a\x1bgoogle/protobuf/empty.proto\x1a\x1estagehand/host/v1/common.proto\x1a\x1cstagehand/host/v1/host.proto\"\xa6\x03\n" +
 	"\vHttpRequest\x12\x16\n" +
 	"\x06method\x18\x01 \x01(\tR\x06method\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12?\n" +
 	"\x05query\x18\x03 \x03(\v2).stagehand.host.v1.HttpRequest.QueryEntryR\x05query\x12E\n" +
 	"\aheaders\x18\x04 \x03(\v2+.stagehand.host.v1.HttpRequest.HeadersEntryR\aheaders\x12\x12\n" +
 	"\x04body\x18\x05 \x01(\fR\x04body\x12:\n" +
-	"\tprincipal\x18\x06 \x01(\v2\x1c.stagehand.host.v1.PrincipalR\tprincipal\x1a8\n" +
+	"\tprincipal\x18\x06 \x01(\v2\x1c.stagehand.host.v1.PrincipalR\tprincipal\x12\x1d\n" +
+	"\n" +
+	"request_id\x18\b \x01(\tR\trequestId\x1a8\n" +
 	"\n" +
 	"QueryEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

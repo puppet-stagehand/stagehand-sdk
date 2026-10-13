@@ -108,6 +108,9 @@ func buildRequest(ctx context.Context, req *hostv1.HttpRequest) (*http.Request, 
 	if pr := req.GetPrincipal(); pr != nil {
 		ctx = context.WithValue(ctx, principalKey{}, pr)
 	}
+	// The host's request id rides beside the principal; a malformed one is
+	// dropped (requestid.go). Facet calls made with this ctx echo it.
+	ctx = withRequestID(ctx, req.GetRequestId())
 	var body *bytes.Reader
 	if len(req.GetBody()) > 0 {
 		body = bytes.NewReader(req.GetBody())
