@@ -19,5 +19,6 @@ func newClients(cc grpc.ClientConnInterface) *Clients {
 		Inventory: hostv1.NewInventoryClient(cc),
 		Code:      hostv1.NewCodeClient(cc),
 		Forge:     hostv1.NewForgeClient(cc),
+		Instances: hostv1.NewInstancesClient(cc),
 	}
 }

@@ -3245,3 +3245,177 @@ var Forge_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "stagehand/host/v1/host.proto",
 }
+
+const (
+	Instances_ListInstances_FullMethodName = "/stagehand.host.v1.Instances/ListInstances"
+	Instances_GetInstance_FullMethodName   = "/stagehand.host.v1.Instances/GetInstance"
+)
+
+// InstancesClient is the client API for Instances service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// ---------------------------------------------------------------- Instances
+// Permission: instances:read for every RPC below. Read-only.
+//
+// The Puppet estates (instances) the console is connected to, so a pack can
+// reach an estate's own servers itself. Returns NO credential of any kind: no
+// private key, no client certificate, no token, no password and no file path
+// on the console host. ca_cert_pem is the estate's PUBLIC CA bundle,
+// re-encoded by the host from parsed CERTIFICATE blocks only, so a pack can
+// verify the estate's servers; it never authenticates the pack to them.
+//
+// `active` is for display only (the estate the console's own pages show
+// now). A pack must never use it, or `edition`, to choose a deploy target or
+// to gate a licence: the operator names the target explicitly.
+type InstancesClient interface {
+	ListInstances(ctx context.Context, in *ListInstancesRequest, opts ...grpc.CallOption) (*ListInstancesResponse, error)
+	// GetInstance answers NOT_FOUND for an id that is not registered, including
+	// an estate the console has since removed. A pack that stored an id must
+	// treat NOT_FOUND as "this estate is gone", not as a transient error.
+	GetInstance(ctx context.Context, in *GetInstanceRequest, opts ...grpc.CallOption) (*Instance, error)
+}
+
+type instancesClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewInstancesClient(cc grpc.ClientConnInterface) InstancesClient {
+	return &instancesClient{cc}
+}
+
+func (c *instancesClient) ListInstances(ctx context.Context, in *ListInstancesRequest, opts ...grpc.CallOption) (*ListInstancesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListInstancesResponse)
+	err := c.cc.Invoke(ctx, Instances_ListInstances_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *instancesClient) GetInstance(ctx context.Context, in *GetInstanceRequest, opts ...grpc.CallOption) (*Instance, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Instance)
+	err := c.cc.Invoke(ctx, Instances_GetInstance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// InstancesServer is the server API for Instances service.
+// All implementations must embed UnimplementedInstancesServer
+// for forward compatibility.
+//
+// ---------------------------------------------------------------- Instances
+// Permission: instances:read for every RPC below. Read-only.
+//
+// The Puppet estates (instances) the console is connected to, so a pack can
+// reach an estate's own servers itself. Returns NO credential of any kind: no
+// private key, no client certificate, no token, no password and no file path
+// on the console host. ca_cert_pem is the estate's PUBLIC CA bundle,
+// re-encoded by the host from parsed CERTIFICATE blocks only, so a pack can
+// verify the estate's servers; it never authenticates the pack to them.
+//
+// `active` is for display only (the estate the console's own pages show
+// now). A pack must never use it, or `edition`, to choose a deploy target or
+// to gate a licence: the operator names the target explicitly.
+type InstancesServer interface {
+	ListInstances(context.Context, *ListInstancesRequest) (*ListInstancesResponse, error)
+	// GetInstance answers NOT_FOUND for an id that is not registered, including
+	// an estate the console has since removed. A pack that stored an id must
+	// treat NOT_FOUND as "this estate is gone", not as a transient error.
+	GetInstance(context.Context, *GetInstanceRequest) (*Instance, error)
+	mustEmbedUnimplementedInstancesServer()
+}
+
+// UnimplementedInstancesServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedInstancesServer struct{}
+
+func (UnimplementedInstancesServer) ListInstances(context.Context, *ListInstancesRequest) (*ListInstancesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListInstances not implemented")
+}
+func (UnimplementedInstancesServer) GetInstance(context.Context, *GetInstanceRequest) (*Instance, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetInstance not implemented")
+}
+func (UnimplementedInstancesServer) mustEmbedUnimplementedInstancesServer() {}
+func (UnimplementedInstancesServer) testEmbeddedByValue()                   {}
+
+// UnsafeInstancesServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to InstancesServer will
+// result in compilation errors.
+type UnsafeInstancesServer interface {
+	mustEmbedUnimplementedInstancesServer()
+}
+
+func RegisterInstancesServer(s grpc.ServiceRegistrar, srv InstancesServer) {
+	// If the following call panics, it indicates UnimplementedInstancesServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Instances_ServiceDesc, srv)
+}
+
+func _Instances_ListInstances_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListInstancesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstancesServer).ListInstances(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Instances_ListInstances_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstancesServer).ListInstances(ctx, req.(*ListInstancesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Instances_GetInstance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetInstanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(InstancesServer).GetInstance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Instances_GetInstance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(InstancesServer).GetInstance(ctx, req.(*GetInstanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Instances_ServiceDesc is the grpc.ServiceDesc for Instances service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Instances_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "stagehand.host.v1.Instances",
+	HandlerType: (*InstancesServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "ListInstances",
+			Handler:    _Instances_ListInstances_Handler,
+		},
+		{
+			MethodName: "GetInstance",
+			Handler:    _Instances_GetInstance_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "stagehand/host/v1/host.proto",
+}

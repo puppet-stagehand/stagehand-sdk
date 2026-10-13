@@ -108,6 +108,79 @@ pretend to be someone by sending `X-User: root`. In your own code, do the same:
 false when the console sent no principal; treat that as "unknown", not as an
 administrator.
 
+## Who is behind a request
+
+For every route request, the console also sends a **request id**: an opaque
+label for this one request, never a password or a token. The worker keeps it in
+the request's context, and every facet call you make with that context (or a
+context derived from it with `context.WithTimeout`, `context.WithValue` and so
+on) sends it back to the console as gRPC metadata `stagehand-request-id`. That
+is how the console knows which person stands behind a facet call, for example
+who asked for an approval proposal, so that person cannot approve their own
+request.
+
+```go
+id := worker.RequestIDFrom(r.Context()) // "" when there is none
+```
+
+You rarely need to read it yourself; just pass `r.Context()` to your facet
+calls. The rules:
+
+- **File approval proposals inside the route handler,** with `r.Context()`.
+  A proposal filed from `OnConnected`, from a goroutine started with its own
+  `context.Background()`, or from any other context that did not come from a
+  request carries no id, and the console records `started_by = none` for it.
+  The console may also stop honouring an id once the request has returned.
+- **The worker never invents an id.** A call made outside a request sends
+  none. There is no option to set one.
+- **A malformed id is dropped.** An id longer than 128 bytes, or with a
+  character outside `A-Z a-z 0-9 . _ -`, is dropped before your handler runs:
+  `RequestIDFrom` returns `""` and nothing is sent.
+- The metadata key is exported as `worker.RequestIDMetadataKey`. Do not set it
+  yourself: when the context carries a request id, the worker replaces any
+  value you set with that id.
+
+## Instances: the Puppet estates the console knows
+
+With the `instances:read` permission, `Clients.Instances` lists the Puppet
+estates (instances) the console is connected to, so your pack can reach an
+estate's own servers itself:
+
+```go
+list, err := c.Instances.ListInstances(ctx, &hostv1.ListInstancesRequest{})
+one, err := c.Instances.GetInstance(ctx, &hostv1.GetInstanceRequest{Id: id})
+```
+
+Each `Instance` carries exactly these fields:
+
+| Field | What it is |
+|-------|------------|
+| `id` | the console's stable estate id, for example `inst-0a1b2c3d4e5f6a7b` |
+| `name` | the name the operator gave the estate |
+| `edition` | what an administrator declared: today `core`, `pe`, `pe_advanced` or `openvox`. A string, so a new edition needs no SDK change. **Never** a licence or entitlement signal. |
+| `endpoints` | one `{kind, host, port}` per server. `kind` is a string; today the console sends `puppetserver`, `puppetdb` and `classifier`, and omits every other connection it holds |
+| `ca_cert_pem` | the estate's **public** CA bundle (PEM `CERTIFICATE` blocks only), so you can verify the estate's servers. Empty when the console holds none |
+| `active` | the estate the console's own pages show right now. Display only: **never** use it, or `edition`, to choose where to deploy |
+
+The facet **never carries a credential**: no private key, no client
+certificate, no token, no password and no file path on the console host. To
+talk to an estate's servers your pack brings its own credentials (kept with the
+`Secrets` facet); the CA bundle only lets you check you reached the right
+server. A test in this SDK walks the message definitions and fails if a field
+outside the table above ever appears.
+
+`GetInstance` answers `NOT_FOUND` for an id the console does not know,
+including an estate an operator has removed since you stored its id. Treat
+`NOT_FOUND` as "this estate is gone", not as a passing error: show it to the
+operator and stop using the id.
+
+`ListInstances` is ordered by id and paged like every other list (a `Page`
+with `cursor` and `limit`, at most 500 per page).
+
+In tests on `host.Local`, seed estates with
+`local.New(perms, id, local.WithInstances(a, b))` and remove one with
+`local.RemoveInstance(h, id)` to prove your pack copes with `NOT_FOUND`.
+
 ## Limits you can rely on
 
 | What | Limit | When it is exceeded |
@@ -138,7 +211,7 @@ All of these are optional fields of `worker.Options`:
 | `UI` (an `fs.FS`) | n/a | Defaults to `os.DirFS("/stagehand/ui")`. A missing bundle means "this pack has no UI". |
 
 `Clients` carries a gRPC client for every host facet (`Documents`, `Settings`,
-`Secrets`, `Auth`, `Inventory`, `Code`, `Forge`). The **console** enforces the
+`Secrets`, `Auth`, `Inventory`, `Code`, `Forge`, `Instances`). The **console** enforces the
 permissions in your manifest on every call; a client existing here does not mean
 you may use it. State belongs in `Documents`, secrets in `Secrets` (see
 `CLAUDE.md` rules 4 and 5).

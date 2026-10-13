@@ -85,6 +85,7 @@ type Clients struct {
 	Inventory hostv1.InventoryClient
 	Code      hostv1.CodeClient
 	Forge     hostv1.ForgeClient
+	Instances hostv1.InstancesClient
 }
 
 // Run connects to the host and serves until the host asks the worker to shut

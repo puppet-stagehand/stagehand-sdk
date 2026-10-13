@@ -827,3 +827,122 @@ func TestCodeImportRequiresCodeRWFinding(t *testing.T) {
 		t.Errorf("fix = %q, want %q", found.Fix, want)
 	}
 }
+
+// TestValidate_AccessPermission pins the route field access.permission
+// (D-33, SDK-05): its only allowed value is "code-deploy", any other value is
+// a finding whose fix names the allowed set, and access.role alone still
+// validates unchanged. The console fails closed on a value it does not know
+// (T-57.6-05); this keeps a pack from shipping one in the first place.
+func TestValidate_AccessPermission(t *testing.T) {
+	withRoute := func(a Access) *Manifest {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Routes = []Route{{Method: "POST", Path: "deploys", Access: a, OperationID: "startDeploy"}}
+		return m
+	}
+
+	t.Run("code-deploy is valid", func(t *testing.T) {
+		if fs := Validate(withRoute(Access{Permission: "code-deploy"})); len(fs) != 0 {
+			t.Fatalf("access.permission code-deploy must validate clean; got %v", fs)
+		}
+	})
+	t.Run("code-deploy alongside a role is valid", func(t *testing.T) {
+		if fs := Validate(withRoute(Access{Role: "deployer", Permission: "code-deploy"})); len(fs) != 0 {
+			t.Fatalf("access.role plus access.permission must validate clean; got %v", fs)
+		}
+	})
+	t.Run("role alone still validates", func(t *testing.T) {
+		if fs := Validate(withRoute(Access{Role: "operator"})); len(fs) != 0 {
+			t.Fatalf("access.role alone must validate clean; got %v", fs)
+		}
+	})
+	for _, bad := range []string{"code-approve", "anything", "Code-Deploy", "code-deploy "} {
+		t.Run("refuses "+bad, func(t *testing.T) {
+			fs := Validate(withRoute(Access{Permission: bad}))
+			var found *Finding
+			for i := range fs {
+				if fs[i].Code == "route_access_permission_unknown" {
+					found = &fs[i]
+				}
+			}
+			if found == nil {
+				t.Fatalf("access.permission %q: want route_access_permission_unknown, got %v", bad, codes(fs))
+			}
+			if found.Path != "/routes/0/access/permission" {
+				t.Errorf("finding path = %q, want /routes/0/access/permission", found.Path)
+			}
+			if !strings.Contains(found.Fix, "code-deploy") {
+				t.Errorf("fix line must name the allowed set (code-deploy); got %q", found.Fix)
+			}
+		})
+	}
+
+	t.Run("parses from JSON and schema.json carries the enum", func(t *testing.T) {
+		raw := []byte(`{"method":"POST","path":"deploys","access":{"permission":"code-deploy"},"operation_id":"startDeploy"}`)
+		var r Route
+		if err := json.Unmarshal(raw, &r); err != nil {
+			t.Fatal(err)
+		}
+		if r.Access.Permission != "code-deploy" {
+			t.Fatalf("Access.Permission = %q, want code-deploy", r.Access.Permission)
+		}
+		schemaRaw, err := os.ReadFile("schema.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(schemaRaw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		props, _ := schema["properties"].(map[string]any)
+		routes, _ := props["routes"].(map[string]any)
+		items, _ := routes["items"].(map[string]any)
+		itemProps, _ := items["properties"].(map[string]any)
+		access, _ := itemProps["access"].(map[string]any)
+		accessProps, _ := access["properties"].(map[string]any)
+		perm, _ := accessProps["permission"].(map[string]any)
+		enum, _ := perm["enum"].([]any)
+		if len(enum) != len(RoutePermissions) {
+			t.Fatalf("schema.json access.permission enum = %v, want %v", enum, RoutePermissions)
+		}
+		for i, v := range enum {
+			if v != RoutePermissions[i] {
+				t.Fatalf("schema.json access.permission enum = %v, want %v", enum, RoutePermissions)
+			}
+		}
+	})
+}
+
+// TestValidate_NewPermissions pins the two permissions 57.6 adds: instances:read
+// (the read-only Instances facet, D-14) and network:egress (a disclosure the
+// console shows on the consent screen, D-34). Both are exact literals; a
+// widened network: spelling is refused.
+func TestValidate_NewPermissions(t *testing.T) {
+	for _, p := range []string{"instances:read", "network:egress"} {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, p)
+		if fs := Validate(m); len(fs) != 0 {
+			t.Errorf("%s must validate clean; got %v", p, fs)
+		}
+		if !contains(Permissions, p) {
+			t.Errorf("Permissions slice must contain %q so the fix line offers it", p)
+		}
+	}
+	for _, bad := range []string{"network:anything", "network:ingress", "network:egress:all", "instances:rw", "instances:write"} {
+		m := load(t, "../examples/hello/manifest.json")
+		m.Permissions = append(m.Permissions, bad)
+		fs := Validate(m)
+		var found *Finding
+		for i := range fs {
+			if fs[i].Code == "permission_unknown" {
+				found = &fs[i]
+			}
+		}
+		if found == nil {
+			t.Errorf("%s: want permission_unknown, got %v", bad, codes(fs))
+			continue
+		}
+		if !strings.Contains(found.Fix, "instances:read") || !strings.Contains(found.Fix, "network:egress") {
+			t.Errorf("%s: fix line must offer instances:read and network:egress; got %q", bad, found.Fix)
+		}
+	}
+}

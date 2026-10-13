@@ -147,9 +147,13 @@ func openForward(session *yamux.Session) (*grpc.ClientConn, error) {
 		}
 		return c, nil
 	}
+	// The request-id interceptors echo the host's request id on every facet
+	// call made with a request ctx (requestid.go); they add nothing otherwise.
 	cc, err := grpc.NewClient("passthrough:///stagehand-host",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithContextDialer(dialer))
+		grpc.WithContextDialer(dialer),
+		grpc.WithChainUnaryInterceptor(requestIDUnaryInterceptor),
+		grpc.WithChainStreamInterceptor(requestIDStreamInterceptor))
 	if err != nil {
 		_ = forward.Close()
 		return nil, fmt.Errorf("worker: facet client: %w", err)

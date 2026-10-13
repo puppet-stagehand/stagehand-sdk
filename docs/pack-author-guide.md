@@ -28,6 +28,15 @@ Copy `examples/hello/manifest.json` and change:
   - `forge:recommend` — ask for ranked module suggestions from a plain
     sentence. It is separate from `forge:rw` because it sends your text to a
     third-party language model, which can cost money.
+  - `instances:read` — see the Puppet estates the console is connected to:
+    each one's name, its servers' addresses and its public CA certificate.
+    Never a password, key or token. `docs/worker.md` ("Instances") lists every
+    field.
+  - `network:egress` — say that your worker reaches outside the console (a
+    git host, a Puppet server, a web API). It unlocks no tool: it is an honest
+    label the console shows the operator on the install screen, under
+    "Reaches outside the console", before they agree to install your pack.
+    Declare it whenever your worker opens a connection of its own.
 - `slots` — where your pages go. `nodeDetailTab` puts a tab on every
   node's page; `page` gives you a whole page (then add `nav`).
 - `settings_schema` — the knobs an operator can turn, as a small JSON Schema.
@@ -36,6 +45,32 @@ Run the checker. It tells you exactly what to fix and how:
 ```
 go run ./cmd/pack-check examples/hello/manifest.json
 ```
+
+## Routes only some people may call
+Each route in `routes` says who may call it in `access`. `role` is the
+console role a person needs (`viewer`, `operator`, `deployer`,
+`global_admin`). `permission` names one console permission the person must
+hold. Today there is one: `code-deploy`, "may deploy code". If you set both,
+the console requires both.
+
+```json
+{ "method": "POST", "path": "deploys", "access": { "role": "deployer", "permission": "code-deploy" }, "operation_id": "startDeploy" }
+```
+
+Any other `permission` value is refused by pack-check with the finding
+`route_access_permission_unknown`, and its fix line lists the allowed values.
+The console also refuses a value it does not know, so a misspelling can never
+leave a route open.
+
+### What `network:egress` cannot say
+`network.egress` in the manifest is a fixed list of host names. That works
+for a pack that always talks to the same service. It cannot describe a target
+an operator types in later (their own git server, their own Puppet primary),
+so a pack like that declares the `network:egress` permission and leaves
+`network.egress` short or empty. This is a known gap: a locked-down console
+that only lets packs reach the host names in their manifest will need an
+operator allow-list or a way to declare targets at runtime. It is not solved
+by this SDK yet.
 
 ## The worker (coming in the next SDK phase)
 A small program in a container. It phones the console and asks for things
