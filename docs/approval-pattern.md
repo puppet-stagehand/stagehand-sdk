@@ -295,6 +295,19 @@ the `TestDocumentsGuard_*` tests prove the refusals, including over a real gRPC
 connection. The real console's Documents interceptor must read
 `stagehand-approver-token` from incoming metadata and apply the same rules.
 
+### Who asked: `started_by` on the console
+
+The console records the person who asked for a proposal as its `started_by`,
+and refuses to let that same person approve it. It learns who asked from the
+request id the worker sends with each facet call (metadata
+`stagehand-request-id`, see "Who is behind a request" in `docs/worker.md`), so
+a pack must file a proposal **inside the route handler** the person called,
+using the handler's `r.Context()` or a ctx derived from it. A proposal filed
+from `OnConnected`, a background goroutine with its own `context.Background()`,
+or anything else that did not come from a request carries no id: the console
+records `started_by = none`, and no requester is excluded from approving it.
+`host.Local` does not model `started_by`; the console's own tests cover it.
+
 ### What changed, and the GOV-03 audit
 
 The two package constants this API replaces, `approval.Collection`

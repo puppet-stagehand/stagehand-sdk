@@ -12,6 +12,9 @@ A signed container image with three parts:
 
 ## Rules that are enforced (by `pack-check` now, by the console at install)
 1. The manifest lists every facet the worker uses in `permissions`. Undeclared facets are refused at runtime; the conformance suite fails a worker that reaches for one.
+   Facets: Documents, Settings (always granted), Secrets (`secrets:rw`), Auth (`tokens:issue`), Inventory (`inventory:read` / `inventory:rw`), Code (`code:read` / `code:rw` / `code:import`), Forge (`forge:rw` / `forge:recommend`), Instances (`instances:read`, read-only, never a credential). `network:egress` maps to no facet: declare it when the worker reaches outside the console; the console shows it on the consent screen.
+   A route can require a console permission of the person calling it with `access.permission` (today only `code-deploy`), alongside or instead of `access.role`.
+   File approval proposals inside the route handler with its `r.Context()`: the worker sends the request id (`worker.RequestIDFrom`) so the console knows who asked; a proposal filed from background work records `started_by = none`.
 2. UI goes into slots only. A `page` slot needs a `nav` entry in one of the seven console groups: Overview, Inventory, Reporting, Automation, Configuration, Patching & Compliance, Administration. Packs never add groups.
 3. Routes are relative (`state/{workspace}`); the console mounts them at `/api/v1/x/<id>/`. Any HTTP method token is allowed. Every route has an `operation_id` present in the pack's OpenAPI fragment.
 4. State lives in the `Documents` facet (namespaced JSON documents). Packs never own database tables.

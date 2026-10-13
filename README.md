@@ -20,7 +20,7 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `manifest/schema.json` | Pack manifest (contract_version 1) |
 | `schema/json/index.schema.json` | App Center index (a pack forge = OCI registry + this, signed) |
 | `schema/json/settings-ui.schema.json` | Renderable subset of JSON Schema for pack settings |
-| `schema/proto/stagehand/host/v1/host.proto` | Facets the worker calls; permission strings in comments |
+| `schema/proto/stagehand/host/v1/host.proto` | Facets the worker calls (Documents, Settings, Secrets, Auth, Inventory, Code, Forge, Instances); permission strings in comments |
 | `schema/proto/stagehand/host/v1/worker.proto` | Services the worker implements; extension points |
 | `schema/ts/slots.d.ts`, `schema/ts/sandbox.d.ts` | UI slot kinds, entry shape and the sandboxed-tier `mount`/`host` contract |
 | `schema/json/ui.manifest.schema.json` | The UI bundle index (`ui.manifest.json`); `manifest.ui_digest` is its digest |
@@ -31,7 +31,7 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `docs/ui-bundle-contract.md` | The UI bundle contract |
 | `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json`; `--ui dir` also verifies a built UI bundle |
 | `examples/hello` | The example pack: a valid manifest (node-detail tab + job + one route), a Go worker on `worker.Run`, an OpenAPI fragment and a layout-correct Dockerfile |
-| `docs/worker.md` | Guide to writing a Go pack worker with the `worker` package and testing it with `workertest` |
+| `docs/worker.md` | Guide to writing a Go pack worker with the `worker` package and testing it with `workertest`; the Instances facet and the request id (`worker.RequestIDFrom`) |
 | `docs/image-layout.md` | The pack image layout contract (manifest in the topmost layer, UI, OpenAPI, entrypoint, linux/amd64) |
 | `examples/control-repo-authoring` | Worked proof that the Code facet, the registry search, the suggestion step and the approval gate compose into one workflow; author-only, never deploys |
 | `docs/control-repo-authoring.md` | End-to-end ELI10 authoring guide for that example |

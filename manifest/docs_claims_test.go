@@ -141,6 +141,15 @@ func TestDocsClaimsAreCurrent(t *testing.T) {
 			why: "D-14: the OnboardNode comment must not say Documents has no ACL",
 		},
 		{
+			path: "../docs/worker.md",
+			mustContain: []string{
+				"The facet **never carries a credential**",
+				"`started_by = none`",
+				"**The worker never invents an id.**",
+			},
+			why: "57.6 D-14 and D-32: the Instances facet carries no credential, and a proposal filed outside a request is attributed to nobody",
+		},
+		{
 			path:           "../README.md",
 			mustNotContain: []string{"has no access control", "has no ACL"},
 			why:            "D-14: README.md and llms.txt carry no Documents-ACL claim",
