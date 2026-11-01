@@ -219,11 +219,26 @@ you may use it. State belongs in `Documents`, secrets in `Secrets` (see
 Not in this slice: the `Jobs` service in `worker.proto` is not served by
 `worker.Run` yet. A `jobs` entry in your manifest does nothing until it is.
 
+## The headless hello example
+
+`examples/hello` declares one viewer route, `GET greeting`, and only the
+`documents:rw` permission. Its response is JSON, for example
+`{"greeting":"Hello","caller":"ada"}`. The greeting comes from the pack's
+`greetings/default` document, whose `text` field is seeded with `Hello` using a
+create-only write. Restarting the worker preserves a document an operator has
+edited. The caller comes from the host-resolved principal; forged identity
+headers never change it, and an absent principal yields `unknown`.
+
+The example has no configurable settings, slots, UI digest or jobs. No UI
+directory is needed. Missing assets return `NotFound` while health remains
+ready and the greeting route keeps working. Its
+[user guide](../examples/hello/docs/USER-GUIDE.md) and
+[tester guide](../examples/hello/docs/TESTER-GUIDE.md) cover the runnable example.
+
 ## Adding a UI bundle
 
-`examples/hello` ships without a UI so that the example stays small, even though
-its manifest still declares a `nodeDetailTab` slot and a placeholder
-`ui_digest`. To give a pack screens:
+Adding screens is optional and separate from the headless hello example. To
+give your own pack screens:
 
 1. Write `ui/src/index.tsx`, `ui/src/slots.json` and (optionally)
    `ui/src/sandbox.tsx` as described in [expansion-build.md](expansion-build.md).
@@ -248,9 +263,9 @@ its manifest still declares a `nodeDetailTab` slot and a placeholder
    `ui.manifest.json` (plus the manifest itself), refuses unsafe paths, and the
    console checks every byte against `ui_digest`.
 
-If your pack has no screens, remove `slots`, `ui_digest` and any `jobs` you do
-not implement from the manifest; a manifest that promises a UI the image does not
-carry will not install.
+Headless packs need neither `slots`, `ui_digest` nor a UI directory. Declare
+only jobs your worker actually implements; a manifest that promises a UI the
+image does not carry will not install.
 
 ## Testing with `workertest.NewFakeHost`
 
@@ -287,3 +302,18 @@ principal field).
 
 The fake host replays the console's documented sequence; it is not the console.
 Test against a real console before you publish.
+
+From the SDK root, test the example's manifest and real transport, then opt in
+to its production-image layout and runtime proof (Docker with linux/amd64
+support is required):
+
+```
+go test ./examples/hello ./manifest ./uibundle -race -count=1 -timeout=55s
+SDK_HELLO_IMAGE=1 go test ./examples/hello -run '^TestHelloImage$' -count=1 -v -timeout=10m
+```
+
+The image test prints `HELLO_IMAGE_OK` only after inspecting the production
+image and executing its `/hello` worker. Its fake host and worker run together
+in a disposable derivative container, with no external network. The test
+harness is never added to the production image. An explicitly requested test
+fails if Docker is unavailable.

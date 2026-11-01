@@ -33,6 +33,9 @@ func TestManifestMatchesHeadlessWorker(t *testing.T) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		t.Fatal(err)
 	}
+	if findings := manifest.Validate(&m); len(findings) != 0 {
+		t.Fatalf("copyable manifest must validate: %v", findings)
+	}
 	if m.Summary != "Headless greeting route backed by Documents, using the host-resolved caller identity." {
 		t.Errorf("summary advertises unsupported behavior: %q", m.Summary)
 	}
