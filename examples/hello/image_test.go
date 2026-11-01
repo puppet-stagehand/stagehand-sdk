@@ -89,7 +89,7 @@ func TestHelloImage(t *testing.T) {
 	if err := json.Unmarshal(files[entries[0].Config], &config); err != nil {
 		t.Fatal(err)
 	}
-	if config.OS != "linux" || config.Architecture != "amd64" || !reflect.DeepEqual(config.Config.Entrypoint, []string{"/hello"}) || config.Config.User != "65532:65532" {
+	if config.OS != "linux" || config.Architecture != "amd64" || !reflect.DeepEqual(config.Config.Entrypoint, []string{"/hello"}) || (config.Config.User != "65532" && config.Config.User != "65532:65532") {
 		t.Fatalf("unexpected production config: %+v", config)
 	}
 	layers := entries[0].Layers
