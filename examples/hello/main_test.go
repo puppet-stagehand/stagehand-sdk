@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -14,9 +17,79 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v1"
+	"github.com/puppet-stagehand/stagehand-sdk/manifest"
 	"github.com/puppet-stagehand/stagehand-sdk/worker"
 	"github.com/puppet-stagehand/stagehand-sdk/worker/workertest"
 )
+
+// Catch declarations that would require UI, jobs, settings or host grants the
+// copyable worker does not implement, then exercise the declared route.
+func TestManifestMatchesHeadlessWorker(t *testing.T) {
+	raw, err := os.ReadFile("manifest.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m manifest.Manifest
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.Summary != "Headless greeting route backed by Documents, using the host-resolved caller identity." {
+		t.Errorf("summary advertises unsupported behavior: %q", m.Summary)
+	}
+	if len(m.Slots) != 0 || m.UIDigest != "" || len(m.Jobs) != 0 {
+		t.Errorf("headless worker cannot satisfy slots, UI digest or jobs: %+v", m)
+	}
+	if !reflect.DeepEqual(m.Permissions, []string{"documents:rw"}) {
+		t.Errorf("permissions = %v, want only documents:rw", m.Permissions)
+	}
+	if props, _ := m.SettingsSchema["properties"].(map[string]any); len(props) != 0 {
+		t.Errorf("worker reads no configurable settings: %v", props)
+	}
+	if len(m.Routes) != 1 {
+		t.Fatalf("routes = %v, want sole greeting route", m.Routes)
+	}
+	route := m.Routes[0]
+	if route.Method != "GET" || route.Path != "greeting" || route.OperationID != "getGreeting" || route.Access.Role != "viewer" {
+		t.Fatalf("unexpected route: %+v", route)
+	}
+	apiRaw, err := os.ReadFile("openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var api struct {
+		Paths map[string]map[string]struct {
+			OperationID string `json:"operationId"`
+		} `json:"paths"`
+	}
+	if err := json.Unmarshal(apiRaw, &api); err != nil {
+		t.Fatal(err)
+	}
+	if len(api.Paths) != 1 || api.Paths["/"+route.Path][strings.ToLower(route.Method)].OperationID != route.OperationID {
+		t.Fatal("OpenAPI does not match declared route")
+	}
+	host := run(t, &fakeDocuments{docs: map[string]*structpb.Struct{}})
+	for _, p := range []string{"ui.manifest.json", "index.js"} {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		stream, err := host.Assets().Get(ctx, &hostv1.AssetRequest{Path: p})
+		if err == nil {
+			_, err = stream.Recv()
+		}
+		cancel()
+		if status.Code(err) != codes.NotFound {
+			t.Fatalf("asset %s: %v, want NotFound", p, err)
+		}
+	}
+	resp, body := dispatch(t, host, &hostv1.HttpRequest{Method: route.Method, Path: route.Path, Principal: &hostv1.Principal{Label: "ada"}, Headers: map[string]string{"X-User": "root"}})
+	if resp.GetStatus() != 200 || body.Greeting != "Hello" || body.Caller != "ada" {
+		t.Fatalf("declared route: status %d, body %+v", resp.GetStatus(), body)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	health, err := host.Health().Check(ctx, &emptypb.Empty{})
+	if err != nil || !health.GetReady() {
+		t.Fatalf("headless worker lost readiness: %v, %v", health, err)
+	}
+}
 
 // fakeDocuments is an in-memory Documents facet: create-only Put, Get with
 // NotFound, which is all the example uses.
