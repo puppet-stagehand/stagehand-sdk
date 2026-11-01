@@ -72,15 +72,23 @@ that only lets packs reach the host names in their manifest will need an
 operator allow-list or a way to declare targets at runtime. It is not solved
 by this SDK yet.
 
-## The worker (coming in the next SDK phase)
-A small program in a container. It phones the console and asks for things
+## The worker
+The Go `worker` package and `worker/workertest` helpers are available now.
+Start with `examples/hello`, a headless greeting route backed by Documents,
+then follow [the worker guide](worker.md) and [image layout guide](image-layout.md).
+The example declares no UI slots or scheduled jobs.
+
+A worker is a small program in a container. It phones the console and asks for things
 using the tools on the card. It answers the console's questions: "serve
 this page request", "are you healthy", "run your hourly job now".
 The exact messages are in `schema/proto/stagehand/host/v1/`.
 
-## The pages (coming in the next SDK phase)
-React components built from the console's own parts, so they look like
-the rest of Stagehand. They receive `ctx.api` to call your worker's routes.
+## Optional pages
+A headless pack needs no pages, slots or UI digest. When adding screens, use
+React components built from the console's own parts, so they look like the
+rest of Stagehand. They receive `ctx.api` to call your worker's routes.
+Follow [the UI builder guide](expansion-build.md); the builder generates the
+bundle and its digest. Declare only slots your bundle actually implements.
 
 ## Asking a human first
 Some actions should not happen just because your pack decided they should

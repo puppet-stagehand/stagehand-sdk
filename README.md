@@ -4,8 +4,9 @@ The contract for building **Expansion Packs** — installable apps for the
 Stagehand console. **Tracer slice toward v0.1.0-rc.1** (2026-09-14): the machine-readable
 contract (manifest and index JSON Schemas, facet and worker protobufs, slot
 types), a `pack-check` validator with tests, an example pack, and the brief
-a code assistant needs to author a manifest. No worker runtime, UI toolkit
-or console host yet — see the roadmap.
+a code assistant needs to author a manifest. The Go worker runtime and UI bundle
+builder are available; the console host is a separate project. See the author
+guide and worker guide for the supported paths.
 
 ```
 go test ./...
@@ -30,7 +31,7 @@ go run ./cmd/pack-check --format json manifest/testdata/everything-wrong.json
 | `uibundle/` | Reference implementation of the bundle rules; backs `pack-check --ui` |
 | `docs/ui-bundle-contract.md` | The UI bundle contract |
 | `cmd/pack-check` | Validator: stable finding codes, each with a `fix` line; `--format json`; `--ui dir` also verifies a built UI bundle |
-| `examples/hello` | The example pack: a valid manifest (node-detail tab + job + one route), a Go worker on `worker.Run`, an OpenAPI fragment and a layout-correct Dockerfile |
+| `examples/hello` | A headless example: one greeting route backed by Documents, a Go worker on `worker.Run`, OpenAPI and a layout-correct Dockerfile; no UI or scheduled job |
 | `docs/worker.md` | Guide to writing a Go pack worker with the `worker` package and testing it with `workertest`; the Instances facet and the request id (`worker.RequestIDFrom`) |
 | `docs/image-layout.md` | The pack image layout contract (manifest in the topmost layer, UI, OpenAPI, entrypoint, linux/amd64) |
 | `examples/control-repo-authoring` | Worked proof that the Code facet, the registry search, the suggestion step and the approval gate compose into one workflow; author-only, never deploys |
