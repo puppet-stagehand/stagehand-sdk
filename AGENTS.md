@@ -31,7 +31,7 @@ Fix every finding using its `fix` line; do not work around a finding. When `ok: 
 
 With a UI, also check the built bundle: `go run ./cmd/pack-check --ui path/to/ui path/to/manifest.json`. The bundle contract (index file, digest rule, shims, entry shape) is `docs/ui-bundle-contract.md`.
 
-(Preview 0.0.1: `pack-check` and `expansion-build ui` exist. The rest of `expansion-build` (full image layout, signing, push; formerly called `pack-build`), the Go worker helpers, `host.Local`, the conformance suite, `@stagehand/sdk-ui` runtime helpers (the type contract in `schema/ts` exists) and `expansion-build mcp` are the next phases — see ROADMAP in docs/.)
+(Preview: `pack-check`, `expansion-build ui`, the Go `worker` runtime and `worker/workertest` helpers exist. See `docs/worker.md`. The rest of `expansion-build` (full image layout, signing, push; formerly called `pack-build`), `host.Local`, the conformance suite, `@stagehand/sdk-ui` runtime helpers (the type contract in `schema/ts` exists) and `expansion-build mcp` are the next phases — see ROADMAP in docs/.)
 
 ## expansion-build (UI slice built; image, signing and push are later slices)
 `expansion-build` (renamed from `pack-build` on 2026-09-14) is the SDK's pack builder. Today it has one subcommand, `expansion-build ui`, which turns `ui/src` into the `ui/` bundle the console loads and writes `ui_digest` into `manifest.json`. Never build or edit a UI bundle, `ui.manifest.json` or `ui_digest` by hand. Guide: `docs/expansion-build.md`; contract: `docs/ui-bundle-contract.md`.
