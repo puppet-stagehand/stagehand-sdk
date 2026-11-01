@@ -34,6 +34,10 @@ stamped are two separate steps.
 | the worker binary | always | Your program, set as the image `ENTRYPOINT`. The console starts the container and the worker dials back ([worker guide](worker.md)). |
 
 The working example is [`examples/hello/Dockerfile`](../examples/hello/Dockerfile).
+It is headless: its single greeting route uses Documents and the host-resolved
+caller identity. It declares no screens, UI digest or jobs, and needs no
+`/stagehand/ui/` directory. The publisher identity in this copyable example is
+illustrative; set your own identity before submitting a real pack to a feed.
 
 ## Why the manifest must be in the topmost layer
 
@@ -126,3 +130,20 @@ that, and nothing in the image can sign itself.
    ```
 3. The worker starts as the entrypoint and needs nothing from the image's shell:
    distroless "static" images have none.
+
+For the SDK hello example, run the complete automated image proof from the
+repository root:
+
+```
+SDK_HELLO_IMAGE=1 go test ./examples/hello -run '^TestHelloImage$' -count=1 -v -timeout=10m
+```
+
+This builds the production linux/amd64 image with attestations disabled,
+inspects the saved config and layers, and requires the top layer's manifest
+bytes and OpenAPI to match the source. It checks the nonroot `/hello`
+entrypoint, then executes that exact worker with an mTLS fake host inside a
+disposable derivative image. Greeting, principal identity, edited Documents,
+asset refusals, readiness and clean shutdown must pass before `HELLO_IMAGE_OK`
+is printed. Docker unavailability is a failure when the test is requested;
+default Go test runs leave image proof opt-in. This proves the SDK transport
+and image, not a deployed console or feed publication.

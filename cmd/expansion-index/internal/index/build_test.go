@@ -28,10 +28,10 @@ const (
 	ghcrPass = "s3cret-token"
 )
 
-// manifestFor returns the SDK's hello example manifest with the given id and version.
+// manifestFor returns the rich tooling fixture with the given id and version.
 func manifestFor(t *testing.T, id, version string) []byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "hello", "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "manifest", "testdata", "hello-rich.json"))
 	if err != nil {
 		t.Fatal(err)
 	}

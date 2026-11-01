@@ -29,7 +29,8 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=builder /out/hello /hello
 # The OpenAPI fragment the manifest points at (manifest.openapi_path).
 COPY examples/hello/openapi.json /stagehand/openapi.json
-# To ship a UI bundle, add its COPY line HERE, before the manifest:
+# This headless pack needs no UI directory or ui_digest. If your own pack
+# adds screens, build them with expansion-build ui and add their COPY HERE:
 #   COPY dist/ui/ /stagehand/ui/
 # The manifest stays the last file layer (docs/image-layout.md).
 COPY examples/hello/manifest.json /stagehand/manifest.json

@@ -26,9 +26,9 @@ func runCmd(t *testing.T, args ...string) (int, string, string) {
 
 func helloManifest(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile(filepath.Join("..", "..", "examples", "hello", "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "manifest", "testdata", "hello-rich.json"))
 	if err != nil {
-		t.Fatalf("read the SDK's example manifest: %v", err)
+		t.Fatalf("read the rich tooling fixture: %v", err)
 	}
 	return raw
 }

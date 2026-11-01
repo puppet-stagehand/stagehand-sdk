@@ -29,7 +29,7 @@ func codes(fs []Finding) []string {
 }
 
 func TestHelloExampleIsValid(t *testing.T) {
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	if fs := Validate(m); len(fs) != 0 {
 		t.Fatalf("hello must validate; got %v", fs)
 	}
@@ -118,7 +118,7 @@ func TestEveryFindingHasAFix(t *testing.T) {
 }
 
 func TestRules(t *testing.T) {
-	base := func() *Manifest { return load(t, "../examples/hello/manifest.json") }
+	base := func() *Manifest { return load(t, "testdata/hello-rich.json") }
 	cases := []struct {
 		name   string
 		mutate func(m *Manifest)
@@ -203,13 +203,13 @@ func TestRules(t *testing.T) {
 }
 
 func TestInventoryRWPermissionIsAccepted(t *testing.T) {
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	m.Permissions = append(m.Permissions, "inventory:rw")
 	if fs := Validate(m); len(fs) != 0 {
 		t.Fatalf("inventory:rw must validate clean; got %v", fs)
 	}
 
-	m2 := load(t, "../examples/hello/manifest.json")
+	m2 := load(t, "testdata/hello-rich.json")
 	m2.Permissions = append(m2.Permissions, "database:rw")
 	fs := Validate(m2)
 	var found *Finding
@@ -228,13 +228,13 @@ func TestInventoryRWPermissionIsAccepted(t *testing.T) {
 }
 
 func TestCodeRWPermissionIsAccepted(t *testing.T) {
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	m.Permissions = append(m.Permissions, "code:rw")
 	if fs := Validate(m); len(fs) != 0 {
 		t.Fatalf("code:rw must validate clean; got %v", fs)
 	}
 
-	m2 := load(t, "../examples/hello/manifest.json")
+	m2 := load(t, "testdata/hello-rich.json")
 	m2.Permissions = append(m2.Permissions, "code:write")
 	fs := Validate(m2)
 	var found *Finding
@@ -309,7 +309,7 @@ func TestApprovalScopeIsNotAManifestPermission(t *testing.T) {
 	const approvalScope = "inventory:approve"
 
 	// Rejection: the scope must not be usable as a manifest permission.
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	m.Permissions = append(m.Permissions, approvalScope)
 	fs := Validate(m)
 	var found *Finding
@@ -344,7 +344,7 @@ func TestApprovalScopeIsNotAManifestPermission(t *testing.T) {
 	// Acceptance: the scope belongs on a route's access.scope, alongside
 	// tokens:issue — this is the manifest shape Phase 5's example needs,
 	// and it needs no schema change.
-	m2 := load(t, "../examples/hello/manifest.json")
+	m2 := load(t, "testdata/hello-rich.json")
 	m2.Permissions = append(m2.Permissions, "tokens:issue")
 	m2.Routes = []Route{{Method: "POST", Path: "proposals/{id}/decide", Access: Access{Scope: approvalScope}, OperationID: "decideProposal"}}
 	m2.OpenAPIPath = "/stagehand/openapi.json"
@@ -362,7 +362,7 @@ func TestApprovalScopeIsNotAManifestPermission(t *testing.T) {
 	// route must trip route_scope_requires_tokens_issue. Without this, the
 	// clean case above could be passing only because the validator never
 	// looked at the route at all.
-	m3 := load(t, "../examples/hello/manifest.json")
+	m3 := load(t, "testdata/hello-rich.json")
 	m3.Routes = []Route{{Method: "POST", Path: "proposals/{id}/decide", Access: Access{Scope: approvalScope}, OperationID: "decideProposal"}}
 	m3.OpenAPIPath = "/stagehand/openapi.json"
 	fs3 := Validate(m3)
@@ -403,7 +403,7 @@ func TestCodeApproveScopeIsNotAManifestPermission(t *testing.T) {
 	}
 
 	t.Run("rejected as a manifest permission", func(t *testing.T) {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, codeApproveScope)
 		fs := Validate(m)
 		var found bool
@@ -433,7 +433,7 @@ func TestCodeApproveScopeIsNotAManifestPermission(t *testing.T) {
 	})
 
 	t.Run("accepted as a route access.scope with no schema change", func(t *testing.T) {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, "tokens:issue")
 		m.Routes = []Route{{Method: "POST", Path: "overwrites/{id}/decide", Access: Access{Scope: codeApproveScope}, OperationID: "decideOverwrite"}}
 		m.OpenAPIPath = "/stagehand/openapi.json"
@@ -452,7 +452,7 @@ func TestCodeApproveScopeIsNotAManifestPermission(t *testing.T) {
 	t.Run("scope route without tokens:issue trips the cross-check", func(t *testing.T) {
 		// Proof the clean case above is live: the same route without
 		// tokens:issue must be flagged, so the validator demonstrably looked at it.
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Routes = []Route{{Method: "POST", Path: "overwrites/{id}/decide", Access: Access{Scope: codeApproveScope}, OperationID: "decideOverwrite"}}
 		m.OpenAPIPath = "/stagehand/openapi.json"
 		fs := Validate(m)
@@ -487,7 +487,7 @@ func TestCodeApproveScopeIsNotAManifestPermission(t *testing.T) {
 				t.Errorf("schema.json must still contain the literal %q", real)
 			}
 
-			m := load(t, "../examples/hello/manifest.json")
+			m := load(t, "testdata/hello-rich.json")
 			m.Permissions = append(m.Permissions, real)
 			for _, f := range Validate(m) {
 				if f.Code == "permission_unknown" {
@@ -535,7 +535,7 @@ func TestPermissionVocabulariesAgree(t *testing.T) {
 func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
 	realForge := []string{"forge:rw", "forge:recommend"}
 	for _, real := range []string{"forge:rw", "forge:recommend"} {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, real)
 		if fs := Validate(m); len(fs) != 0 {
 			t.Fatalf("%s must validate clean; got %v", real, codes(fs))
@@ -543,7 +543,7 @@ func TestForgePermissionsAreAcceptedExactly(t *testing.T) {
 	}
 
 	for _, widened := range []string{"forge:read", "forge:write", "forge:readwrite", "forge:rw:all", "forge:recommend:all", "forge:rec", "forge:recommends", "forge:"} {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, widened)
 		fs := Validate(m)
 		var found *Finding
@@ -664,7 +664,7 @@ func TestCodeImportPermissionIsAcceptedExactly(t *testing.T) {
 		codeRW     = "code:rw"
 		codeImport = "code:import"
 	)
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	m.Permissions = append(m.Permissions, codeRW, codeImport)
 	if fs := Validate(m); len(fs) != 0 {
 		t.Fatalf("code:rw + code:import must validate clean; got %v", codes(fs))
@@ -747,7 +747,7 @@ func TestCodeImportIsAnExactLiteralNotAPrefix(t *testing.T) {
 			if rePerm.MatchString(p) {
 				t.Errorf("rePerm must NOT match %q — code:import must be an exact literal", p)
 			}
-			m := load(t, "../examples/hello/manifest.json")
+			m := load(t, "testdata/hello-rich.json")
 			m.Permissions = append(m.Permissions, p)
 			fs := Validate(m)
 			var found *Finding
@@ -778,7 +778,7 @@ func TestCodeImportIsAnExactLiteralNotAPrefix(t *testing.T) {
 func TestCodeRWAndReadSurviveTheCodeImportAddition(t *testing.T) {
 	for _, p := range []string{"code:read", "code:rw"} {
 		t.Run(p+" validates alone", func(t *testing.T) {
-			m := load(t, "../examples/hello/manifest.json")
+			m := load(t, "testdata/hello-rich.json")
 			m.Permissions = append(m.Permissions, p)
 			if fs := Validate(m); len(fs) != 0 {
 				t.Fatalf("%s must still validate clean; got %v", p, codes(fs))
@@ -791,7 +791,7 @@ func TestCodeRWAndReadSurviveTheCodeImportAddition(t *testing.T) {
 		if rePerm.MatchString(approve) {
 			t.Fatalf("rePerm must NOT match %q — it is a per-decision Auth scope, never an install-time permission", approve)
 		}
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, approve)
 		var found bool
 		for _, f := range Validate(m) {
@@ -808,7 +808,7 @@ func TestCodeRWAndReadSurviveTheCodeImportAddition(t *testing.T) {
 // TestCodeImportRequiresCodeRWFinding pins the exact finding contract locked by
 // Phase 12 D-11: code, path and fix line.
 func TestCodeImportRequiresCodeRWFinding(t *testing.T) {
-	m := load(t, "../examples/hello/manifest.json")
+	m := load(t, "testdata/hello-rich.json")
 	m.Permissions = []string{"documents:rw", "code:import"}
 	var found *Finding
 	fs := Validate(m)
@@ -835,7 +835,7 @@ func TestCodeImportRequiresCodeRWFinding(t *testing.T) {
 // (T-57.6-05); this keeps a pack from shipping one in the first place.
 func TestValidate_AccessPermission(t *testing.T) {
 	withRoute := func(a Access) *Manifest {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Routes = []Route{{Method: "POST", Path: "deploys", Access: a, OperationID: "startDeploy"}}
 		return m
 	}
@@ -918,7 +918,7 @@ func TestValidate_AccessPermission(t *testing.T) {
 // widened network: spelling is refused.
 func TestValidate_NewPermissions(t *testing.T) {
 	for _, p := range []string{"instances:read", "network:egress"} {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, p)
 		if fs := Validate(m); len(fs) != 0 {
 			t.Errorf("%s must validate clean; got %v", p, fs)
@@ -928,7 +928,7 @@ func TestValidate_NewPermissions(t *testing.T) {
 		}
 	}
 	for _, bad := range []string{"network:anything", "network:ingress", "network:egress:all", "instances:rw", "instances:write"} {
-		m := load(t, "../examples/hello/manifest.json")
+		m := load(t, "testdata/hello-rich.json")
 		m.Permissions = append(m.Permissions, bad)
 		fs := Validate(m)
 		var found *Finding

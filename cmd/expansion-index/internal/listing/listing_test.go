@@ -98,7 +98,7 @@ func newEnv(t *testing.T, withPaid, sign bool) *env {
 	reg := testreg.New(t)
 	signer := testreg.NewSigner(t)
 
-	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "examples", "hello", "manifest.json"))
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "manifest", "testdata", "hello-rich.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
