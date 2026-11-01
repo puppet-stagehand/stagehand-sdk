@@ -9,23 +9,30 @@
   "entitlement": "none",
   "tier": "core",
   "default_enabled": true,
-  "summary": "Shows a greeting and each node's uptime on a node-detail tab. The SDK's example pack.",
+  "summary": "Headless greeting route backed by Documents, using the host-resolved caller identity.",
   "nav": null,
-  "slots": ["nodeDetailTab"],
-  "ui_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
   "settings_schema": {
     "type": "object",
     "title": "Hello settings",
-    "properties": {
-      "greeting": { "type": "string", "title": "Greeting", "default": "Hello", "maxLength": 32 }
-    }
+    "properties": {}
   },
-  "permissions": ["documents:rw", "puppetdb:read"],
-  "jobs": [ { "name": "refresh_uptime", "every": "15m", "singleton": true } ],
+  "permissions": [
+    "documents:rw"
+  ],
   "routes": [
-    { "method": "GET", "path": "greeting", "access": { "role": "viewer" }, "operation_id": "getGreeting" }
+    {
+      "method": "GET",
+      "path": "greeting",
+      "access": {
+        "role": "viewer"
+      },
+      "operation_id": "getGreeting"
+    }
   ],
   "content": null,
-  "resources": { "cpu": "100m", "memory": "64Mi" },
+  "resources": {
+    "cpu": "100m",
+    "memory": "64Mi"
+  },
   "openapi_path": "/stagehand/openapi.json"
 }

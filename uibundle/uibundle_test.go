@@ -44,7 +44,7 @@ func codes(fs []manifest.Finding) []string {
 // helloPack is the example pack with the real digest of the fixture.
 func helloPack(t *testing.T) *manifest.Manifest {
 	t.Helper()
-	raw, err := os.ReadFile("../examples/hello/manifest.json")
+	raw, err := os.ReadFile("../manifest/testdata/hello-rich.json")
 	if err != nil {
 		t.Fatal(err)
 	}
