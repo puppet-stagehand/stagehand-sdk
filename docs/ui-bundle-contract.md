@@ -92,7 +92,15 @@ externals). The console sends it to a sandboxed frame over a private
 `mount(element, props, host)` renders into `element` with the bundle's own React
 and returns an unmount function. `host` has `api(method, path, body)` (proxied,
 restricted to `/api/v1/x/<id>/`), `resize(height)`, `escape()` and
-`onTheme(listener)`. The theme arrives as resolved token values; the token names
+`onTheme(listener)`. Newer consoles also provide optional
+`download(path): Promise<void>`: the parent GETs an attachment from this pack's
+`/api/v1/x/<id>/` routes with the user's session and saves the bytes. The promise
+rejects invalid or other-pack paths, redirects, HTTP failures and responses over
+16 MiB. The parent sanitizes the attachment filename and streams within the cap;
+no credentials or attachment bytes cross into the frame. Feature-detect this
+optional method and show a clear unsupported message on older consoles. The
+frame keeps `sandbox="allow-scripts"`; it receives no download permission.
+The theme arrives as resolved token values; the token names
 are in `ThemeTokenName` and may only grow. Base styles that consume them:
 `schema/css/sandbox-tokens.css` (no colour literals, ever).
 
