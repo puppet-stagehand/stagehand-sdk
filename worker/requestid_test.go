@@ -72,10 +72,33 @@ func (s *ridSettings) Subscribe(_ *emptypb.Empty, stream grpc.ServerStreamingSer
 // ridHost starts a fake host with recording Documents and Settings servers
 // and a worker whose route handler runs fn with the request and the facet
 // clients. It returns the recorder and a dispatch func.
+type ridPlanExecution struct {
+	hostv1.UnimplementedPlanExecutionServer
+	rec *mdRecorder
+}
+
+func (s *ridPlanExecution) ListCandidates(ctx context.Context, _ *hostv1.ListPlanCandidatesRequest) (*hostv1.ListPlanCandidatesResponse, error) {
+	s.rec.record(ctx)
+	return &hostv1.ListPlanCandidatesResponse{}, nil
+}
+func (s *ridPlanExecution) Preview(ctx context.Context, _ *hostv1.PreviewPlanRequest) (*hostv1.PlanPreview, error) {
+	s.rec.record(ctx)
+	return &hostv1.PlanPreview{}, nil
+}
+func (s *ridPlanExecution) Start(ctx context.Context, _ *hostv1.StartPlanRequest) (*hostv1.PlanRun, error) {
+	s.rec.record(ctx)
+	return &hostv1.PlanRun{}, nil
+}
+func (s *ridPlanExecution) Get(ctx context.Context, _ *hostv1.GetPlanRunRequest) (*hostv1.PlanRun, error) {
+	s.rec.record(ctx)
+	return &hostv1.PlanRun{}, nil
+}
+
 func ridHost(t *testing.T, onConnected func(context.Context, *worker.Clients) error, fn func(w http.ResponseWriter, r *http.Request, c *worker.Clients)) (*mdRecorder, func(id string) *hostv1.HttpResponse) {
 	t.Helper()
 	rec := &mdRecorder{}
 	host := workertest.NewFakeHost(t,
+		func(s grpc.ServiceRegistrar) { hostv1.RegisterPlanExecutionServer(s, &ridPlanExecution{rec: rec}) },
 		func(s grpc.ServiceRegistrar) { hostv1.RegisterDocumentsServer(s, &ridDocuments{rec: rec}) },
 		func(s grpc.ServiceRegistrar) { hostv1.RegisterSettingsServer(s, &ridSettings{rec: rec}) },
 	)
@@ -279,3 +302,49 @@ func TestRequestIDBounded(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+// Explicit fake registration tests transport only; it supplies no host authority.
+func TestPlanExecutionClientCorrelation(t *testing.T) {
+	call := func(ctx context.Context, c *worker.Clients) error {
+		if c.PlanExecution == nil {
+			return errString("missing PlanExecution client")
+		}
+		if _, err := c.PlanExecution.ListCandidates(ctx, &hostv1.ListPlanCandidatesRequest{InstanceId: "instance-a"}); err != nil {
+			return err
+		}
+		if _, err := c.PlanExecution.Preview(ctx, &hostv1.PreviewPlanRequest{}); err != nil {
+			return err
+		}
+		if _, err := c.PlanExecution.Start(ctx, &hostv1.StartPlanRequest{}); err != nil {
+			return err
+		}
+		_, err := c.PlanExecution.Get(ctx, &hostv1.GetPlanRunRequest{})
+		return err
+	}
+	rec, dispatch := ridHost(t, nil, func(w http.ResponseWriter, r *http.Request, c *worker.Clients) {
+		if err := call(r.Context(), c); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := call(context.Background(), c); err != nil {
+			http.Error(w, err.Error(), 500)
+		}
+	})
+	dispatch("plan-request")
+	seen, raw := rec.all()
+	if len(seen) != 8 {
+		t.Fatalf("got %d calls", len(seen))
+	}
+	for i, id := range seen {
+		want := ""
+		if i < 4 {
+			want = "plan-request"
+		}
+		if id != want {
+			t.Errorf("call %d id=%q want=%q", i, id, want)
+		}
+		if i < 4 && len(raw[i]) != 1 {
+			t.Errorf("duplicate request ID on call %d", i)
+		}
+	}
+}

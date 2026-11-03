@@ -12,13 +12,14 @@ import (
 // the pack may use it, and the SDK does not pretend otherwise.
 func newClients(cc grpc.ClientConnInterface) *Clients {
 	return &Clients{
-		Documents: hostv1.NewDocumentsClient(cc),
-		Settings:  hostv1.NewSettingsClient(cc),
-		Secrets:   hostv1.NewSecretsClient(cc),
-		Auth:      hostv1.NewAuthClient(cc),
-		Inventory: hostv1.NewInventoryClient(cc),
-		Code:      hostv1.NewCodeClient(cc),
-		Forge:     hostv1.NewForgeClient(cc),
-		Instances: hostv1.NewInstancesClient(cc),
+		Documents:     hostv1.NewDocumentsClient(cc),
+		Settings:      hostv1.NewSettingsClient(cc),
+		Secrets:       hostv1.NewSecretsClient(cc),
+		Auth:          hostv1.NewAuthClient(cc),
+		Inventory:     hostv1.NewInventoryClient(cc),
+		Code:          hostv1.NewCodeClient(cc),
+		Forge:         hostv1.NewForgeClient(cc),
+		Instances:     hostv1.NewInstancesClient(cc),
+		PlanExecution: hostv1.NewPlanExecutionClient(cc),
 	}
 }

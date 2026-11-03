@@ -78,14 +78,15 @@ type Options struct {
 // The host enforces the manifest's permissions on every call; these clients do
 // not (and cannot) check them.
 type Clients struct {
-	Documents hostv1.DocumentsClient
-	Settings  hostv1.SettingsClient
-	Secrets   hostv1.SecretsClient
-	Auth      hostv1.AuthClient
-	Inventory hostv1.InventoryClient
-	Code      hostv1.CodeClient
-	Forge     hostv1.ForgeClient
-	Instances hostv1.InstancesClient
+	Documents     hostv1.DocumentsClient
+	Settings      hostv1.SettingsClient
+	Secrets       hostv1.SecretsClient
+	Auth          hostv1.AuthClient
+	Inventory     hostv1.InventoryClient
+	Code          hostv1.CodeClient
+	Forge         hostv1.ForgeClient
+	Instances     hostv1.InstancesClient
+	PlanExecution hostv1.PlanExecutionClient
 }
 
 // Run connects to the host and serves until the host asks the worker to shut

@@ -13,12 +13,13 @@ import hostv1 "github.com/puppet-stagehand/stagehand-sdk/gen/go/stagehand/host/v
 
 // Host is every facet an Expansion Pack may call in this SDK's scope.
 type Host struct {
-	Documents hostv1.DocumentsServer
-	Settings  hostv1.SettingsServer
-	Secrets   hostv1.SecretsServer
-	Auth      hostv1.AuthServer
-	Inventory hostv1.InventoryServer
-	Code      hostv1.CodeServer
-	Forge     hostv1.ForgeServer
-	Instances hostv1.InstancesServer
+	Documents     hostv1.DocumentsServer
+	Settings      hostv1.SettingsServer
+	Secrets       hostv1.SecretsServer
+	Auth          hostv1.AuthServer
+	Inventory     hostv1.InventoryServer
+	Code          hostv1.CodeServer
+	Forge         hostv1.ForgeServer
+	Instances     hostv1.InstancesServer
+	PlanExecution hostv1.PlanExecutionServer
 }

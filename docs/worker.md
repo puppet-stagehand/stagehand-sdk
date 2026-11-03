@@ -317,3 +317,6 @@ image and executing its `/hello` worker. Its fake host and worker run together
 in a disposable derivative container, with no external network. The test
 harness is never added to the production image. An explicitly requested test
 fails if Docker is unavailable.
+
+Plan execution clients and host requirements are described in
+[PlanExecution](plan-execution.md). Use the route request context for every call.
