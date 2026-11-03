@@ -12,14 +12,14 @@ A signed container image with three parts:
 
 ## Rules that are enforced (by `pack-check` now, by the console at install)
 1. The manifest lists every facet the worker uses in `permissions`. Undeclared facets are refused at runtime; the conformance suite fails a worker that reaches for one.
-   Facets: Documents, Settings (always granted), Secrets (`secrets:rw`), Auth (`tokens:issue`), Inventory (`inventory:read` / `inventory:rw`), Code (`code:read` / `code:rw` / `code:import`), Forge (`forge:rw` / `forge:recommend`), Instances (`instances:read`, read-only, never a credential). `network:egress` maps to no facet: declare it when the worker reaches outside the console; the console shows it on the consent screen.
+   Facets: Documents, Settings (always granted), Secrets (`secrets:rw`), Auth (`tokens:issue`), Inventory (`inventory:read` / `inventory:rw`), Code (`code:read` / `code:rw` / `code:import`), Forge (`forge:rw` / `forge:recommend`), Instances (`instances:read`, read-only, never a credential), PlanExecution (`bolt:run` for ListCandidates, Preview, Start and Get; host implementation required; `host.Local` returns Unimplemented with the grant and PermissionDenied without it). `network:egress` maps to no facet: declare it when the worker reaches outside the console; the console shows it on the consent screen.
    A route can require a console permission of the person calling it with `access.permission` (today only `code-deploy`), alongside or instead of `access.role`.
    File approval proposals inside the route handler with its `r.Context()`: the worker sends the request id (`worker.RequestIDFrom`) so the console knows who asked; a proposal filed from background work records `started_by = none`.
 2. UI goes into slots only. A `page` slot needs a `nav` entry in one of the seven console groups: Overview, Inventory, Reporting, Automation, Configuration, Patching & Compliance, Administration. Packs never add groups.
 3. Routes are relative (`state/{workspace}`); the console mounts them at `/api/v1/x/<id>/`. Any HTTP method token is allowed. Every route has an `operation_id` present in the pack's OpenAPI fragment.
 4. State lives in the `Documents` facet (namespaced JSON documents). Packs never own database tables.
 5. Secrets go through the `Secrets` facet (`Store`/`Seal`); never in Documents unsealed, never in the image.
-6. Fleet-facing tools (tofu, kubectl, scanners) run on a Puppet-classified **runner node** via the `Bolt` facet, not in the worker, unless the operator opts in per resource.
+6. Fleet-facing tools (tofu, kubectl, scanners) run on a Puppet-classified **runner node** through installed, host-allowlisted public plans using the generic `PlanExecution` contract and a host-supported provider profile, unless the operator opts in per resource. The host must implement scoped authorization and execution; this SDK provides no Bolt RPC or production executor. See `docs/plan-execution.md`.
 7. UI: build only from `@stagehand/console-ui`; no raw hex colours, no emoji, IBM Plex only, status is always glyph + label. Terminology: "corrected" not "converged", "dry run" not "no-op".
 8. Docs are part of the pack: `docs/USER-GUIDE.md` written ELI10 for someone new to Puppet, and `docs/TESTER-GUIDE.md` with a manual step for every route and slot.
 
