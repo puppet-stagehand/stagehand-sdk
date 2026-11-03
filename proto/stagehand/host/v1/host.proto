@@ -857,3 +857,129 @@ message InstanceEndpoint {
 message ListInstancesRequest { Page page = 1; }  // ordered by id; host caps limit at 500
 message ListInstancesResponse { repeated Instance instances = 1; PageInfo page = 2; }
 message GetInstanceRequest { string id = 1; }
+
+// ---------------------------------------------------------- Plan execution
+// Permission: bolt:run, on ALL four RPCs. This is not arbitrary code execution.
+// Every RPC requires a fresh host-correlated actor and current exact instance /
+// team / node access. Preview/Start additionally require the host's deployer
+// floor. A worker-supplied Principal, role, actor name or background request is
+// never authority. Existing stagehand-request-id metadata carries correlation.
+// Old hosts return UNIMPLEMENTED; callers must block launch, never fall back.
+service PlanExecution {
+  rpc ListCandidates(ListPlanCandidatesRequest) returns (ListPlanCandidatesResponse);
+  rpc Preview(PreviewPlanRequest) returns (PlanPreview);
+  rpc Start(StartPlanRequest) returns (PlanRun);
+  rpc Get(GetPlanRunRequest) returns (PlanRun);
+}
+
+// Identity is always the pair: node_id alone cannot select an estate.
+// instance_id<=128 bytes; node_id<=160 bytes; nonempty UTF-8 identifiers.
+message PlanNodeRef { string instance_id = 1; string node_id = 2; }
+
+// A minimized, authorized inventory projection. facts is an OBJECT containing
+// only OS family/name/version, FQDN and stable identity attributes from the
+// host's whitelist. NEVER raw PuppetDB facts, credentials or connection config.
+message PlanCandidate {
+  PlanNodeRef node = 1;
+  string display_name = 2;
+  Json facts = 3;
+  repeated PlanCheck checks = 4;
+}
+// instance_id is required; no active-instance default. Page.limit defaults to
+// 100, maximum 100; cursor is opaque and bound to pack, actor and instance.
+message ListPlanCandidatesRequest { string instance_id = 1; Page page = 2; }
+message ListPlanCandidatesResponse { repeated PlanCandidate candidates = 1; PageInfo page = 2; }
+
+// parameter names an installed public plan TargetSpec parameter. node_ids are
+// canonical trusted IDs IN THE REQUEST'S instance, never URIs/FQDN overrides.
+// Preserve supplied role order. At most 32 bindings and 256 unique union nodes.
+// Host rejects unknown/duplicate bindings and bound keys in raw parameters,
+// validates fresh public plan schema and derives the exact union inventory.
+// parameter<=128 UTF-8 bytes; node IDs use the PlanNodeRef bound.
+message PlanTargetBinding { string parameter = 1; repeated string node_ids = 2; }
+message PreviewPlanRequest {
+  string instance_id = 1; // required explicit estate; <=128 UTF-8 bytes
+  string plan = 2; // installed, host-allowlisted public plan; <=128 UTF-8 bytes
+  Json parameters = 3; // OBJECT; real booleans/arrays; <=64KiB JSON, depth<=16
+  repeated PlanTargetBinding target_bindings = 4;
+}
+
+// Preview NEVER executes a plan, even with --noop. It freezes a host-owned
+// canonical envelope including authorized node identities, exact typed values,
+// schema / code / credential / fact versions, actor, pack and instance. Digest
+// binds that private envelope. Returned parameters are NONSECRET canonical
+// values: initial hosts reject sensitive plan parameters rather than echoing
+// secrets. Revisions reveal no private paths. TTL<=5min. Unknown/blocked checks
+// are not ready. The host revalidates everything at Start.
+message PlanPreview {
+  string id = 1;
+  string instance_id = 2;
+  string plan = 3;
+  Json parameters = 4;
+  repeated PlanTargetBinding target_bindings = 5;
+  repeated PlanCheck checks = 6;
+  google.protobuf.Timestamp expires_at = 7;
+  string digest = 8;
+  string execution_revision = 9;
+}
+// Start cannot replace parameters, nodes, actor or instance. The host atomically
+// binds <=128-byte idempotency_key to (pack, actor, preview, launch); a repeated
+// matching request returns that run; reuse for another preview is a conflict.
+// Host snapshots immutable authority and reserves targets before returning.
+message StartPlanRequest { string preview_id = 1; string idempotency_key = 2; }
+message GetPlanRunRequest { string run_id = 1; }
+
+enum PlanRunState {
+  PLAN_RUN_STATE_UNSPECIFIED = 0; // never successful; fail closed
+  PLAN_RUN_STATE_PENDING = 1;
+  PLAN_RUN_STATE_RUNNING = 2;
+  PLAN_RUN_STATE_SUCCEEDED = 3;
+  PLAN_RUN_STATE_FAILED = 4;
+  PLAN_RUN_STATE_INTERRUPTED = 5; // no rollback or fabricated success
+}
+enum PlanCheckState {
+  PLAN_CHECK_STATE_UNSPECIFIED = 0; // unknown means blocked
+  PLAN_CHECK_STATE_PASSED = 1;
+  PLAN_CHECK_STATE_BLOCKED = 2;
+  PLAN_CHECK_STATE_UNKNOWN = 3;
+}
+// <=256 checks per preview/run/candidate, code<=64 bytes, message<=1024 bytes.
+// Stable host codes and redacted evidence only; never secret values or paths.
+message PlanCheck {
+  string code = 1;
+  PlanCheckState state = 2;
+  string message = 3;
+  repeated string node_ids = 4;
+  google.protobuf.Timestamp observed_at = 5;
+}
+enum PlanExecutionErrorCode {
+  PLAN_EXECUTION_ERROR_CODE_UNSPECIFIED = 0; // unknown failure, never success
+  PLAN_EXECUTION_ERROR_CODE_PLAN_FAILED = 1;
+  PLAN_EXECUTION_ERROR_CODE_INTERRUPTED = 2;
+  PLAN_EXECUTION_ERROR_CODE_EXECUTOR_UNAVAILABLE = 3;
+  PLAN_EXECUTION_ERROR_CODE_RESULT_LIMIT = 4;
+}
+// Native plan failure is structured, not inferred from task items[] or exit0.
+// message<=1024 bytes; details OBJECT<=16KiB, depth<=16; always redacted.
+message PlanExecutionError {
+  PlanExecutionErrorCode code = 1;
+  string message = 2;
+  Json details = 3;
+}
+// Host limits execution to <=1h and never blindly retries a launch. Get requires
+// fresh correlation and owner/scope authorization; IDs are not bearer tokens.
+// result is native redacted JSON<=1MiB, depth<=16; never credentials/raw logs.
+// Absent/unknown state is not success. Runtime cancellation is not an RPC yet.
+message PlanRun {
+  string id = 1;
+  string preview_id = 2;
+  string instance_id = 3;
+  string plan = 4;
+  PlanRunState state = 5;
+  Json result = 6;
+  PlanExecutionError error = 7;
+  repeated PlanCheck checks = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp started_at = 10;
+  google.protobuf.Timestamp finished_at = 11;
+}

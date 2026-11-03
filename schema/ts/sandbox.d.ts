@@ -35,6 +35,12 @@ export interface SandboxHost {
    * path is refused. Resolves to the parsed JSON body; rejects on non-2xx.
    */
   api<T = unknown>(method: string, path: string, body?: unknown): Promise<T>;
+  /**
+   * Optional on older consoles. Ask the session-bearing parent to GET an own-pack
+   * API attachment and download it without exposing credentials to the frame.
+   * Rejects invalid paths, non-2xx, redirects or responses over 16 MiB.
+   */
+  download?(path: string): Promise<void>;
   /** Ask the console to size the frame, in CSS pixels. */
   resize(height: number): void;
   /** Tell the console the pack handled Escape (or wants focus returned). */

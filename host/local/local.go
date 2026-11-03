@@ -143,14 +143,15 @@ func New(permissions []string, packID string, opts ...Option) *host.Host {
 	docs.auth = authInner
 	secrets := newSecretsServer(packID)
 	return &host.Host{
-		Documents: docs,
-		Settings:  newSettingsServer(),
-		Secrets:   &gatedSecrets{perms: perms, packID: packID, inner: secrets},
-		Auth:      &gatedAuth{perms: perms, packID: packID, inner: authInner},
-		Inventory: &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
-		Code:      &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs, secrets, cfg.gitClient)},
-		Forge:     &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},
-		Instances: &gatedInstances{perms: perms, inner: newInstancesServer(cfg.instances)},
+		Documents:     docs,
+		Settings:      newSettingsServer(),
+		Secrets:       &gatedSecrets{perms: perms, packID: packID, inner: secrets},
+		Auth:          &gatedAuth{perms: perms, packID: packID, inner: authInner},
+		Inventory:     &gatedInventory{perms: perms, packID: packID, inner: newInventoryServer(packID, docs, cfg.discoverCandidates, cfg.groupClasses)},
+		Code:          &gatedCode{perms: perms, packID: packID, inner: newCodeServer(packID, docs, secrets, cfg.gitClient)},
+		Forge:         &gatedForge{perms: perms, packID: packID, inner: newForgeServer(packID, docs, secrets, cfg.forgeClient, cfg.llmClient)},
+		Instances:     &gatedInstances{perms: perms, inner: newInstancesServer(cfg.instances)},
+		PlanExecution: &gatedPlanExecution{perms: perms},
 	}
 }
 
